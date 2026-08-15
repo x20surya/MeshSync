@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mesh Sync Architecture & Trust Ring</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.10.2/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+    </script>
+</head>
+<body class="bg-base-200 text-base-content min-h-screen p-6 lg:p-10">
+
+<main class="mx-auto max-w-5xl space-y-12">
+    
+    <!-- Header -->
+    <div class="text-center space-y-4">
+        <h1 class="text-4xl lg:text-5xl font-bold tracking-tight">Mesh Sync & Trust Ring</h1>
+        <p class="text-xl text-base-content/70">Secure, cloudless synchronization across 3+ trusted devices</p>
+    </div>
+
+    <!-- The Trust Boundary -->
+    <div class="card bg-base-100 shadow-xl border-l-4 border-l-error">
+        <div class="card-body">
+            <h2 class="card-title text-error mb-2">The Zero-Trust Vault Boundary</h2>
+            <p class="text-sm text-base-content/80 mb-4">
+                If an unknown 4th device comes nearby, it cannot join the mesh or read data because of three strict layers of defense:
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-base-200 p-4 rounded-box">
+                    <h3 class="font-bold text-sm">1. Public Key Whitelist</h3>
+                    <p class="text-xs mt-1 text-base-content/70">Devices reject connections from any device whose Public Key is not explicitly pre-approved.</p>
+                </div>
+                <div class="bg-base-200 p-4 rounded-box">
+                    <h3 class="font-bold text-sm">2. Master Password</h3>
+                    <p class="text-xs mt-1 text-base-content/70">Even if they intercept the Wi-Fi signal, the AES-256 payload is mathematically impossible to read without the Argon2id key.</p>
+                </div>
+                <div class="bg-base-200 p-4 rounded-box">
+                    <h3 class="font-bold text-sm">3. Authenticated Payloads</h3>
+                    <p class="text-xs mt-1 text-base-content/70">If they try to inject fake clipboards, the AES-GCM Authentication Tag fails and the payload is dropped.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Connecting Devices (How to add devices) -->
+    <div class="card bg-base-100 shadow-xl border border-base-300">
+        <div class="card-body">
+            <h2 class="card-title mb-4">How To Add Devices to the Mesh</h2>
+            <div class="flex justify-center bg-neutral/20 p-6 rounded-box mb-6">
+                <pre class="mermaid">
+                flowchart TD
+                    subgraph "The Trusted Ring"
+                        Phone1["📱 Your Android"]
+                        Laptop["💻 Your Laptop"]
+                        Desktop["🖥️ 3rd Desktop"]
+                    end
+                    
+                    subgraph "Pairing Methods"
+                        QR[("📷 QR Code\n(Phone to PC)")]
+                        PIN[("🔢 6-Digit PIN\n(PC to PC)")]
+                    end
+
+                    Laptop <-->|Displays QR| QR
+                    QR <-->|Scans| Phone1
+                    
+                    Laptop <-->|Generates PIN| PIN
+                    PIN <-->|User types PIN| Desktop
+                </pre>
+            </div>
+            
+            <h3 class="font-bold mb-2">Pairing Scenarios:</h3>
+            <ul class="list-disc list-inside space-y-2 text-sm text-base-content/80">
+                <li><strong>Phone to PC (Laptop or Desktop):</strong> The PC displays a QR code containing its Public Key. You scan it with the Android App. The Phone shares its Public Key back. They are now paired.</li>
+                <li><strong>PC to PC (Laptop to 3rd Desktop):</strong> Because desktop monitors can't scan QR codes easily, the Laptop generates a temporary 6-digit numeric PIN. You type that PIN into the Desktop app. They use a standard PAKE (Password-Authenticated Key Exchange) to securely swap Public Keys.</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- CRDT Gossip Loop Diagram -->
+    <div class="card bg-base-100 shadow-xl border border-base-300">
+        <div class="card-body">
+            <h2 class="card-title mb-4">The Mesh Gossip Sync (Background Process)</h2>
+            <ul class="steps steps-vertical">
+                <li class="step step-primary">
+                    <div class="text-left ml-4">
+                        <h3 class="font-bold">1. Background Discovery</h3>
+                        <p class="text-sm text-base-content/70">The trusted devices constantly listen for each other's specific encrypted BLE pings. Unknown pings are ignored.</p>
+                    </div>
+                </li>
+                <li class="step step-primary">
+                    <div class="text-left ml-4">
+                        <h3 class="font-bold">2. Vector Clock Exchange</h3>
+                        <p class="text-sm text-base-content/70">When the Laptop and Desktop enter the same room, they connect and say: <em>"I am at State v5. You are at State v3."</em></p>
+                    </div>
+                </li>
+                <li class="step step-secondary">
+                    <div class="text-left ml-4">
+                        <h3 class="font-bold">3. CRDT Payload Merge</h3>
+                        <p class="text-sm text-base-content/70">The Laptop sends the encrypted delta of the two missing clipboard changes. The Desktop decrypts and mathematically merges them.</p>
+                    </div>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+</main>
+</body>
+</html>

@@ -23,10 +23,13 @@ This document outlines the architecture and goals for the Local-First Password &
 ## Current Project Status
 - **Phase 1 (Foundation)**: COMPLETED. `WinDaemon` successfully monitors the Win32 clipboard. `AndroidClient` (.NET MAUI) successfully monitors the Android clipboard via a background `AccessibilityService`. 
 - **Phase 2 (Crypto Engine)**: COMPLETED. `CoreLib` securely derives keys via `Argon2id` and encrypts payloads using `AES-256-GCM`.
-- **Phase 3 (Transport Layer)**: PENDING. Next step is implementing BLE discovery and Wi-Fi Direct sockets.
+- **Phase 3 & 4 (Transport & Ephemeral Sync)**: COMPLETED. Network TCP sockets are implemented with Windows background system tray UI, Android deep-linking QR pairing, and full end-to-end ephemeral clipboard syncing.
+- **Phase 5 (Password Vault)**: PENDING. Next step is implementing the SQLite storage and CRDT sync mechanisms.
 
 ## Risks & Conflict Resolution
-- **Conflict Resolution**: Implement CRDTs (Conflict-free Replicated Data Types) for deterministic merging of vault changes based on logical clocks.
+- **Dual Architecture**: The project has two distinct sync engines:
+  1. **Clipboard Sync (Ephemeral)**: The user explicitly requested NOT to save or merge clipboard histories. Do not implement SQLite or CRDTs for clipboards. When a copy event occurs, encrypt it and broadcast it instantly to connected devices. If no devices are in range, it is dropped.
+  2. **Password Vault (Persistent)**: Passwords and secure notes require permanent storage. Implement SQLite and CRDTs (Conflict-free Replicated Data Types) for deterministic merging of password vault changes based on logical clocks.
 - **Battery Drain**: Use BLE advertising only on phone unlock or clipboard change events, instead of constant polling.
 
 ## Rules for Agents
