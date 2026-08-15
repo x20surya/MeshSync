@@ -13,12 +13,17 @@ This document outlines the architecture and goals for the Local-First Password &
    - Transport upgrades to Wi-Fi Direct for large payloads (e.g., photos). Small payloads (passwords) use BLE.
 2. **Encryption & Key Exchange**: 
    - Zero-trust architecture. Initial pairing via QR code (sharing public keys).
-   - Transport encryption via ChaCha20-Poly1305 over BLE/Wi-Fi.
+   - Transport encryption via ChaCha20-Poly1305 (or AES-256-GCM) over BLE/Wi-Fi.
    - Local vault encryption at rest via AES-256-GCM derived from a master password (Argon2id).
 3. **Universal Clipboard Service**: 
-   - Windows: C# or Rust background daemon using Win32 Clipboard APIs.
-   - Android: Accessibility Service to monitor clipboard changes.
+   - Windows: C# background daemon using Win32 Clipboard APIs (`src/WinDaemon`).
+   - Android: Accessibility Service to monitor clipboard changes (`src/AndroidClient`).
    - Images compressed to JPEG/WEBP before transmission.
+
+## Current Project Status
+- **Phase 1 (Foundation)**: COMPLETED. `WinDaemon` successfully monitors the Win32 clipboard. `AndroidClient` (.NET MAUI) successfully monitors the Android clipboard via a background `AccessibilityService`. 
+- **Phase 2 (Crypto Engine)**: COMPLETED. `CoreLib` securely derives keys via `Argon2id` and encrypts payloads using `AES-256-GCM`.
+- **Phase 3 (Transport Layer)**: PENDING. Next step is implementing BLE discovery and Wi-Fi Direct sockets.
 
 ## Risks & Conflict Resolution
 - **Conflict Resolution**: Implement CRDTs (Conflict-free Replicated Data Types) for deterministic merging of vault changes based on logical clocks.
@@ -28,3 +33,4 @@ This document outlines the architecture and goals for the Local-First Password &
 - Do not introduce cloud dependencies or external third-party servers.
 - Prioritize offline-first and E2E encryption best practices.
 - Consider battery optimization and bandwidth limitations for all local sync features.
+- If editing the Android project, remember that it targets `net10.0-android` and requires `<EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>` for debug builds deployed via CLI.

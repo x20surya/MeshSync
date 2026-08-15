@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Universal Clipboard requires Accessibility permission to securely capture text copied to your clipboard in the background.</string>
+</resources>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="luxury">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Plan: Local-First Password Sync</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+</head>
+<body class="bg-base-100 text-base-content min-h-screen p-4 md:p-10 font-sans">
+  <main class="mx-auto max-w-5xl space-y-8">
+    <section class="hero bg-base-200 rounded-box py-10 shadow">
+      <div class="hero-content text-center">
+        <div class="max-w-2xl">
+          <h1 class="text-4xl font-bold">Local-First Password & Clipboard Sync</h1>
+          <p class="py-6 text-lg text-base-content/80">Project Implementation Roadmap & Technical Design</p>
+          <div class="flex flex-wrap justify-center gap-2">
+            <span class="badge badge-primary">No Cloud</span>
+            <span class="badge badge-secondary">E2E Encrypted</span>
+            <span class="badge badge-accent">BLE & Wi-Fi Direct</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Goal & Current State -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="card bg-base-200 shadow border-t-2 border-success">
+        <div class="card-body">
+          <h2 class="card-title text-success"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> Current State</h2>
+          <p>We have successfully initialized the .NET C# shared solution and built the Win32 Clipboard Listener background daemon. The daemon reliably captures clipboard changes on Windows.</p>
+        </div>
+      </div>
+      <div class="card bg-base-200 shadow border-t-2 border-info">
+        <div class="card-body">
+          <h2 class="card-title text-info"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> Desired Behavior</h2>
+          <p>The Android and Windows apps must automatically find each other locally (BLE), seamlessly exchange encrypted clipboard data, and merge Vault changes deterministically without conflict (CRDTs).</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Proposed Approach (Phases) -->
+    <h2 class="text-3xl font-bold pt-8">Implementation Phases</h2>
+    <div class="overflow-x-auto py-4">
+      <ul class="steps w-full">
+        <li class="step step-primary">Foundation</li>
+        <li class="step">Connectivity</li>
+        <li class="step">CRDT Vault</li>
+        <li class="step">Native UI</li>
+      </ul>
+    </div>
+
+    <div class="space-y-6">
+      <div class="card bg-base-200 shadow border-l-4 border-primary">
+        <div class="card-body">
+          <h3 class="card-title text-xl">Phase 1: Foundation (Current) <span class="badge badge-primary">Active</span></h3>
+          <ul class="list-disc list-inside space-y-2 mt-2">
+            <li><span class="line-through opacity-50">Win32 Clipboard Listener Daemon</span></li>
+            <li>Implement <strong>AES-256-GCM</strong> and <strong>Argon2id</strong> inside <code>CoreLib</code></li>
+            <li>Set up Android MAUI Accessibility Service for clipboard monitoring</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card bg-base-200 shadow">
+        <div class="card-body">
+          <h3 class="card-title text-xl">Phase 2: Discovery & Transport</h3>
+          <ul class="list-disc list-inside space-y-2 mt-2">
+            <li>Generate & Scan QR codes for initial zero-trust key exchange</li>
+            <li><strong>BLE Discovery:</strong> Broadcast only on phone unlock/clipboard change to save battery</li>
+            <li><strong>Wi-Fi Direct:</strong> Automatic upgrade protocol for large payloads (Images)</li>
+            <li><strong>ChaCha20-Poly1305:</strong> Encrypt all payloads in transit</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card bg-base-200 shadow">
+        <div class="card-body">
+          <h3 class="card-title text-xl">Phase 3: Vault CRDT Synchronization</h3>
+          <ul class="list-disc list-inside space-y-2 mt-2">
+            <li>Define local SQLite database schema</li>
+            <li>Implement <strong>Vector Clocks</strong> and Conflict-Free Replicated Data Types (CRDTs) to handle offline edits</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card bg-base-200 shadow">
+        <div class="card-body">
+          <h3 class="card-title text-xl">Phase 4: Native User Interfaces</h3>
+          <ul class="list-disc list-inside space-y-2 mt-2">
+            <li><strong>Windows:</strong> WPF or WinUI 3 shell around the Daemon</li>
+            <li><strong>Android:</strong> .NET MAUI frontend with biometric unlock</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Risks & Open Questions -->
+    <div class="divider"></div>
+    <h2 class="text-2xl font-bold">Risks & Decisions Needed</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+      <div role="alert" class="alert alert-warning items-start h-full">
+        <svg class="w-6 h-6 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+        <div>
+          <h3 class="font-bold">Android 10+ Clipboard Restrictions</h3>
+          <div class="text-sm mt-1">Background clipboard reading is blocked on Android 10+. Our Accessibility Service must be robust enough to parse clipboard changes or UI focus events reliably without being killed by the OS.</div>
+        </div>
+      </div>
+      <div role="alert" class="alert alert-info items-start h-full flex flex-col justify-between">
+        <div class="flex gap-4">
+          <svg class="w-6 h-6 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          <div>
+            <h3 class="font-bold">Decision: What to build next?</h3>
+            <div class="text-sm mt-1 mb-4">Do we want to build the `CoreLib` crypto engine (AES/Argon2id) first, or immediately start scaffolding the Android MAUI application to prove the cross-platform viability?</div>
+          </div>
+        </div>
+        <div class="flex gap-2 flex-wrap self-end w-full justify-end">
+          <button class="btn btn-sm btn-primary">Option A: Core Crypto</button>
+          <button class="btn btn-sm btn-primary">Option B: Android MAUI App</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- FAQ -->
+    <div class="divider"></div>
+    <h2 class="text-2xl font-bold">Frequently Asked Questions</h2>
+    <div tabindex="0" class="collapse collapse-arrow bg-base-200 border border-base-300">
+      <div class="collapse-title text-xl font-medium">Will the encryption make syncing slower?</div>
+      <div class="collapse-content">
+        <p><strong>Short answer: No.</strong></p>
+        <p class="mt-2 text-sm text-base-content/80">
+          We are using hardware-accelerated encryption algorithms (AES-GCM for the local vault and ChaCha20-Poly1305 for transport). These operate at several gigabytes per second on modern CPUs and ARM chips (phones). 
+          For small payloads like passwords, encryption takes less than a millisecond. For large clipboard photos (e.g., 5MB), it will encrypt in a fraction of a second, which is much faster than the time it takes to transmit over BLE/Wi-Fi Direct.
+        </p>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
