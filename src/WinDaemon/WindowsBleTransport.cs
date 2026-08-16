@@ -11,7 +11,6 @@ namespace WinDaemon
     public class WindowsBleTransport : ITransportConnection
     {
         private BluetoothLEDevice? _device;
-        private GattSession? _session;
         private GattCharacteristic? _writeCharacteristic;
         private GattServiceProvider? _serviceProvider;
         

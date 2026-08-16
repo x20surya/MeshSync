@@ -1,0 +1,369 @@
+<Window x:Class="WinDaemon.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Mesh Sync"
+        Width="420" Height="640"
+        MinWidth="380" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource B.Bg}"
+        TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        WindowStyle="None"
+        ResizeMode="CanResize">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="40"
+                            ResizeBorderThickness="6"
+                            CornerRadius="0"
+                            GlassFrameThickness="0"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Border BorderBrush="{DynamicResource B.Border}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- ══════════════ Title bar ══════════════ -->
+            <Grid Grid.Row="0" Background="{DynamicResource B.Bg}">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                    <!-- Mark: two linked nodes -->
+                    <Canvas Width="16" Height="16" VerticalAlignment="Center">
+                        <Ellipse Canvas.Left="0" Canvas.Top="4" Width="7" Height="7"
+                                 Fill="{DynamicResource B.Accent}" />
+                        <Ellipse Canvas.Left="9" Canvas.Top="4" Width="7" Height="7"
+                                 Stroke="{DynamicResource B.Accent}" StrokeThickness="1.5" Fill="Transparent" />
+                        <Line X1="7" Y1="7.5" X2="9" Y2="7.5"
+                              Stroke="{DynamicResource B.Accent}" StrokeThickness="1.5" />
+                    </Canvas>
+                    <TextBlock Text="Mesh Sync" FontWeight="SemiBold" FontSize="12.5"
+                               Margin="9,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="BtnMinimise" Style="{StaticResource S.BtnCaption}"
+                            Click="BtnMinimise_Click" ToolTip="Minimise">
+                        <Path Data="M 0,0 L 10,0" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.2" />
+                    </Button>
+                    <Button x:Name="BtnClose" Style="{StaticResource S.BtnCaptionClose}"
+                            Click="BtnClose_Click" ToolTip="Hide to tray">
+                        <Path Data="M 0,0 L 9,9 M 9,0 L 0,9"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.2" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <!-- ══════════════ Content ══════════════ -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                          Padding="18,4,18,0" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+
+                    <!-- ── Status hero ── -->
+                    <Border Style="{StaticResource S.Card}" Padding="20,22">
+                        <StackPanel HorizontalAlignment="Center">
+
+                            <Grid Width="66" Height="66" HorizontalAlignment="Center">
+                                <Ellipse x:Name="StatusHalo" Width="66" Height="66"
+                                         Fill="{DynamicResource B.AccentSoft}" />
+                                <Ellipse x:Name="StatusRing" Width="52" Height="52"
+                                         Stroke="{DynamicResource B.Accent}" StrokeThickness="2"
+                                         Fill="Transparent" />
+                                <!-- Connected: tick -->
+                                <Path x:Name="IconTick"
+                                      Data="M 0,6 L 4.5,10.5 L 13,1"
+                                      Stroke="{DynamicResource B.Accent}" StrokeThickness="2.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <!-- Searching: dashed arc that spins -->
+                                <Ellipse x:Name="IconSpinner" Width="52" Height="52"
+                                         Stroke="{DynamicResource B.Warn}" StrokeThickness="2"
+                                         StrokeDashArray="5 4" Fill="Transparent"
+                                         Visibility="Collapsed" RenderTransformOrigin="0.5,0.5">
+                                    <Ellipse.RenderTransform>
+                                        <RotateTransform x:Name="SpinnerRotate" Angle="0" />
+                                    </Ellipse.RenderTransform>
+                                </Ellipse>
+                            </Grid>
+
+                            <TextBlock x:Name="StatusHeadline" Text="LOOKING FOR DEVICES"
+                                       FontFamily="{DynamicResource F.Display}"
+                                       FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource B.Warn}"
+                                       HorizontalAlignment="Center" Margin="0,16,0,0" />
+
+                            <TextBlock x:Name="StatusDetail" Text="No device paired yet"
+                                       Style="{StaticResource T.Muted}" FontSize="12.5"
+                                       HorizontalAlignment="Center" TextAlignment="Center"
+                                       TextWrapping="Wrap" Margin="0,5,0,0" />
+
+                            <TextBlock x:Name="StatusSub" Text=""
+                                       Style="{StaticResource T.Base}" FontSize="11.5"
+                                       Foreground="{DynamicResource B.TextFaint}"
+                                       HorizontalAlignment="Center" Margin="0,3,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ── Counters ── -->
+                    <Border Style="{StaticResource S.Card}" Margin="0,10,0,0" Padding="0">
+                        <Grid Height="62">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="1" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Path Data="M 5,9 L 5,1 M 1.5,4.5 L 5,1 L 8.5,4.5"
+                                          Stroke="{DynamicResource B.Accent}" StrokeThickness="1.6"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                          VerticalAlignment="Center" Margin="0,0,7,0" />
+                                    <TextBlock x:Name="SentCount" Text="0" FontSize="19" FontWeight="SemiBold"
+                                               FontFamily="{DynamicResource F.Display}" />
+                                </StackPanel>
+                                <TextBlock Text="sent" Style="{StaticResource T.Muted}" FontSize="11"
+                                           HorizontalAlignment="Center" Margin="0,2,0,0" />
+                            </StackPanel>
+
+                            <Rectangle Grid.Column="1" Fill="{DynamicResource B.Border}" Margin="0,14" />
+
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Path Data="M 5,1 L 5,9 M 1.5,5.5 L 5,9 L 8.5,5.5"
+                                          Stroke="{DynamicResource B.Accent}" StrokeThickness="1.6"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                          VerticalAlignment="Center" Margin="0,0,7,0" />
+                                    <TextBlock x:Name="ReceivedCount" Text="0" FontSize="19" FontWeight="SemiBold"
+                                               FontFamily="{DynamicResource F.Display}" />
+                                </StackPanel>
+                                <TextBlock Text="received" Style="{StaticResource T.Muted}" FontSize="11"
+                                           HorizontalAlignment="Center" Margin="0,2,0,0" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- ── Recent activity ── -->
+                    <TextBlock Text="RECENT" Style="{StaticResource T.SectionLabel}" Margin="2,18,0,8" />
+
+                    <Border Style="{StaticResource S.Card}" Padding="6,4">
+                        <StackPanel>
+                            <ItemsControl x:Name="ActivityList">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="10,9">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <Border Grid.Column="0" Width="26" Height="26" CornerRadius="7"
+                                                    Background="{DynamicResource B.SurfaceAlt}"
+                                                    VerticalAlignment="Center" Margin="0,0,11,0">
+                                                <TextBlock Text="{Binding Glyph}"
+                                                           FontSize="12"
+                                                           Foreground="{DynamicResource B.TextMuted}"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Title}" FontSize="12.5"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Sub}" Style="{StaticResource T.Muted}"
+                                                           FontSize="11" Margin="0,1,0,0" />
+                                            </StackPanel>
+
+                                            <TextBlock Grid.Column="2" Text="{Binding Age}"
+                                                       Foreground="{DynamicResource B.TextFaint}"
+                                                       FontSize="11" VerticalAlignment="Center" Margin="8,0,2,0" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock x:Name="ActivityEmpty"
+                                       Text="Nothing synced yet. Copy something to try it."
+                                       Style="{StaticResource T.Muted}" FontSize="12"
+                                       HorizontalAlignment="Center" Margin="0,18,0,20" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ── Pair a device ── -->
+                    <ToggleButton x:Name="PairToggle" Style="{StaticResource S.Disclosure}" Margin="0,10,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Pair a device" VerticalAlignment="Center" />
+                            <Border x:Name="PairHintBadge" Background="{DynamicResource B.WarnSoft}"
+                                    CornerRadius="{StaticResource CR.Pill}" Padding="7,2" Margin="9,0,0,0"
+                                    VerticalAlignment="Center">
+                                <TextBlock Text="start here" FontSize="10.5" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource B.Warn}" />
+                            </Border>
+                        </StackPanel>
+                    </ToggleButton>
+
+                    <Border x:Name="PairPanel" Style="{StaticResource S.Card}" Margin="0,6,0,0"
+                            Visibility="Collapsed" Padding="18">
+                        <StackPanel>
+                            <TextBlock Text="Open Mesh Sync on your phone and scan this code."
+                                       Style="{StaticResource T.Muted}" FontSize="12.5"
+                                       TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,14" />
+
+                            <Border Background="#FFFFFF" CornerRadius="8" Padding="10"
+                                    HorizontalAlignment="Center"
+                                    BorderBrush="{DynamicResource B.Border}" BorderThickness="1">
+                                <Image x:Name="QrImage" Width="170" Height="170"
+                                       RenderOptions.BitmapScalingMode="NearestNeighbor" />
+                            </Border>
+
+                            <TextBlock x:Name="QrError" Visibility="Collapsed"
+                                       Text="Could not draw the QR code. Use the details below instead."
+                                       Style="{StaticResource T.Muted}" FontSize="12" TextWrapping="Wrap"
+                                       TextAlignment="Center" Margin="0,0,0,10" />
+
+                            <Grid Margin="0,16,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Address" Style="{StaticResource T.Muted}"
+                                           FontSize="12" VerticalAlignment="Center" Width="66" />
+                                <TextBlock Grid.Column="1" x:Name="IpText" Style="{StaticResource T.Mono}"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            </Grid>
+
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Code" Style="{StaticResource T.Muted}"
+                                           FontSize="12" VerticalAlignment="Center" Width="66" />
+                                <TextBlock Grid.Column="1" x:Name="CodeText" Style="{StaticResource T.Mono}"
+                                           Foreground="{DynamicResource B.TextMuted}"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                <Button Grid.Column="2" x:Name="BtnCopyCode" Style="{StaticResource S.BtnQuiet}"
+                                        Content="Copy" Padding="12,5" FontSize="12"
+                                        Click="BtnCopyCode_Click" Margin="10,0,0,0" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ── Settings ── -->
+                    <ToggleButton x:Name="SettingsToggle" Style="{StaticResource S.Disclosure}" Margin="0,10,0,0">
+                        <TextBlock Text="Settings" VerticalAlignment="Center" />
+                    </ToggleButton>
+
+                    <Border x:Name="SettingsPanel" Style="{StaticResource S.Card}" Margin="0,6,0,0"
+                            Visibility="Collapsed">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock Text="Start with Windows" FontSize="12.5" />
+                                    <TextBlock Text="Run quietly in the tray at sign-in"
+                                               Style="{StaticResource T.Muted}" FontSize="11"
+                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <CheckBox Grid.Column="1" x:Name="StartupSwitch" Style="{StaticResource S.Switch}"
+                                          VerticalAlignment="Center" Click="StartupSwitch_Click" />
+                            </Grid>
+
+                            <Rectangle Height="1" Fill="{DynamicResource B.Border}" Margin="0,14" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock Text="Appearance" FontSize="12.5" />
+                                    <TextBlock Text="Follow Windows, or pin one"
+                                               Style="{StaticResource T.Muted}" FontSize="11"
+                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <Border Grid.Column="1" Background="{DynamicResource B.SurfaceAlt}"
+                                        CornerRadius="7" Padding="2" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="ThemeSystem" Style="{StaticResource S.Segment}"
+                                                     GroupName="Theme" Content="Auto" Click="ThemeChoice_Click" />
+                                        <RadioButton x:Name="ThemeLight" Style="{StaticResource S.Segment}"
+                                                     GroupName="Theme" Content="Light" Click="ThemeChoice_Click" />
+                                        <RadioButton x:Name="ThemeDark" Style="{StaticResource S.Segment}"
+                                                     GroupName="Theme" Content="Dark" Click="ThemeChoice_Click" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <Rectangle Height="1" Fill="{DynamicResource B.Border}" Margin="0,14" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock Text="Diagnostic log" FontSize="12.5" />
+                                    <TextBlock Text="Open the folder containing daemon.log"
+                                               Style="{StaticResource T.Muted}" FontSize="11"
+                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <Button Grid.Column="1" x:Name="BtnOpenLogs" Style="{StaticResource S.BtnQuiet}"
+                                        Content="Open" Padding="12,5" FontSize="12"
+                                        VerticalAlignment="Center" Click="BtnOpenLogs_Click" />
+                            </Grid>
+
+                            <Rectangle Height="1" Fill="{DynamicResource B.Border}" Margin="0,14" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock Text="Quit Mesh Sync" FontSize="12.5" />
+                                    <TextBlock Text="Stops syncing until you launch it again"
+                                               Style="{StaticResource T.Muted}" FontSize="11"
+                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <Button Grid.Column="1" x:Name="BtnQuit" Style="{StaticResource S.BtnQuiet}"
+                                        Content="Quit" Padding="12,5" FontSize="12"
+                                        Foreground="{DynamicResource B.Danger}"
+                                        VerticalAlignment="Center" Click="BtnQuit_Click" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="18" Background="Transparent" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ══════════════ Footer ══════════════ -->
+            <Border Grid.Row="2" Background="{DynamicResource B.Bg}" Padding="18,10,18,16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" x:Name="FooterHint"
+                               Text="Everything stays on your local network"
+                               Style="{StaticResource T.Base}" FontSize="11"
+                               Foreground="{DynamicResource B.TextFaint}"
+                               VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0" />
+                    <Button Grid.Column="1" Style="{StaticResource S.BtnPrimary}" Content="Hide to tray"
+                            Click="BtnHide_Click" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
