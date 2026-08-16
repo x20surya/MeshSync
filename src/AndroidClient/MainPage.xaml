@@ -36,6 +36,14 @@
                         Clicked="OnEnableServiceClicked"
                         HorizontalOptions="Fill"
                         Margin="0,15,0,0" />
+                        
+                    <Button
+                        x:Name="RequestScreenshotBtn"
+                        Text="Grant Screenshot Permission" 
+                        SemanticProperties.Hint="Requests photo permission to beam screenshots"
+                        Clicked="OnRequestScreenshotClicked"
+                        HorizontalOptions="Fill"
+                        Margin="0,5,0,0" />
                 </VerticalStackLayout>
             </Border>
 

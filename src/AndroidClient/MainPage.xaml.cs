@@ -85,6 +85,35 @@ public partial class MainPage : ContentPage
 #endif
     }
 
+    private async void OnRequestScreenshotClicked(object sender, EventArgs e)
+    {
+        try 
+        {
+#if ANDROID
+            if (Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.Tiramisu)
+            {
+                var status = await Microsoft.Maui.ApplicationModel.Permissions.RequestAsync<Microsoft.Maui.ApplicationModel.Permissions.Photos>();
+                if (status == Microsoft.Maui.ApplicationModel.PermissionStatus.Granted)
+                {
+                    Android.Widget.Toast.MakeText(Android.App.Application.Context, "Screenshot permission granted!", Android.Widget.ToastLength.Short)?.Show();
+                }
+            }
+            else
+            {
+                var status = await Microsoft.Maui.ApplicationModel.Permissions.RequestAsync<Microsoft.Maui.ApplicationModel.Permissions.StorageRead>();
+                if (status == Microsoft.Maui.ApplicationModel.PermissionStatus.Granted)
+                {
+                    Android.Widget.Toast.MakeText(Android.App.Application.Context, "Screenshot permission granted!", Android.Widget.ToastLength.Short)?.Show();
+                }
+            }
+#endif
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to request permissions: {ex.Message}");
+        }
+    }
+
     protected override void OnDisappearing()
     {
         base.OnDisappearing();
