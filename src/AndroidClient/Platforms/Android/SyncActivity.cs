@@ -38,26 +38,61 @@ namespace AndroidClient.Platforms.Android
 
                         if (item.Uri != null)
                         {
+                            System.Console.WriteLine($"[SyncActivity] Found URI: {item.Uri}");
                             var contentResolver = this.ContentResolver;
                             var type = contentResolver?.GetType(item.Uri);
-                            if (type != null && type.StartsWith("image/"))
+                            System.Console.WriteLine($"[SyncActivity] Resolved Type: {type}");
+                            
+                            bool isImage = type != null && type.StartsWith("image/");
+                            
+                            if (!isImage && clipboard.PrimaryClip.Description != null)
+                            {
+                                for (int i = 0; i < clipboard.PrimaryClip.Description.MimeTypeCount; i++)
+                                {
+                                    var mime = clipboard.PrimaryClip.Description.GetMimeType(i);
+                                    System.Console.WriteLine($"[SyncActivity] Description MIME: {mime}");
+                                    if (mime != null && mime.StartsWith("image/")) isImage = true;
+                                }
+                            }
+
+                            if (isImage)
                             {
                                 try
                                 {
+                                    System.Console.WriteLine("[SyncActivity] Attempting to open InputStream...");
                                     using var stream = contentResolver?.OpenInputStream(item.Uri);
                                     if (stream != null)
                                     {
                                         using var ms = new System.IO.MemoryStream();
                                         stream.CopyTo(ms);
                                         byte[] imageBytes = ms.ToArray();
+                                        System.Console.WriteLine($"[SyncActivity] Read {imageBytes.Length} bytes.");
                                         await SyncManager.SendClipboardImageAsync(imageBytes);
                                         Toast.MakeText(this, "Image Pushed to Laptop!", ToastLength.Short)?.Show();
                                         Finish();
                                         return;
                                     }
+                                    else
+                                    {
+                                        System.Console.WriteLine("[SyncActivity] Stream was null.");
+                                    }
                                 }
-                                catch { }
+                                catch (System.Exception ex)
+                                {
+                                    System.Console.WriteLine($"[SyncActivity] Stream Error: {ex.Message}");
+                                    Toast.MakeText(this, $"Image Read Error: {ex.Message}", ToastLength.Long)?.Show();
+                                    Finish();
+                                    return;
+                                }
                             }
+                            else
+                            {
+                                System.Console.WriteLine("[SyncActivity] URI is not an image.");
+                            }
+                        }
+                        else
+                        {
+                            System.Console.WriteLine("[SyncActivity] item.Uri is NULL!");
                         }
 
                         var text = item.CoerceToText(this)?.ToString();
