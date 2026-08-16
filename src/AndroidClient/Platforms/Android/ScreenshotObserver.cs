@@ -38,7 +38,7 @@ namespace AndroidClient.Platforms.Android
                     projection,
                     null,
                     null,
-                    MediaStore.Images.Media.InterfaceConsts.DateAdded + " DESC LIMIT 1"
+                    MediaStore.Images.Media.InterfaceConsts.DateAdded + " DESC"
                 );
 
                 if (cursor != null && cursor.MoveToFirst())
