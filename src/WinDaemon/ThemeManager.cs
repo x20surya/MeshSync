@@ -1,42 +1,31 @@
 using System;
-using System.Windows.Media;
 using CoreLib.Diagnostics;
 using Microsoft.Win32;
-// Both WinForms and WPF are referenced, so Application must be disambiguated.
 using WpfApp = System.Windows.Application;
+using WpfResourceDictionary = System.Windows.ResourceDictionary;
 
 namespace WinDaemon
 {
     /// <summary>
-    /// Light is the canonical identity. The dark variant exists so the window does not
-    /// glare on a machine running Windows in dark mode; it overwrites the palette colours
-    /// in place, and every brush in MeshTheme.xaml binds to them dynamically.
+    /// Light is the canonical identity; the dark variant exists so the window does not glare
+    /// on a machine running Windows in dark mode.
+    ///
+    /// Switching swaps the whole palette dictionary rather than reassigning colour keys.
+    /// Reassigning looked correct and even logged correctly, but nothing repainted: a brush
+    /// that has already been handed to a rendered element does not re-resolve when the
+    /// colour behind it changes. Replacing a merged dictionary does invalidate every
+    /// DynamicResource pointing into it, which is what actually redraws the window.
     /// </summary>
     public static class ThemeManager
     {
-        private static readonly (string Key, string Light, string Dark)[] Palette =
-        {
-            ("C.Bg",           "#F7F6F3", "#17181A"),
-            ("C.Surface",      "#FFFFFF", "#1F2124"),
-            ("C.SurfaceAlt",   "#F1EFEA", "#282B2E"),
-            ("C.Border",       "#E5E1DA", "#2E3134"),
-            ("C.BorderStrong", "#D3CEC5", "#3E4246"),
-            ("C.Text",         "#262523", "#E9E7E3"),
-            ("C.TextMuted",    "#77726A", "#9C978F"),
-            ("C.TextFaint",    "#A39D94", "#726E68"),
-            ("C.Accent",       "#2F7A6B", "#4FA894"),
-            ("C.AccentHover",  "#28695C", "#5FBAA5"),
-            ("C.AccentSoft",   "#E6F1EE", "#1C2E2A"),
-            ("C.Warn",         "#B0722F", "#D69A5A"),
-            ("C.WarnSoft",     "#FBF1E3", "#2E2620"),
-            ("C.Danger",       "#B0524A", "#D4776E"),
-            ("C.DangerSoft",   "#FAEBE9", "#2E2220"),
-        };
-
         public enum Preference { System, Light, Dark }
 
         private const string SettingsKeyPath = @"SOFTWARE\MeshSync";
+        private const string LightPalette = "pack://application:,,,/WinDaemon;component/Themes/Palette.Light.xaml";
+        private const string DarkPalette = "pack://application:,,,/WinDaemon;component/Themes/Palette.Dark.xaml";
+
         private static WpfApp? _app;
+        private static WpfResourceDictionary? _palette;
 
         public static bool IsDark { get; private set; }
         public static Preference Current { get; private set; } = Preference.System;
@@ -46,7 +35,10 @@ namespace WinDaemon
             _app = app;
             Current = LoadPreference();
             IsDark = Resolve(Current);
-            Repaint(app);
+
+            _palette = new WpfResourceDictionary { Source = new Uri(IsDark ? DarkPalette : LightPalette) };
+            // Inserted first so the styles merged after it can resolve these keys.
+            app.Resources.MergedDictionaries.Insert(0, _palette);
 
             try
             {
@@ -59,7 +51,7 @@ namespace WinDaemon
                     if (dark == IsDark) return;
 
                     IsDark = dark;
-                    app.Dispatcher.Invoke(() => Repaint(app));
+                    app.Dispatcher.Invoke(SwapPalette);
                     Log.Write("UI", $"Followed Windows to the {(dark ? "dark" : "light")} theme.");
                 };
             }
@@ -78,8 +70,26 @@ namespace WinDaemon
             if (dark == IsDark || _app == null) return;
 
             IsDark = dark;
-            _app.Dispatcher.Invoke(() => Repaint(_app));
+            _app.Dispatcher.Invoke(SwapPalette);
             Log.Write("UI", $"Appearance set to {preference}.");
+        }
+
+        private static void SwapPalette()
+        {
+            if (_app == null) return;
+
+            var replacement = new WpfResourceDictionary
+            {
+                Source = new Uri(IsDark ? DarkPalette : LightPalette)
+            };
+
+            var dictionaries = _app.Resources.MergedDictionaries;
+            int index = _palette == null ? -1 : dictionaries.IndexOf(_palette);
+
+            if (index >= 0) dictionaries[index] = replacement;
+            else dictionaries.Insert(0, replacement);
+
+            _palette = replacement;
         }
 
         private static bool Resolve(Preference preference) => preference switch
@@ -117,16 +127,6 @@ namespace WinDaemon
             catch (Exception ex)
             {
                 Log.Write("UI", "Saving the appearance preference failed", ex);
-            }
-        }
-
-        private static void Repaint(WpfApp app)
-        {
-            foreach (var (key, light, dark) in Palette)
-            {
-                var value = (System.Windows.Media.Color)
-                    System.Windows.Media.ColorConverter.ConvertFromString(IsDark ? dark : light)!;
-                app.Resources[key] = value;
             }
         }
 

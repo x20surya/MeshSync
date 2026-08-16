@@ -23,6 +23,14 @@
     <StartupObject>WinDaemon.Program</StartupObject>
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Shown on the executable, in the taskbar and in Alt+Tab. Without it the window
+         fell back to the generic default icon. -->
+    <ApplicationIcon>Resources\meshsync.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Also embedded as a resource so the window and tray can load it at runtime. -->
+    <Resource Include="Resources\meshsync.ico" />
+  </ItemGroup>
 
 </Project>

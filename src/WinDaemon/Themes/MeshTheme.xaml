@@ -2,49 +2,9 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=System.Runtime">
 
-    <!-- ═══════════════════════════════════════════════════════════════
-         Palette - light, calm, minimal.
-         Colours are declared here and overwritten in place by ThemeManager
-         for the dark variant, so every brush below follows automatically.
-         ═══════════════════════════════════════════════════════════════ -->
-
-    <Color x:Key="C.Bg">#F7F6F3</Color>
-    <Color x:Key="C.Surface">#FFFFFF</Color>
-    <Color x:Key="C.SurfaceAlt">#F1EFEA</Color>
-    <Color x:Key="C.Border">#E5E1DA</Color>
-    <Color x:Key="C.BorderStrong">#D3CEC5</Color>
-    <Color x:Key="C.Text">#262523</Color>
-    <Color x:Key="C.TextMuted">#77726A</Color>
-    <Color x:Key="C.TextFaint">#A39D94</Color>
-
-    <Color x:Key="C.Accent">#2F7A6B</Color>
-    <Color x:Key="C.AccentHover">#28695C</Color>
-    <Color x:Key="C.AccentSoft">#E6F1EE</Color>
-
-    <Color x:Key="C.Warn">#B0722F</Color>
-    <Color x:Key="C.WarnSoft">#FBF1E3</Color>
-
-    <Color x:Key="C.Danger">#B0524A</Color>
-    <Color x:Key="C.DangerSoft">#FAEBE9</Color>
-
-    <Color x:Key="C.Shadow">#1A000000</Color>
-
-    <!-- Brushes -->
-    <SolidColorBrush x:Key="B.Bg"          Color="{DynamicResource C.Bg}" />
-    <SolidColorBrush x:Key="B.Surface"     Color="{DynamicResource C.Surface}" />
-    <SolidColorBrush x:Key="B.SurfaceAlt"  Color="{DynamicResource C.SurfaceAlt}" />
-    <SolidColorBrush x:Key="B.Border"      Color="{DynamicResource C.Border}" />
-    <SolidColorBrush x:Key="B.BorderStrong" Color="{DynamicResource C.BorderStrong}" />
-    <SolidColorBrush x:Key="B.Text"        Color="{DynamicResource C.Text}" />
-    <SolidColorBrush x:Key="B.TextMuted"   Color="{DynamicResource C.TextMuted}" />
-    <SolidColorBrush x:Key="B.TextFaint"   Color="{DynamicResource C.TextFaint}" />
-    <SolidColorBrush x:Key="B.Accent"      Color="{DynamicResource C.Accent}" />
-    <SolidColorBrush x:Key="B.AccentHover" Color="{DynamicResource C.AccentHover}" />
-    <SolidColorBrush x:Key="B.AccentSoft"  Color="{DynamicResource C.AccentSoft}" />
-    <SolidColorBrush x:Key="B.Warn"        Color="{DynamicResource C.Warn}" />
-    <SolidColorBrush x:Key="B.WarnSoft"    Color="{DynamicResource C.WarnSoft}" />
-    <SolidColorBrush x:Key="B.Danger"      Color="{DynamicResource C.Danger}" />
-    <SolidColorBrush x:Key="B.DangerSoft"  Color="{DynamicResource C.DangerSoft}" />
+    <!-- Styles only. The colour brushes live in Palette.Light.xaml and Palette.Dark.xaml,
+         which ThemeManager swaps at runtime; everything here refers to them by
+         DynamicResource so a swap repaints the whole window. -->
 
     <!-- Type -->
     <FontFamily x:Key="F.Sans">Segoe UI Variable Text, Segoe UI</FontFamily>
@@ -271,8 +231,6 @@
     </Style>
 
     <!-- ═══════════════════════ Sidebar navigation ═══════════════════════ -->
-
-    <SolidColorBrush x:Key="B.Sidebar" Color="{DynamicResource C.SurfaceAlt}" />
 
     <Style TargetType="RadioButton" x:Key="S.NavItem">
         <Setter Property="FontFamily" Value="{DynamicResource F.Sans}" />

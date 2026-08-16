@@ -110,7 +110,14 @@ namespace WinDaemon
         {
             _sidebarCollapsed = !_sidebarCollapsed;
             Sidebar.Width = _sidebarCollapsed ? SidebarNarrow : SidebarWide;
-            BrandText.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+
+            // The whole brand block goes, not just the wordmark. At 62px the mark and the
+            // collapse button both wanted the same 14px and drew on top of each other.
+            BrandBlock.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            BtnCollapse.HorizontalAlignment = _sidebarCollapsed
+                ? System.Windows.HorizontalAlignment.Center
+                : System.Windows.HorizontalAlignment.Right;
+            BtnCollapse.ToolTip = _sidebarCollapsed ? "Expand the sidebar" : "Collapse the sidebar";
 
             // Labels go, icons stay, so the rail still works when narrow.
             foreach (var nav in new[] { NavHome, NavActivity, NavDevices, NavSettings, NavAbout })
@@ -122,6 +129,10 @@ namespace WinDaemon
             }
 
             SidebarStatus.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            SidebarDot.Margin = _sidebarCollapsed ? new Thickness(0) : new Thickness(0, 0, 9, 0);
+            SidebarDot.HorizontalAlignment = _sidebarCollapsed
+                ? System.Windows.HorizontalAlignment.Center
+                : System.Windows.HorizontalAlignment.Left;
         }
 
         // ────────────────────────────── status

@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Mesh Sync"
+        Icon="pack://application:,,,/WinDaemon;component/Resources/meshsync.ico"
         Width="860" Height="600"
         MinWidth="720" MinHeight="520"
         WindowStartupLocation="CenterScreen"
