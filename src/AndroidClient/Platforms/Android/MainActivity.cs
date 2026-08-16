@@ -14,11 +14,15 @@ public class MainActivity : MauiAppCompatActivity
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
+
+        // Route CoreLib diagnostics into logcat.
+        CoreLib.Diagnostics.Log.Sink ??= line => global::Android.Util.Log.Info("MeshSync", line);
+
         HandleIntent(Intent);
-        
+
         // Always attempt auto-connect when the app is opened
         _ = SyncManager.AutoConnectAsync(true);
-        
+
         _ = RequestScreenshotPermissionsAsync();
     }
 

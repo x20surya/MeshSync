@@ -26,8 +26,9 @@
 		       <MauiXaml Update="MyPage.xaml" Inflator="Runtime" /> (force runtime inflation) -->
 		<MauiXamlInflator>SourceGen</MauiXamlInflator>
 
-		<!-- Display name -->
-		<ApplicationTitle>AndroidClient</ApplicationTitle>
+		<!-- Display name. Shown on the launcher and as the app label on every notification,
+		     where the project name was leaking through as "AndroidClient". -->
+		<ApplicationTitle>Mesh Sync</ApplicationTitle>
 
 		<!-- App Identifier -->
 		<ApplicationId>com.companyname.androidclient</ApplicationId>
@@ -41,7 +42,11 @@
 
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
-		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">21.0</SupportedOSPlatformVersion>
+		<!-- API 26 (Android 8.0) is the real floor: the persistent notification requires
+		     notification channels, and Notification.Builder(Context, channelId) does not
+		     exist below it. Declaring 21 only produced platform-availability warnings for
+		     an app that could never have run there. -->
+		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">26.0</SupportedOSPlatformVersion>
 		<SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
 		<TargetPlatformMinVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</TargetPlatformMinVersion>
 	</PropertyGroup>

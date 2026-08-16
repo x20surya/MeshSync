@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:shapes="clr-namespace:Microsoft.Maui.Controls.Shapes;assembly=Microsoft.Maui.Controls"
+             x:Class="AndroidClient.DashboardPage"
+             Style="{StaticResource MeshPage}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20,26,20,32" Spacing="0">
+
+            <!-- ══════════ Title row ══════════ -->
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="4,0,4,20">
+                <Grid Grid.Column="0" WidthRequest="18" HeightRequest="18" VerticalOptions="Center">
+                    <Ellipse WidthRequest="8" HeightRequest="8" HorizontalOptions="Start" VerticalOptions="Center"
+                             Fill="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
+                    <Ellipse WidthRequest="8" HeightRequest="8" HorizontalOptions="End" VerticalOptions="Center"
+                             Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                             StrokeThickness="1.6" Fill="Transparent" />
+                </Grid>
+                <Label Grid.Column="1" Text="Mesh Sync" Style="{StaticResource T.Title}"
+                       FontSize="15" VerticalOptions="Center" />
+            </Grid>
+
+            <!-- ══════════ Status hero ══════════ -->
+            <Border Style="{StaticResource S.Card}" Padding="20,26">
+                <VerticalStackLayout Spacing="0" HorizontalOptions="Center">
+
+                    <Grid WidthRequest="86" HeightRequest="86" HorizontalOptions="Center">
+                        <Ellipse x:Name="StatusHalo" WidthRequest="86" HeightRequest="86"
+                                 Fill="{AppThemeBinding Light={StaticResource AccentSoftLight}, Dark={StaticResource AccentSoftDark}}" />
+                        <Ellipse x:Name="StatusRing" WidthRequest="66" HeightRequest="66"
+                                 Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                 StrokeThickness="2" Fill="Transparent" />
+                        <shapes:Path x:Name="StatusTick"
+                                     Data="M 0,7 L 6,13 L 17,1"
+                                     Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                     StrokeThickness="2.6" StrokeLineCap="Round" StrokeLineJoin="Round"
+                                     HorizontalOptions="Center" VerticalOptions="Center" />
+                        <shapes:Path x:Name="StatusDots" IsVisible="False"
+                                     Data="M 2,6 L 2,6 M 8,6 L 8,6 M 14,6 L 14,6"
+                                     Stroke="{AppThemeBinding Light={StaticResource WarnLight}, Dark={StaticResource WarnDark}}"
+                                     StrokeThickness="4" StrokeLineCap="Round"
+                                     HorizontalOptions="Center" VerticalOptions="Center" />
+                    </Grid>
+
+                    <Label x:Name="StatusHeadline" Text="CONNECTED"
+                           FontSize="16" FontAttributes="Bold" CharacterSpacing="1.4"
+                           HorizontalTextAlignment="Center" Margin="0,18,0,0"
+                           TextColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
+
+                    <Label x:Name="StatusDetail" Style="{StaticResource T.Muted}"
+                           HorizontalTextAlignment="Center" Margin="0,6,0,0"
+                           Text="Looking for your computer" />
+
+                    <Label x:Name="StatusSub" Style="{StaticResource T.Faint}"
+                           HorizontalTextAlignment="Center" Margin="0,4,0,0" Text="" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ══════════ Counters ══════════ -->
+            <Border Style="{StaticResource S.Card}" Padding="0" Margin="0,12,0,0">
+                <Grid ColumnDefinitions="*,1,*" HeightRequest="76">
+                    <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="2">
+                        <Label x:Name="SentCount" Text="0" FontSize="22" FontAttributes="Bold"
+                               HorizontalTextAlignment="Center"
+                               TextColor="{AppThemeBinding Light={StaticResource TextLight}, Dark={StaticResource TextDark}}" />
+                        <Label Text="sent" Style="{StaticResource T.Faint}" HorizontalTextAlignment="Center" />
+                    </VerticalStackLayout>
+
+                    <BoxView Grid.Column="1" Margin="0,18"
+                             Color="{AppThemeBinding Light={StaticResource BorderLight}, Dark={StaticResource BorderDark}}" />
+
+                    <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" Spacing="2">
+                        <Label x:Name="ReceivedCount" Text="0" FontSize="22" FontAttributes="Bold"
+                               HorizontalTextAlignment="Center"
+                               TextColor="{AppThemeBinding Light={StaticResource TextLight}, Dark={StaticResource TextDark}}" />
+                        <Label Text="received" Style="{StaticResource T.Faint}" HorizontalTextAlignment="Center" />
+                    </VerticalStackLayout>
+                </Grid>
+            </Border>
+
+            <!-- ══════════ Warnings ══════════ -->
+            <Border x:Name="WarningCard" IsVisible="False" Style="{StaticResource S.Card}" Margin="0,12,0,0"
+                    BackgroundColor="{AppThemeBinding Light={StaticResource WarnSoftLight}, Dark={StaticResource WarnSoftDark}}"
+                    Stroke="Transparent">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <VerticalStackLayout Grid.Column="0" Spacing="3" VerticalOptions="Center">
+                        <Label x:Name="WarningTitle" Text="Clipboard access is off"
+                               FontSize="14.5" FontAttributes="Bold"
+                               TextColor="{AppThemeBinding Light={StaticResource WarnLight}, Dark={StaticResource WarnDark}}" />
+                        <Label x:Name="WarningBody" Style="{StaticResource T.Faint}"
+                               Text="Copying on this phone will not sync until you switch it on." />
+                    </VerticalStackLayout>
+                    <Button Grid.Column="1" x:Name="WarningAction" Text="Fix"
+                            Style="{StaticResource S.BtnOutline}" HeightRequest="40" Padding="16,0"
+                            FontSize="13.5" VerticalOptions="Center" Clicked="OnWarningActionClicked" />
+                </Grid>
+            </Border>
+
+            <!-- ══════════ Recent ══════════ -->
+            <Label Text="RECENT" Style="{StaticResource T.SectionLabel}" Margin="4,24,0,10" />
+
+            <Border Style="{StaticResource S.Card}" Padding="4,2">
+                <VerticalStackLayout>
+                    <CollectionView x:Name="ActivityList" SelectionMode="None">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Padding="12,11">
+                                    <Border Grid.Column="0" WidthRequest="32" HeightRequest="32"
+                                            StrokeThickness="0" VerticalOptions="Center"
+                                            BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceAltLight}, Dark={StaticResource SurfaceAltDark}}">
+                                        <Border.StrokeShape>
+                                            <RoundRectangle CornerRadius="9" />
+                                        </Border.StrokeShape>
+                                        <Label Text="{Binding Glyph}" FontSize="14"
+                                               HorizontalOptions="Center" VerticalOptions="Center"
+                                               TextColor="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
+                                    </Border>
+
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                        <Label Text="{Binding Title}" FontSize="14" LineBreakMode="TailTruncation"
+                                               MaxLines="1"
+                                               TextColor="{AppThemeBinding Light={StaticResource TextLight}, Dark={StaticResource TextDark}}" />
+                                        <Label Text="{Binding Sub}" FontSize="12"
+                                               TextColor="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
+                                    </VerticalStackLayout>
+
+                                    <Label Grid.Column="2" Text="{Binding Age}" FontSize="12"
+                                           VerticalOptions="Center"
+                                           TextColor="{AppThemeBinding Light={StaticResource FaintLight}, Dark={StaticResource FaintDark}}" />
+                                </Grid>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+
+                    <Label x:Name="ActivityEmpty" Style="{StaticResource T.Muted}"
+                           HorizontalTextAlignment="Center" Margin="0,24,0,26"
+                           Text="Nothing synced yet.&#10;Copy something to try it." />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ══════════ Actions ══════════ -->
+            <Button x:Name="SendNowButton" Text="Send clipboard now" Style="{StaticResource S.BtnPrimary}"
+                    Margin="0,20,0,0" Clicked="OnSendNowClicked" />
+
+            <Button Text="Pair with a different computer" Style="{StaticResource S.BtnQuiet}"
+                    Margin="0,4,0,0" Clicked="OnRepairClicked" />
+
+            <Label Style="{StaticResource T.Faint}" HorizontalTextAlignment="Center" Margin="0,18,0,0"
+                   Text="Everything stays on your local network" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

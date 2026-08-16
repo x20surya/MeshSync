@@ -85,10 +85,22 @@ namespace AndroidClient.Platforms.Android
             if (_gattClient == null || _writeCharacteristic == null) 
                 throw new InvalidOperationException("Not connected to a BLE characteristic.");
 
-            // WARNING: In production, BLE has a strict MTU limit (often 20-512 bytes). 
+            // WARNING: In production, BLE has a strict MTU limit (often 20-512 bytes).
             // We would need to chunk this byte array if it's larger than the negotiated MTU.
-            _writeCharacteristic.SetValue(encryptedPayload);
-            _gattClient.WriteCharacteristic(_writeCharacteristic);
+            if (OperatingSystem.IsAndroidVersionAtLeast(33))
+            {
+                _gattClient.WriteCharacteristic(
+                    _writeCharacteristic,
+                    encryptedPayload,
+                    (int)GattWriteType.Default);
+            }
+            else
+            {
+#pragma warning disable CA1422 // Superseded on API 33+, still the only option below it.
+                _writeCharacteristic.SetValue(encryptedPayload);
+                _gattClient.WriteCharacteristic(_writeCharacteristic);
+#pragma warning restore CA1422
+            }
 
             return Task.CompletedTask;
         }
@@ -101,9 +113,10 @@ namespace AndroidClient.Platforms.Android
             return Task.CompletedTask;
         }
 
-        public void Dispose()
+        public new void Dispose()
         {
             DisconnectAsync().Wait();
+            base.Dispose();
         }
 
         public void TriggerPayloadReceived(byte[] payload)

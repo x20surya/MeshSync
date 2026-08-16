@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Android.Bluetooth;
@@ -75,14 +76,17 @@ namespace AndroidClient.Platforms.Android
                 throw new NotSupportedException("BLE Scanning not supported.");
 
             var scanFilter = new ScanFilter.Builder()!
-                .SetManufacturerData(ManufacturerId, new byte[] { }) // Filter intentionally left broad, Android matches on ManufacturerId
+                .SetManufacturerData(ManufacturerId, new byte[] { })! // Filter intentionally left broad, Android matches on ManufacturerId
                 .Build();
 
             var scanSettings = new ScanSettings.Builder()!
                 .SetScanMode(global::Android.Bluetooth.LE.ScanMode.LowLatency)!
                 .Build();
 
-            _scanner.StartScan(new[] { scanFilter }, scanSettings, this);
+            var filters = new List<ScanFilter>();
+            if (scanFilter != null) filters.Add(scanFilter);
+
+            _scanner.StartScan(filters, scanSettings, this);
 
             return Task.CompletedTask;
         }

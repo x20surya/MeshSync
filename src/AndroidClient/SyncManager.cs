@@ -1,6 +1,8 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using CoreLib;
+using CoreLib.Diagnostics;
 using CoreLib.Transport;
 
 #if ANDROID
@@ -10,185 +12,647 @@ using Android.Content;
 
 namespace AndroidClient
 {
+    /// <summary>
+    /// Owns the single connection to the paired desktop, including reconnection.
+    ///
+    /// Every entry point funnels through one gate and one reconnect loop, because the
+    /// previous design let the deep link, the activity, the accessibility service and the
+    /// disconnect handler each start their own connect attempt. Each attempt built a fresh
+    /// <see cref="TcpTransportConnection"/> and overwrote the previous one without disposing
+    /// it, so sockets and receive-loop tasks accumulated for the life of the process.
+    /// </summary>
     public static class SyncManager
     {
-        public static TcpTransportConnection? Transport { get; private set; }
-        public static TrustManager? Trust { get; private set; }
-        private static byte[] _aesKey = CryptoEngine.DeriveKey("MasterPassword123", System.Text.Encoding.UTF8.GetBytes("Salt"));
-        public static bool IsInjectingClipboard = false;
+        private const byte ContentText = 0x00;
+        private const byte ContentImage = 0x01;
+
+        private const string PrefsName = "SyncPrefs";
+        private const string PrefHostIp = "HostIp";
+        private const string PrefHostPubKey = "HostPubKey";
+        private const string PrefPaused = "UserPaused";
+
+        private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(1);
+        private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
+
+        private static readonly object _loopGate = new();
+        private static readonly SemaphoreSlim _connectGate = new(1, 1);
+        private static readonly SemaphoreSlim _keyGate = new(1, 1);
+        private static readonly SemaphoreSlim _disconnectSignal = new(0);
+        private static readonly EchoSuppressor _echo = new(TimeSpan.FromSeconds(10));
+        private static readonly Random _jitter = new();
+
+        private static TcpTransportConnection? _transport;
+        private static byte[]? _aesKey;
+        private static CancellationTokenSource? _loopCts;
+        private static Task? _loopTask;
+        private static volatile bool _networkHintPending;
 
         public static event Action<string>? OnConnectionStatusChanged;
         public static event Action<string>? OnClipboardReceived;
 
-        public static async Task<bool> ConnectAsync(string hostIp, string hostPubKey)
+        public static bool IsConnected => _transport?.IsConnected == true;
+
+        /// <summary>What has synced this session. Never persisted - clipboard traffic is ephemeral.</summary>
+        public static readonly SyncActivityLog Activity = new(capacity: 12);
+
+        /// <summary>Friendly name of the paired computer, once it has announced itself.</summary>
+        public static string? PeerName => _transport?.RemoteDeviceName;
+
+        /// <summary>True once a host has been saved by scanning a code or entering it by hand.</summary>
+        public static bool IsPaired => !string.IsNullOrEmpty(LoadHost().HostIp);
+
+        /// <summary>Address this device is paired to, for display.</summary>
+        public static string PairedAddress => LoadHost().HostIp;
+
+        /// <summary>Name this device announces to the computer.</summary>
+        public static string LocalDeviceName
         {
+            get
+            {
 #if ANDROID
-            var prefs = Android.App.Application.Context.GetSharedPreferences("SyncPrefs", FileCreationMode.Private);
-            prefs?.Edit()?.PutString("HostIp", hostIp)?.PutString("HostPubKey", hostPubKey)?.Apply();
-#endif
-
-            Trust = new TrustManager();
-            Trust.TrustDevice(hostPubKey);
-
-            if (Transport != null)
-            {
-                await Transport.DisconnectAsync();
-            }
-
-            Transport = new TcpTransportConnection();
-
-            Transport.PayloadReceived += async (s, args) =>
-            {
                 try
                 {
-                    byte[] decrypted = CryptoEngine.Decrypt(args.EncryptedPayload, _aesKey);
-                    if (decrypted.Length == 0) return;
-                    
-                    byte type = decrypted[0];
-                    byte[] data = new byte[decrypted.Length - 1];
-                    Buffer.BlockCopy(decrypted, 1, data, 0, data.Length);
-
-                    IsInjectingClipboard = true;
-
-                    if (type == 0x00) // Text
-                    {
-                        string receivedText = System.Text.Encoding.UTF8.GetString(data);
-                        OnClipboardReceived?.Invoke(receivedText);
-                        
-#if ANDROID
-                        var clipboard = (ClipboardManager?)Android.App.Application.Context.GetSystemService(Context.ClipboardService);
-                        if (clipboard != null)
-                        {
-                            clipboard.PrimaryClip = ClipData.NewPlainText("Mesh", receivedText);
-                        }
-#endif
-                    }
-                    else if (type == 0x01) // Image
-                    {
-                        OnClipboardReceived?.Invoke("[Image Received]");
-#if ANDROID
-                        var context = Android.App.Application.Context;
-                        var cacheDir = new Java.IO.File(context.CacheDir, "images");
-                        if (!cacheDir.Exists()) cacheDir.Mkdirs();
-                        
-                        var imageFile = new Java.IO.File(cacheDir, "clipboard.jpg");
-                        if (imageFile.Exists()) imageFile.Delete();
-                        
-                        System.IO.File.WriteAllBytes(imageFile.AbsolutePath, data);
-
-                        var uri = AndroidX.Core.Content.FileProvider.GetUriForFile(context, "com.companyname.androidclient.fileprovider", imageFile);
-                        var clipboard = (ClipboardManager?)context.GetSystemService(Context.ClipboardService);
-                        if (clipboard != null)
-                        {
-                            var clip = ClipData.NewUri(context.ContentResolver, "Mesh Sync Image", uri);
-                            clipboard.PrimaryClip = clip;
-                        }
-#endif
-                    }
-                    
-                    await Task.Delay(500);
-                    IsInjectingClipboard = false;
+                    // The name the user actually chose in Settings, when it is available.
+                    var resolver = global::Android.App.Application.Context.ContentResolver;
+                    var chosen = global::Android.Provider.Settings.Global.GetString(resolver, "device_name");
+                    if (!string.IsNullOrWhiteSpace(chosen)) return chosen!;
                 }
-                catch (Exception ex)
+                catch { }
+
+                try
                 {
-                    Console.WriteLine($"Decrypt failed: {ex.Message}");
+                    string manufacturer = global::Android.OS.Build.Manufacturer ?? "";
+                    string model = global::Android.OS.Build.Model ?? "Phone";
+                    return model.StartsWith(manufacturer, StringComparison.OrdinalIgnoreCase)
+                        ? model
+                        : $"{Capitalise(manufacturer)} {model}".Trim();
                 }
-            };
+                catch { return "Android phone"; }
+#else
+                return Environment.MachineName;
+#endif
+            }
+        }
 
-            Transport.ConnectionClosed += async (s, args) =>
+        private static string Capitalise(string value) =>
+            string.IsNullOrEmpty(value) ? value : char.ToUpperInvariant(value[0]) + value.Substring(1);
+
+        // ---------------------------------------------------------------- public API
+
+        /// <summary>Pairs with a host and starts the managed reconnect loop.</summary>
+        public static async Task<bool> ConnectAsync(string hostIp, string hostPubKey)
+        {
+            if (string.IsNullOrWhiteSpace(hostIp)) return false;
+
+            SaveHost(hostIp, hostPubKey);
+            // Pairing is an explicit "I want this on", so it clears an earlier Stop.
+            SetPaused(false);
+            StartLoop();
+
+            // Nudge the loop so a freshly paired host is tried immediately rather than
+            // after whatever backoff the previous failures had accumulated.
+            SignalRetry();
+
+            // Report the outcome of the first attempt for the benefit of the pairing UI.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(12);
+            while (DateTime.UtcNow < deadline)
             {
-                if (_shouldStopConnecting) return;
+                if (IsConnected) return true;
+                await Task.Delay(200).ConfigureAwait(false);
+            }
+            return IsConnected;
+        }
 
-                OnConnectionStatusChanged?.Invoke("Disconnected. Retrying...");
-                _ = AutoConnectAsync(false); // Try to automatically reconnect
-            };
+        /// <summary>
+        /// True when the user has explicitly stopped syncing from the notification.
+        /// Persisted, so it survives the service or the process being restarted - otherwise
+        /// "Stop" would silently undo itself the next time anything reconnected.
+        /// </summary>
+        public static bool IsPaused
+        {
+            get
+            {
+#if ANDROID
+                try
+                {
+                    var prefs = global::Android.App.Application.Context
+                        .GetSharedPreferences(PrefsName, FileCreationMode.Private);
+                    return prefs?.GetBoolean(PrefPaused, false) ?? false;
+                }
+                catch { return false; }
+#else
+                return false;
+#endif
+            }
+        }
 
-            OnConnectionStatusChanged?.Invoke($"Connecting to {hostIp}...");
+        /// <summary>Stops syncing until the user turns it back on. Pairing details are kept.</summary>
+        public static async Task PauseAsync()
+        {
+            SetPaused(true);
+            await DisconnectAsync().ConfigureAwait(false);
+            Log.Write("Sync", "Paused by the user.");
+            Report("Paused");
+        }
+
+        /// <summary>Turns syncing back on after <see cref="PauseAsync"/>.</summary>
+        public static Task ResumeAsync()
+        {
+            SetPaused(false);
+            Log.Write("Sync", "Resumed by the user.");
+            return AutoConnectAsync(isUserInitiated: true);
+        }
+
+        private static void SetPaused(bool paused)
+        {
+#if ANDROID
             try
             {
-                await Transport.ConnectAsync(hostIp);
-                OnConnectionStatusChanged?.Invoke("Connected!");
-                return true;
+                var prefs = global::Android.App.Application.Context
+                    .GetSharedPreferences(PrefsName, FileCreationMode.Private);
+                prefs?.Edit()?.PutBoolean(PrefPaused, paused)?.Apply();
+            }
+            catch (Exception ex) { Log.Write("Sync", "Saving the paused state failed", ex); }
+#endif
+        }
+
+        /// <summary>Starts the reconnect loop using previously saved pairing details.</summary>
+        public static Task AutoConnectAsync(bool isUserInitiated = false)
+        {
+            // Every caller funnels through here, so honouring the flag once keeps the app,
+            // the accessibility service and the deep link from each reviving a stopped sync.
+            if (IsPaused)
+            {
+                Log.Write("Sync", "Auto-connect skipped: syncing is paused.");
+                return Task.CompletedTask;
+            }
+
+            var (hostIp, _) = LoadHost();
+            if (string.IsNullOrEmpty(hostIp))
+            {
+                Report("Not paired yet.");
+                return Task.CompletedTask;
+            }
+
+            StartLoop();
+            if (isUserInitiated) SignalRetry();
+            return Task.CompletedTask;
+        }
+
+        public static Task SendClipboardAsync(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return Task.CompletedTask;
+            return SendAsync(ContentText, System.Text.Encoding.UTF8.GetBytes(text));
+        }
+
+        public static Task SendClipboardImageAsync(byte[] imageBytes)
+        {
+            if (imageBytes == null || imageBytes.Length == 0) return Task.CompletedTask;
+            return SendAsync(ContentImage, imageBytes);
+        }
+
+        /// <summary>Stops the reconnect loop and tears the connection down. Pairing details are kept.</summary>
+        public static async Task DisconnectAsync()
+        {
+            CancellationTokenSource? cts;
+            Task? loop;
+
+            lock (_loopGate)
+            {
+                cts = _loopCts;
+                loop = _loopTask;
+                _loopCts = null;
+                _loopTask = null;
+            }
+
+            try { cts?.Cancel(); } catch { }
+
+            if (loop != null)
+            {
+                try { await loop.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+                catch { /* best effort */ }
+            }
+
+            cts?.Dispose();
+            RetireTransport();
+            _echo.Clear();
+            Report("Disconnected.");
+        }
+
+        // ---------------------------------------------------------------- send path
+
+        private static async Task SendAsync(byte contentType, byte[] body)
+        {
+            var transport = _transport;
+            if (transport == null || !transport.IsConnected) return;
+
+            // One gate for both "this is our own injection bouncing back" and "this is a
+            // repeat notification for a copy we just sent". Android raises
+            // OnPrimaryClipChanged several times per clipboard change, so without the
+            // second check every copy was transmitted twice.
+            var kind = contentType == ContentImage ? SyncItemKind.Image : SyncItemKind.Text;
+            if (!_echo.ShouldSend(body, kind))
+            {
+                Log.Write("Sync", "Suppressed duplicate or echoed clipboard content.");
+                return;
+            }
+
+            byte[] payload = body;
+            if (contentType == ContentImage)
+            {
+                payload = ImageCodec.CompressForTransport(body);
+                if (payload.Length != body.Length)
+                    Log.Write("Sync", $"Recompressed image {body.Length} -> {payload.Length} bytes.");
+            }
+
+            byte[] key;
+            try { key = await GetKeyAsync().ConfigureAwait(false); }
+            catch (Exception ex) { Log.Write("Sync", "Key unavailable", ex); return; }
+
+            byte[] encrypted;
+            try { encrypted = CryptoEngine.EncryptTagged(contentType, payload, key); }
+            catch (Exception ex) { Log.Write("Sync", "Encryption failed", ex); return; }
+
+            if (encrypted.Length > TcpTransportConnection.MaxPayloadBytes)
+            {
+                Log.Write("Sync", $"Refusing to send {encrypted.Length} byte payload (over the limit).");
+                Report("Item too large to sync.");
+                return;
+            }
+
+            try
+            {
+                await transport.SendPayloadAsync(encrypted).ConfigureAwait(false);
+                Activity.Record(SyncDirection.Sent,
+                    contentType == ContentText ? SyncItemKind.Text : SyncItemKind.Image,
+                    payload.Length,
+                    contentType == ContentText ? System.Text.Encoding.UTF8.GetString(body) : null);
+                Log.Write("Sync", $"Sent {(contentType == ContentText ? "text" : "image")} payload, {encrypted.Length} bytes.");
             }
             catch (Exception ex)
             {
-                OnConnectionStatusChanged?.Invoke($"Connection Failed: {ex.Message}");
-                return false;
+                Log.Write("Sync", "Send failed", ex);
             }
         }
 
-        private static bool _isAutoConnecting = false;
-        private static bool _shouldStopConnecting = false;
+        // ---------------------------------------------------------------- receive path
 
-        public static async Task AutoConnectAsync(bool isUserInitiated = false)
+        private static void HandlePayload(byte[] encrypted)
         {
-            if (!isUserInitiated && _shouldStopConnecting) return;
+            byte[]? key = Volatile.Read(ref _aesKey);
+            if (key == null)
+            {
+                Log.Write("Sync", "Dropped payload: key derivation has not finished yet.");
+                return;
+            }
 
-            if (_isAutoConnecting) return;
-            _isAutoConnecting = true;
-            _shouldStopConnecting = false;
+            byte contentType;
+            byte[] body;
+            try
+            {
+                (contentType, body) = CryptoEngine.DecryptTagged(encrypted, key);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Sync", "Decryption failed - the peer is using a different key or the frame was corrupt", ex);
+                return;
+            }
 
-            string hostIp = "";
-            string hostPubKey = "";
+            // Recorded before injection so the clipboard listener recognises the resulting
+            // change as our own write.
+            _echo.NoteInbound(body, contentType == ContentImage ? SyncItemKind.Image : SyncItemKind.Text);
+
+            try
+            {
+                if (contentType == ContentText) ApplyText(body);
+                else if (contentType == ContentImage) ApplyImage(body);
+                else Log.Write("Sync", $"Ignoring unknown content type {contentType}.");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Sync", "Applying received payload failed", ex);
+            }
+        }
+
+        private static void ApplyText(byte[] body)
+        {
+            string text = System.Text.Encoding.UTF8.GetString(body);
+            OnClipboardReceived?.Invoke(text);
 
 #if ANDROID
-            var prefs = Android.App.Application.Context.GetSharedPreferences("SyncPrefs", FileCreationMode.Private);
-            hostIp = prefs?.GetString("HostIp", "") ?? "";
-            hostPubKey = prefs?.GetString("HostPubKey", "") ?? "";
+            var clipboard = (ClipboardManager?)global::Android.App.Application.Context.GetSystemService(Context.ClipboardService);
+            if (clipboard != null) clipboard.PrimaryClip = ClipData.NewPlainText("Mesh", text);
 #endif
-            
-            if (!string.IsNullOrEmpty(hostIp) && !string.IsNullOrEmpty(hostPubKey))
+            Activity.Record(SyncDirection.Received, SyncItemKind.Text, body.Length, text);
+            Log.Write("Sync", $"Received text payload, {body.Length} bytes.");
+        }
+
+        private static void ApplyImage(byte[] body)
+        {
+            OnClipboardReceived?.Invoke("[Image Received]");
+
+#if ANDROID
+            var context = global::Android.App.Application.Context;
+            var cacheDir = new Java.IO.File(context.CacheDir, "images");
+            if (!cacheDir.Exists()) cacheDir.Mkdirs();
+
+            PruneImageCache(cacheDir);
+
+            // A unique name per image: the previous fixed "clipboard.jpg" meant the
+            // FileProvider URI never changed, so consumers could serve a cached older image.
+            var imageFile = new Java.IO.File(cacheDir, $"clip_{DateTime.UtcNow:yyyyMMddHHmmssfff}.jpg");
+            System.IO.File.WriteAllBytes(imageFile.AbsolutePath!, body);
+
+            var uri = AndroidX.Core.Content.FileProvider.GetUriForFile(
+                context, "com.companyname.androidclient.fileprovider", imageFile);
+
+            var clipboard = (ClipboardManager?)context.GetSystemService(Context.ClipboardService);
+            if (clipboard != null)
             {
-                bool connected = false;
-                while (!connected && !_shouldStopConnecting)
+                clipboard.PrimaryClip = ClipData.NewUri(context.ContentResolver, "Mesh Sync Image", uri);
+            }
+#endif
+            Activity.Record(SyncDirection.Received, SyncItemKind.Image, body.Length);
+            Log.Write("Sync", $"Received image payload, {body.Length} bytes.");
+        }
+
+#if ANDROID
+        /// <summary>Keeps the image cache bounded - nothing ever deleted these before.</summary>
+        private static void PruneImageCache(Java.IO.File cacheDir)
+        {
+            try
+            {
+                var files = cacheDir.ListFiles();
+                if (files == null || files.Length <= 8) return;
+
+                Array.Sort(files, (a, b) => a.LastModified().CompareTo(b.LastModified()));
+                for (int i = 0; i < files.Length - 8; i++)
                 {
-                    connected = await ConnectAsync(hostIp, hostPubKey);
-                    if (!connected && !_shouldStopConnecting)
-                    {
-                        await Task.Delay(3000); // Wait 3 seconds before retrying
-                    }
+                    try { files[i].Delete(); } catch { }
                 }
             }
-
-            _isAutoConnecting = false;
-        }
-
-        public static async Task SendClipboardAsync(string text)
-        {
-            if (Transport != null && Transport.IsConnected && !IsInjectingClipboard)
+            catch (Exception ex)
             {
-                byte[] textBytes = System.Text.Encoding.UTF8.GetBytes(text);
-                byte[] payload = new byte[textBytes.Length + 1];
-                payload[0] = 0x00;
-                Buffer.BlockCopy(textBytes, 0, payload, 1, textBytes.Length);
+                Log.Write("Sync", "Pruning image cache failed", ex);
+            }
+        }
+#endif
 
-                byte[] encrypted = CryptoEngine.Encrypt(payload, _aesKey);
-                await Transport.SendPayloadAsync(encrypted);
+        // ---------------------------------------------------------------- reconnect loop
+
+        private static void StartLoop()
+        {
+            // A plain lock, not the connect gate: the connect gate is held across a network
+            // round trip, and this is called from the UI thread.
+            lock (_loopGate)
+            {
+                if (_loopTask != null && !_loopTask.IsCompleted) return;
+
+                _loopCts?.Dispose();
+                _loopCts = new CancellationTokenSource();
+                var token = _loopCts.Token;
+                _loopTask = Task.Run(() => ReconnectLoopAsync(token));
             }
         }
 
-        public static async Task SendClipboardImageAsync(byte[] imageBytes)
+        private static void SignalRetry()
         {
-            if (Transport != null && Transport.IsConnected && !IsInjectingClipboard)
-            {
-                byte[] payload = new byte[imageBytes.Length + 1];
-                payload[0] = 0x01;
-                Buffer.BlockCopy(imageBytes, 0, payload, 1, imageBytes.Length);
+            _networkHintPending = true;
+            try { _disconnectSignal.Release(); } catch (SemaphoreFullException) { }
+        }
 
-                byte[] encrypted = CryptoEngine.Encrypt(payload, _aesKey);
-                await Transport.SendPayloadAsync(encrypted);
+        /// <summary>Discards queued wake-ups so a burst of them cannot spin the loop.</summary>
+        private static void DrainSignal()
+        {
+            while (_disconnectSignal.CurrentCount > 0)
+            {
+                if (!_disconnectSignal.Wait(0)) break;
             }
         }
 
-        public static async Task DisconnectAsync()
+        /// <summary>
+        /// Called by the host app when connectivity changes, so a returning Wi-Fi network
+        /// reconnects immediately instead of waiting out the current backoff.
+        /// </summary>
+        public static void NotifyNetworkAvailable()
         {
-            _shouldStopConnecting = true;
-            // Do NOT remove HostIp here, so we can auto-reconnect when the service starts again!
-            if (Transport != null)
+            Log.Write("Sync", "Network became available - retrying now.");
+            SignalRetry();
+        }
+
+        private static async Task ReconnectLoopAsync(CancellationToken token)
+        {
+            int failures = 0;
+
+            while (!token.IsCancellationRequested)
             {
-                await Transport.DisconnectAsync();
-                Transport = null;
+                var (hostIp, hostPubKey) = LoadHost();
+                if (string.IsNullOrEmpty(hostIp))
+                {
+                    Report("Not paired yet.");
+                    return;
+                }
+
+                bool connected = await TryConnectAsync(hostIp, hostPubKey, token).ConfigureAwait(false);
+
+                if (connected)
+                {
+                    failures = 0;
+                    _networkHintPending = false;
+                    DrainSignal();
+
+                    // Park until the connection drops. No polling, so an idle paired phone
+                    // does no work at all - the previous loop woke every 3 seconds forever.
+                    try { await _disconnectSignal.WaitAsync(token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
+
+                failures++;
+
+                if (_networkHintPending)
+                {
+                    // Connectivity just changed; do not punish the next attempt.
+                    _networkHintPending = false;
+                    failures = 0;
+                }
+
+                var delay = BackoffFor(failures);
+                Report($"Reconnecting in {delay.TotalSeconds:F0}s...");
+
+                try
+                {
+                    // A network-available hint cuts the wait short.
+                    await _disconnectSignal.WaitAsync(delay, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { break; }
+            }
+
+            Log.Write("Sync", "Reconnect loop stopped.");
+        }
+
+        /// <summary>
+        /// Exponential backoff capped at a minute, with jitter so a phone and a laptop
+        /// waking together do not retry in lockstep. The old fixed 3 second retry ran all
+        /// night whenever the laptop was off, which is exactly the battery drain the
+        /// project guidelines call out.
+        /// </summary>
+        private static TimeSpan BackoffFor(int failures)
+        {
+            double seconds = MinBackoff.TotalSeconds * Math.Pow(2, Math.Min(failures - 1, 6));
+            seconds = Math.Min(seconds, MaxBackoff.TotalSeconds);
+
+            double jitter;
+            lock (_jitter) jitter = 0.8 + _jitter.NextDouble() * 0.4;
+
+            return TimeSpan.FromSeconds(seconds * jitter);
+        }
+
+        private static async Task<bool> TryConnectAsync(string hostIp, string hostPubKey, CancellationToken token)
+        {
+            await _connectGate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                if (_transport?.IsConnected == true) return true;
+
+                RetireTransport();
+
+                // Derived before the socket opens so the first payload is never dropped
+                // for want of a key, and off whatever thread called in - Argon2id costs
+                // 64 MB and a few hundred milliseconds and must never touch the UI thread.
+                await GetKeyAsync().ConfigureAwait(false);
+
+                var transport = new TcpTransportConnection { LocalDeviceName = LocalDeviceName };
+                transport.PayloadReceived += Transport_PayloadReceived;
+                transport.ConnectionClosed += Transport_ConnectionClosed;
+                transport.PeerIdentified += Transport_PeerIdentified;
+                _transport = transport;
+
+                Report($"Connecting to {hostIp}...");
+                await transport.ConnectAsync(hostIp, token).ConfigureAwait(false);
+
+                Report("Connected!");
+                Log.Write("Sync", $"Connected to {hostIp}. Paired key: {Truncate(hostPubKey)}");
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                RetireTransport();
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Sync", $"Connect to {hostIp} failed", ex);
+                Report($"Connection failed: {ex.Message}");
+                RetireTransport();
+                return false;
+            }
+            finally
+            {
+                _connectGate.Release();
             }
         }
+
+        private static void Transport_PayloadReceived(object? sender, PayloadReceivedEventArgs e)
+        {
+            // Runs on the transport receive loop. Kept synchronous and total so a failure
+            // here can never take the connection down.
+            try { HandlePayload(e.EncryptedPayload); }
+            catch (Exception ex) { Log.Write("Sync", "Payload handling failed", ex); }
+        }
+
+        private static void Transport_ConnectionClosed(object? sender, EventArgs e)
+        {
+            Report("Disconnected. Retrying...");
+            SignalRetry();
+        }
+
+        private static void Transport_PeerIdentified(object? sender, PeerIdentifiedEventArgs e)
+        {
+            // Re-report so dashboards swap the placeholder for the real computer name.
+            Report("Connected!");
+        }
+
+        /// <summary>Detaches and disposes the current transport. Skipping this was the leak.</summary>
+        private static void RetireTransport()
+        {
+            var transport = Interlocked.Exchange(ref _transport, null);
+            if (transport == null) return;
+
+            transport.PayloadReceived -= Transport_PayloadReceived;
+            transport.ConnectionClosed -= Transport_ConnectionClosed;
+            transport.PeerIdentified -= Transport_PeerIdentified;
+            try { transport.Dispose(); } catch (Exception ex) { Log.Write("Sync", "Disposing transport failed", ex); }
+        }
+
+        // ---------------------------------------------------------------- key + prefs
+
+        private static async Task<byte[]> GetKeyAsync()
+        {
+            var existing = Volatile.Read(ref _aesKey);
+            if (existing != null) return existing;
+
+            await _keyGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                existing = Volatile.Read(ref _aesKey);
+                if (existing != null) return existing;
+
+                // Deliberately off the calling thread: this used to run in a static field
+                // initialiser, so the first touch of SyncManager blocked the UI thread for
+                // hundreds of milliseconds and spiked 64 MB during app start.
+                var key = await Task.Run(() =>
+                    CryptoEngine.DeriveKey("MasterPassword123", System.Text.Encoding.UTF8.GetBytes("Salt")))
+                    .ConfigureAwait(false);
+
+                Volatile.Write(ref _aesKey, key);
+                Log.Write("Sync", "Key derivation complete.");
+                return key;
+            }
+            finally
+            {
+                _keyGate.Release();
+            }
+        }
+
+        private static void SaveHost(string hostIp, string hostPubKey)
+        {
+#if ANDROID
+            try
+            {
+                var prefs = global::Android.App.Application.Context.GetSharedPreferences(PrefsName, FileCreationMode.Private);
+                prefs?.Edit()?.PutString(PrefHostIp, hostIp)?.PutString(PrefHostPubKey, hostPubKey)?.Apply();
+            }
+            catch (Exception ex) { Log.Write("Sync", "Saving pairing details failed", ex); }
+#endif
+        }
+
+        private static (string HostIp, string HostPubKey) LoadHost()
+        {
+#if ANDROID
+            try
+            {
+                var prefs = global::Android.App.Application.Context.GetSharedPreferences(PrefsName, FileCreationMode.Private);
+                return (prefs?.GetString(PrefHostIp, "") ?? "", prefs?.GetString(PrefHostPubKey, "") ?? "");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Sync", "Loading pairing details failed", ex);
+                return ("", "");
+            }
+#else
+            return ("", "");
+#endif
+        }
+
+        private static void Report(string status)
+        {
+            try { OnConnectionStatusChanged?.Invoke(status); }
+            catch (Exception ex) { Log.Write("Sync", "Status handler threw", ex); }
+        }
+
+        private static string Truncate(string value) =>
+            string.IsNullOrEmpty(value) ? "(none)" :
+            value.Length <= 12 ? value : value.Substring(0, 12) + "...";
     }
 }

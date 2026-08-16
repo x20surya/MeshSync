@@ -4,11 +4,17 @@
     xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
     xmlns:local="clr-namespace:AndroidClient"
-    Title="AndroidClient">
+    Shell.FlyoutBehavior="Disabled"
+    Shell.NavBarIsVisible="False"
+    Title="Mesh Sync">
+
+    <!-- Setup first; the shell picks the start route at runtime. -->
+    <ShellContent
+        Route="setup"
+        ContentTemplate="{DataTemplate local:SetupPage}" />
 
     <ShellContent
-        Title="Home"
-        ContentTemplate="{DataTemplate local:MainPage}"
-        Route="MainPage" />
+        Route="dashboard"
+        ContentTemplate="{DataTemplate local:DashboardPage}" />
 
 </Shell>
