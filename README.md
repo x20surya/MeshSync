@@ -16,9 +16,10 @@ No cloud servers. No subscriptions. No third-party data harvesting.
 - **`AndroidClient`**: A .NET MAUI Android application containing the UI and the background Accessibility Service to monitor the Android clipboard.
 
 ## Current Status
-- **Phase 1 (Foundation)**: ✅ Complete. Clipboard capturing works natively on both platforms.
+- **Phase 1 (Foundation)**: ✅ Complete. Text clipboard capturing works natively on both platforms, along with native MediaStore screenshot interception on Android.
 - **Phase 2 (Crypto Engine)**: ✅ Complete. `CoreLib` successfully encrypts and decrypts cross-platform.
-- **Phase 3 (Transport Layer)**: 🚧 In Progress. Building BLE / Wi-Fi Direct discovery.
+- **Phase 3 & 4 (Transport Layer & Ephemeral Sync)**: ✅ Complete. TCP sockets, QR deep-link pairing, and bidirectional text/image syncing are fully operational.
+- **Phase 5 (Password Vault)**: 🚧 In Progress. SQLite integration and CRDT sync mechanisms.
 
 ## Setup Instructions
 Please refer to [CLAUDE.md](CLAUDE.md) for build and deployment instructions.

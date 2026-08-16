@@ -17,13 +17,14 @@ This document outlines the architecture and goals for the Local-First Password &
    - Local vault encryption at rest via AES-256-GCM derived from a master password (Argon2id).
 3. **Universal Clipboard Service**: 
    - Windows: C# background daemon using Win32 Clipboard APIs (`src/WinDaemon`).
-   - Android: Accessibility Service to monitor clipboard changes (`src/AndroidClient`).
+   - Android: Accessibility Service to monitor clipboard text changes (`src/AndroidClient`).
+   - Android Images: A background `ContentObserver` on the `MediaStore` natively intercepts screenshots instantly without requiring clipboard manipulation.
    - Images compressed to JPEG/WEBP before transmission.
 
 ## Current Project Status
-- **Phase 1 (Foundation)**: COMPLETED. `WinDaemon` successfully monitors the Win32 clipboard. `AndroidClient` (.NET MAUI) successfully monitors the Android clipboard via a background `AccessibilityService`. 
+- **Phase 1 (Foundation)**: COMPLETED. `WinDaemon` monitors Win32 clipboard. `AndroidClient` monitors clipboard text and uses `MediaStore` observer for native screenshot beaming.
 - **Phase 2 (Crypto Engine)**: COMPLETED. `CoreLib` securely derives keys via `Argon2id` and encrypts payloads using `AES-256-GCM`.
-- **Phase 3 & 4 (Transport & Ephemeral Sync)**: COMPLETED. Network TCP sockets are implemented with Windows background system tray UI, Android deep-linking QR pairing, and full end-to-end ephemeral clipboard syncing.
+- **Phase 3 & 4 (Transport & Ephemeral Sync)**: COMPLETED. Network TCP sockets are implemented with Windows background system tray UI, Android deep-linking QR pairing, full text sync, and seamless image/screenshot syncing.
 - **Phase 5 (Password Vault)**: PENDING. Next step is implementing the SQLite storage and CRDT sync mechanisms.
 
 ## Risks & Conflict Resolution
