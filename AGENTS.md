@@ -8,18 +8,32 @@ This document outlines the architecture and goals for the Local-First Password &
 - **Universal Clipboard**: Copy text or photos on one device, paste on the other (Windows Phone Link style).
 
 ## Implementation Approach
-1. **Connectivity & Transport Layer**: 
-   - Discovery via Bluetooth Low Energy (BLE).
-   - Transport upgrades to Wi-Fi Direct for large payloads (e.g., photos). Small payloads (passwords) use BLE.
-2. **Encryption & Key Exchange**: 
-   - Zero-trust architecture. Initial pairing via QR code (sharing public keys).
-   - Transport encryption via ChaCha20-Poly1305 (or AES-256-GCM) over BLE/Wi-Fi.
+
+1. **Connectivity & Transport Layer**. Two tiers, both direct device to device.
+   - **Wi-Fi (preferred)**: length-prefixed TCP on port 45001 over the local network.
+     Carries text and images. The computer listens, the phone connects.
+   - **Bluetooth LE (fallback)**: used when no Wi-Fi or Ethernet transport exists at all.
+     Carries text only, at roughly 6.7 KB/s. The computer is the GATT server and the phone the
+     client, mirroring the TCP roles. The phone finds it by scanning for the service UUID, so
+     pairing carries no Bluetooth address.
+   - Wi-Fi Direct was in the original plan and is not used. Plain TCP over whatever local network
+     already exists turned out simpler and needs no pairing of its own.
+2. **Encryption & Key Exchange**
+   - Transport encryption via AES-256-GCM. The encrypted payload is byte-identical on both
+     transports, so crypto, echo suppression and the activity log are transport-agnostic.
    - Local vault encryption at rest via AES-256-GCM derived from a master password (Argon2id).
-3. **Universal Clipboard Service**: 
-   - Windows: C# background daemon using Win32 Clipboard APIs (`src/WinDaemon`).
-   - Android: Accessibility Service to monitor clipboard text changes (`src/AndroidClient`).
-   - Android Images: A background `ContentObserver` on the `MediaStore` natively intercepts screenshots instantly without requiring clipboard manipulation.
-   - Images compressed to JPEG/WEBP before transmission.
+   - **The zero-trust pairing is not implemented.** See Known gaps below.
+3. **Universal Clipboard Service**
+   - Windows: background daemon using Win32 clipboard APIs (`src/WinDaemon`). All clipboard access
+     happens on one dedicated STA thread, never on the message pump, because those calls block for
+     seconds whenever another process holds the clipboard lock.
+   - Android: an accessibility service monitors clipboard text changes (`src/AndroidClient`).
+   - Android images: a `ContentObserver` on `MediaStore` intercepts screenshots without touching
+     the clipboard. Wait for the row to stop being pending before reading it, or the capture is
+     read half-written.
+   - Images are downscaled and re-encoded as JPEG before transmission.
+   - Two further entry points avoid the clipboard entirely: `PROCESS_TEXT` puts "Send to PC" in the
+     text selection toolbar, and a share target accepts text and images from any app.
 
 ## Current Project Status
 
