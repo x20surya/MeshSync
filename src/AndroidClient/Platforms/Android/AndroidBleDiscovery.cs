@@ -1,135 +1,170 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Android.Bluetooth;
 using Android.Bluetooth.LE;
 using Android.Content;
 using Android.OS;
+using CoreLib.Diagnostics;
 using CoreLib.Transport;
+using Java.Util;
 
 namespace AndroidClient.Platforms.Android
 {
-    public class AndroidBleDiscovery : ScanCallback, IDiscoveryService
+    /// <summary>
+    /// Finds the computer over BLE by scanning for the Mesh Sync service UUID.
+    ///
+    /// Matching on the service rather than on a Bluetooth address means pairing does not
+    /// have to carry a MAC, so the existing QR payload keeps working and a replaced or
+    /// re-paired computer is still found without re-pairing.
+    /// </summary>
+    public sealed class AndroidBleDiscovery : ScanCallback, IDiscoveryService, IDisposable
     {
-        private readonly BluetoothManager _bluetoothManager;
-        private readonly BluetoothAdapter _bluetoothAdapter;
-        
-        private BluetoothLeAdvertiser? _advertiser;
-        private BluetoothLeScanner? _scanner;
-        
-        private AdvertiseCallback? _advertiseCallback;
+        private static readonly ParcelUuid ServiceParcelUuid =
+            ParcelUuid.FromString(BleProtocol.ServiceUuid.ToString())!;
 
-        // Use a unique manufacturer ID for our custom payload (e.g. 0xFFFF for testing)
-        private const int ManufacturerId = 0xFFFF;
+        private readonly object _gate = new();
+        private readonly Dictionary<string, DateTime> _seen = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly TimeSpan RediscoverAfter = TimeSpan.FromSeconds(30);
+
+        private BluetoothLeScanner? _scanner;
+        private bool _scanning;
+        private bool _disposed;
 
         public event EventHandler<DeviceDiscoveredEventArgs>? DeviceDiscovered;
 
-        public AndroidBleDiscovery()
-        {
-            _bluetoothManager = (BluetoothManager)global::Android.App.Application.Context.GetSystemService(Context.BluetoothService)!;
-            _bluetoothAdapter = _bluetoothManager.Adapter!;
-        }
+        /// <summary>The phone never advertises; the computer is the peripheral.</summary>
+        public Task StartAdvertisingAsync(byte[] publicIdentifier) => Task.CompletedTask;
 
-        public Task StartAdvertisingAsync(byte[] publicIdentifier)
-        {
-            if (_bluetoothAdapter == null || !_bluetoothAdapter.IsEnabled)
-                throw new InvalidOperationException("Bluetooth is not enabled.");
-
-            _advertiser = _bluetoothAdapter.BluetoothLeAdvertiser;
-            if (_advertiser == null)
-                throw new NotSupportedException("BLE Advertising not supported on this device.");
-
-            var settings = new AdvertiseSettings.Builder()!
-                .SetAdvertiseMode(AdvertiseMode.LowLatency)!
-                .SetConnectable(true)!
-                .SetTimeout(0)!
-                .SetTxPowerLevel(AdvertiseTx.PowerHigh)!
-                .Build();
-
-            var data = new AdvertiseData.Builder()!
-                .AddManufacturerData(ManufacturerId, publicIdentifier)!
-                .Build();
-
-            _advertiseCallback = new CustomAdvertiseCallback();
-            _advertiser.StartAdvertising(settings, data, _advertiseCallback);
-
-            return Task.CompletedTask;
-        }
-
-        public Task StopAdvertisingAsync()
-        {
-            if (_advertiser != null && _advertiseCallback != null)
-            {
-                _advertiser.StopAdvertising(_advertiseCallback);
-            }
-            return Task.CompletedTask;
-        }
+        public Task StopAdvertisingAsync() => Task.CompletedTask;
 
         public Task StartScanningAsync()
         {
-            if (_bluetoothAdapter == null || !_bluetoothAdapter.IsEnabled)
-                throw new InvalidOperationException("Bluetooth is not enabled.");
+            if (_disposed) throw new ObjectDisposedException(nameof(AndroidBleDiscovery));
 
-            _scanner = _bluetoothAdapter.BluetoothLeScanner;
-            if (_scanner == null)
-                throw new NotSupportedException("BLE Scanning not supported.");
+            lock (_gate)
+            {
+                if (_scanning) return Task.CompletedTask;
 
-            var scanFilter = new ScanFilter.Builder()!
-                .SetManufacturerData(ManufacturerId, new byte[] { })! // Filter intentionally left broad, Android matches on ManufacturerId
-                .Build();
+                var manager = (BluetoothManager?)global::Android.App.Application.Context
+                    .GetSystemService(Context.BluetoothService);
+                var adapter = manager?.Adapter;
 
-            var scanSettings = new ScanSettings.Builder()!
-                .SetScanMode(global::Android.Bluetooth.LE.ScanMode.LowLatency)!
-                .Build();
+                if (adapter == null || !adapter.IsEnabled)
+                {
+                    Log.Write("BleScan", "Bluetooth is off, cannot scan.");
+                    return Task.CompletedTask;
+                }
 
-            var filters = new List<ScanFilter>();
-            if (scanFilter != null) filters.Add(scanFilter);
+                _scanner = adapter.BluetoothLeScanner;
+                if (_scanner == null)
+                {
+                    Log.Write("BleScan", "This device has no BLE scanner.");
+                    return Task.CompletedTask;
+                }
 
-            _scanner.StartScan(filters, scanSettings, this);
+                var filter = new ScanFilter.Builder()!
+                    .SetServiceUuid(ServiceParcelUuid)!
+                    .Build();
+
+                var settings = new ScanSettings.Builder()!
+                    .SetScanMode(global::Android.Bluetooth.LE.ScanMode.LowLatency)!
+                    .Build();
+
+                var filters = new List<ScanFilter>();
+                if (filter != null) filters.Add(filter);
+
+                _scanner.StartScan(filters, settings, this);
+                _scanning = true;
+                Log.Write("BleScan", "Scanning for the Mesh Sync service.");
+            }
 
             return Task.CompletedTask;
         }
 
         public Task StopScanningAsync()
         {
-            _scanner?.StopScan(this);
+            lock (_gate)
+            {
+                if (!_scanning) return Task.CompletedTask;
+
+                try { _scanner?.StopScan(this); }
+                catch (Exception ex) { Log.Write("BleScan", "Stopping the scan failed", ex); }
+
+                _scanning = false;
+                _seen.Clear();
+            }
+
             return Task.CompletedTask;
+        }
+
+        /// <summary>Scans until a peer turns up or the timeout expires. Returns its address.</summary>
+        public async Task<string?> FindPeerAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            var found = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            void OnFound(object? sender, DeviceDiscoveredEventArgs e) => found.TrySetResult(e.DeviceId);
+
+            DeviceDiscovered += OnFound;
+            try
+            {
+                await StartScanningAsync().ConfigureAwait(false);
+
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                linked.CancelAfter(timeout);
+                using var registration = linked.Token.Register(() => found.TrySetResult(string.Empty));
+
+                string address = await found.Task.ConfigureAwait(false);
+                return string.IsNullOrEmpty(address) ? null : address;
+            }
+            finally
+            {
+                DeviceDiscovered -= OnFound;
+                await StopScanningAsync().ConfigureAwait(false);
+            }
         }
 
         public override void OnScanResult(ScanCallbackType callbackType, ScanResult? result)
         {
             base.OnScanResult(callbackType, result);
 
-            if (result?.ScanRecord == null) return;
+            var device = result?.Device;
+            string? address = device?.Address;
+            if (string.IsNullOrEmpty(address)) return;
 
-            var manufacturerData = result.ScanRecord.GetManufacturerSpecificData(ManufacturerId);
-            if (manufacturerData != null)
+            // The scanner reports the same peer many times a second while it is in range.
+            lock (_gate)
             {
-                byte[] payload = manufacturerData;
-                
-                DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs
-                {
-                    DeviceId = result.Device?.Address ?? "Unknown",
-                    DeviceName = result.Device?.Name ?? "Android BLE Node",
-                    PublicIdentifer = payload
-                });
+                var now = DateTime.UtcNow;
+                if (_seen.TryGetValue(address!, out var last) && now - last < RediscoverAfter) return;
+                _seen[address!] = now;
             }
-        }
-    }
 
-    class CustomAdvertiseCallback : AdvertiseCallback
-    {
-        public override void OnStartSuccess(AdvertiseSettings? settingsInEffect)
-        {
-            base.OnStartSuccess(settingsInEffect);
-            Console.WriteLine("[AndroidBle] Successfully started advertising.");
+            Log.Write("BleScan", $"Found {device?.Name ?? "a Mesh Sync peer"} at {address} ({result?.Rssi} dBm).");
+
+            DeviceDiscovered?.Invoke(this, new DeviceDiscoveredEventArgs
+            {
+                DeviceId = address!,
+                DeviceName = device?.Name ?? "Mesh Sync",
+                PublicIdentifer = Array.Empty<byte>()
+            });
         }
 
-        public override void OnStartFailure(AdvertiseFailure errorCode)
+        public override void OnScanFailed(ScanFailure errorCode)
         {
-            base.OnStartFailure(errorCode);
-            Console.WriteLine($"[AndroidBle] Failed to advertise. Error: {errorCode}");
+            base.OnScanFailed(errorCode);
+            Log.Write("BleScan", $"Scan failed: {errorCode}");
+        }
+
+        public new void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            StopScanningAsync().GetAwaiter().GetResult();
+            DeviceDiscovered = null;
+            base.Dispose();
         }
     }
 }

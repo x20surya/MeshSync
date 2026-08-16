@@ -24,6 +24,7 @@ namespace WinDaemon
         private const string SingleInstanceMutex = @"Global\MeshSyncDaemon.SingleInstance";
 
         private static TcpTransportConnection? _transport;
+        private static WindowsBleTransport? _bleTransport;
         private static ClipboardWorker? _clipboard;
         private static ClipboardListenerWindow? _listener;
         private static Forms.NotifyIcon? _trayIcon;
@@ -160,6 +161,40 @@ namespace WinDaemon
             {
                 Log.Write("Daemon", "Network initialisation failed", ex);
             }
+
+            // BLE runs alongside Wi-Fi rather than instead of it, so text still syncs when
+            // there is no network at all. Failure here must not affect the TCP path.
+            try
+            {
+                _bleTransport = new WindowsBleTransport();
+                WireBleTransport(_bleTransport);
+                await _bleTransport.StartListeningAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Daemon", "BLE unavailable, continuing on Wi-Fi only", ex);
+            }
+        }
+
+        /// <summary>
+        /// BLE shares the clipboard pipeline with TCP. Payloads are identical on both, so
+        /// crypto, echo suppression and the activity log need no transport-specific paths.
+        /// </summary>
+        private static void WireBleTransport(WindowsBleTransport ble)
+        {
+            ble.ClientConnected += (_, _) =>
+            {
+                Log.Write("Daemon", "Phone connected over BLE.");
+                UpdateTrayState();
+            };
+
+            ble.ConnectionClosed += (_, _) =>
+            {
+                Log.Write("Daemon", "BLE link closed.");
+                UpdateTrayState();
+            };
+
+            ble.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE");
         }
 
         private static void WireClipboardCapture()
@@ -190,9 +225,31 @@ namespace WinDaemon
 
         private static void SendCapture(byte contentType, byte[] body, string? textContent)
         {
-            var transport = _transport;
             var key = _aesKey;
-            if (transport == null || key == null || !transport.IsConnected) return;
+            if (key == null) return;
+
+            // Wi-Fi first: it carries anything. BLE is the fallback for when there is no
+            // network at all, and only for text, since at BLE throughput an image would
+            // take minutes.
+            ITransportConnection? transport = null;
+            string via = "Wi-Fi";
+
+            if (_transport?.IsConnected == true)
+            {
+                transport = _transport;
+            }
+            else if (_bleTransport?.IsConnected == true && contentType == ContentText)
+            {
+                transport = _bleTransport;
+                via = "BLE";
+            }
+            else if (_bleTransport?.IsConnected == true)
+            {
+                Log.Write("Daemon", "Skipping image: only BLE is connected and it is text-only.");
+                return;
+            }
+
+            if (transport == null) return;
 
             // One gate for both "this is our own injection bouncing back" and "this is a
             // repeat WM_CLIPBOARDUPDATE for a copy we just sent". Checking them separately
@@ -216,9 +273,10 @@ namespace WinDaemon
                 return;
             }
 
-            if (encrypted.Length > TcpTransportConnection.MaxPayloadBytes)
+            int limit = via == "BLE" ? BleProtocol.MaxPayloadBytes : TcpTransportConnection.MaxPayloadBytes;
+            if (encrypted.Length > limit)
             {
-                Log.Write("Daemon", $"Refusing to send {encrypted.Length} byte payload (over the limit).");
+                Log.Write("Daemon", $"Refusing to send {encrypted.Length} byte payload over {via} (limit {limit}).");
                 return;
             }
 
@@ -230,58 +288,60 @@ namespace WinDaemon
                     _activity.Record(SyncDirection.Sent,
                         contentType == ContentText ? SyncItemKind.Text : SyncItemKind.Image,
                         body.Length, textContent);
-                    Log.Write("Daemon", $"Sent {(contentType == ContentText ? "text" : "image")} payload, {encrypted.Length} bytes.");
+                    Log.Write("Daemon", $"Sent {(contentType == ContentText ? "text" : "image")} payload over {via}, {encrypted.Length} bytes.");
                 }
                 catch (Exception ex)
                 {
-                    Log.Write("Daemon", "Send failed", ex);
+                    Log.Write("Daemon", $"Send over {via} failed", ex);
                 }
             });
         }
 
         private static void WirePayloadReceive()
         {
-            _transport!.PayloadReceived += (_, e) =>
+            _transport!.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "Wi-Fi");
+        }
+
+        private static void HandleIncomingPayload(byte[] encrypted, string via)
+        {
+            var key = _aesKey;
+            if (key == null)
             {
-                var key = _aesKey;
-                if (key == null)
-                {
-                    Log.Write("Daemon", "Dropped payload: key derivation has not finished yet.");
-                    return;
-                }
+                Log.Write("Daemon", "Dropped payload: key derivation has not finished yet.");
+                return;
+            }
 
-                byte contentType;
-                byte[] body;
-                try
-                {
-                    (contentType, body) = CryptoEngine.DecryptTagged(e.EncryptedPayload, key);
-                }
-                catch (Exception ex)
-                {
-                    Log.Write("Daemon", "Decryption failed - different key or corrupt frame", ex);
-                    return;
-                }
+            byte contentType;
+            byte[] body;
+            try
+            {
+                (contentType, body) = CryptoEngine.DecryptTagged(encrypted, key);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Daemon", "Decryption failed - different key or corrupt frame", ex);
+                return;
+            }
 
-                _echo.NoteInbound(body, contentType == ContentImage ? SyncItemKind.Image : SyncItemKind.Text);
+            _echo.NoteInbound(body, contentType == ContentImage ? SyncItemKind.Image : SyncItemKind.Text);
 
-                switch (contentType)
-                {
-                    case ContentText:
-                        string text = System.Text.Encoding.UTF8.GetString(body);
-                        _clipboard!.SetText(text);
-                        _activity.Record(SyncDirection.Received, SyncItemKind.Text, body.Length, text);
-                        Log.Write("Daemon", $"Received text payload, {body.Length} bytes.");
-                        break;
-                    case ContentImage:
-                        _clipboard!.SetImage(body);
-                        _activity.Record(SyncDirection.Received, SyncItemKind.Image, body.Length);
-                        Log.Write("Daemon", $"Received image payload, {body.Length} bytes.");
-                        break;
-                    default:
-                        Log.Write("Daemon", $"Ignoring unknown content type {contentType}.");
-                        break;
-                }
-            };
+            switch (contentType)
+            {
+                case ContentText:
+                    string text = System.Text.Encoding.UTF8.GetString(body);
+                    _clipboard!.SetText(text);
+                    _activity.Record(SyncDirection.Received, SyncItemKind.Text, body.Length, text);
+                    Log.Write("Daemon", $"Received text payload over {via}, {body.Length} bytes.");
+                    break;
+                case ContentImage:
+                    _clipboard!.SetImage(body);
+                    _activity.Record(SyncDirection.Received, SyncItemKind.Image, body.Length);
+                    Log.Write("Daemon", $"Received image payload over {via}, {body.Length} bytes.");
+                    break;
+                default:
+                    Log.Write("Daemon", $"Ignoring unknown content type {contentType}.");
+                    break;
+            }
         }
 
         // ────────────────────────────── lifetime
@@ -309,6 +369,7 @@ namespace WinDaemon
             catch { }
             try { _listener?.Dispose(); } catch { }
             try { _transport?.Dispose(); } catch { }
+            try { _bleTransport?.Dispose(); } catch { }
             try { _clipboard?.Dispose(); } catch { }
 
             var key = Interlocked.Exchange(ref _aesKey, null);

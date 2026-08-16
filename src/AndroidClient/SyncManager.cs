@@ -41,7 +41,12 @@ namespace AndroidClient
         private static readonly EchoSuppressor _echo = new(TimeSpan.FromSeconds(10));
         private static readonly Random _jitter = new();
 
-        private static TcpTransportConnection? _transport;
+        private static ITransportConnection? _transport;
+
+        /// <summary>Which tier the active link is using, for the UI and for send limits.</summary>
+        public static TransportKind ActiveTransport { get; private set; } = TransportKind.None;
+
+        public enum TransportKind { None, WiFi, Ble }
         private static byte[]? _aesKey;
         private static CancellationTokenSource? _loopCts;
         private static Task? _loopTask;
@@ -55,8 +60,11 @@ namespace AndroidClient
         /// <summary>What has synced this session. Never persisted - clipboard traffic is ephemeral.</summary>
         public static readonly SyncActivityLog Activity = new(capacity: 12);
 
-        /// <summary>Friendly name of the paired computer, once it has announced itself.</summary>
-        public static string? PeerName => _transport?.RemoteDeviceName;
+        /// <summary>
+        /// Friendly name of the paired computer, once it has announced itself. Only the
+        /// Wi-Fi transport carries the hello frame, so BLE links report null.
+        /// </summary>
+        public static string? PeerName => (_transport as TcpTransportConnection)?.RemoteDeviceName;
 
         /// <summary>True once a host has been saved by scanning a code or entering it by hand.</summary>
         public static bool IsPaired => !string.IsNullOrEmpty(LoadHost().HostIp);
@@ -254,6 +262,13 @@ namespace AndroidClient
             if (!_echo.ShouldSend(body, kind))
             {
                 Log.Write("Sync", "Suppressed duplicate or echoed clipboard content.");
+                return;
+            }
+
+            if (contentType == ContentImage && ActiveTransport == TransportKind.Ble)
+            {
+                Log.Write("Sync", "Skipping image: only Bluetooth is connected and it carries text only.");
+                Report("Images need Wi-Fi");
                 return;
             }
 
@@ -530,6 +545,7 @@ namespace AndroidClient
 
                 Report($"Connecting to {hostIp}...");
                 await transport.ConnectAsync(hostIp, token).ConfigureAwait(false);
+                ActiveTransport = TransportKind.WiFi;
 
                 Report("Connected!");
                 Log.Write("Sync", $"Connected to {hostIp}. Paired key: {Truncate(hostPubKey)}");
@@ -543,14 +559,68 @@ namespace AndroidClient
             catch (Exception ex)
             {
                 Log.Write("Sync", $"Connect to {hostIp} failed", ex);
-                Report($"Connection failed: {ex.Message}");
                 RetireTransport();
+
+                // No usable network is exactly the case BLE exists for, so fall back to it
+                // rather than reporting failure and waiting out a backoff.
+                if (await TryConnectOverBleAsync(token).ConfigureAwait(false)) return true;
+
+                Report($"Connection failed: {ex.Message}");
                 return false;
             }
             finally
             {
                 _connectGate.Release();
             }
+        }
+
+        /// <summary>
+        /// Finds the computer by its Mesh Sync service UUID and opens a GATT link. Text only:
+        /// BLE throughput would make an image take minutes, so images stay on Wi-Fi.
+        /// </summary>
+        private static async Task<bool> TryConnectOverBleAsync(CancellationToken token)
+        {
+#if ANDROID
+            Platforms.Android.AndroidBleDiscovery? discovery = null;
+            try
+            {
+                Report("No Wi-Fi. Looking over Bluetooth...");
+
+                discovery = new Platforms.Android.AndroidBleDiscovery();
+                string? address = await discovery.FindPeerAsync(TimeSpan.FromSeconds(12), token).ConfigureAwait(false);
+
+                if (string.IsNullOrEmpty(address))
+                {
+                    Log.Write("Sync", "No Mesh Sync peer found over BLE.");
+                    return false;
+                }
+
+                var ble = new Platforms.Android.AndroidBleTransport();
+                ble.PayloadReceived += Transport_PayloadReceived;
+                ble.ConnectionClosed += Transport_ConnectionClosed;
+                _transport = ble;
+
+                await ble.ConnectAsync(address!, token).ConfigureAwait(false);
+
+                ActiveTransport = TransportKind.Ble;
+                Report("Connected over Bluetooth");
+                Log.Write("Sync", $"Connected to {address} over BLE.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Sync", "BLE connect failed", ex);
+                RetireTransport();
+                return false;
+            }
+            finally
+            {
+                discovery?.Dispose();
+            }
+#else
+            await Task.CompletedTask;
+            return false;
+#endif
         }
 
         private static void Transport_PayloadReceived(object? sender, PayloadReceivedEventArgs e)
@@ -577,11 +647,12 @@ namespace AndroidClient
         private static void RetireTransport()
         {
             var transport = Interlocked.Exchange(ref _transport, null);
+            ActiveTransport = TransportKind.None;
             if (transport == null) return;
 
             transport.PayloadReceived -= Transport_PayloadReceived;
             transport.ConnectionClosed -= Transport_ConnectionClosed;
-            transport.PeerIdentified -= Transport_PeerIdentified;
+            if (transport is TcpTransportConnection tcp) tcp.PeerIdentified -= Transport_PeerIdentified;
             try { transport.Dispose(); } catch (Exception ex) { Log.Write("Sync", "Disposing transport failed", ex); }
         }
 
