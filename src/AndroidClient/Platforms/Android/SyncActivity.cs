@@ -36,75 +36,63 @@ namespace AndroidClient.Platforms.Android
                             return;
                         }
 
-                        if (item.Uri != null)
+                        bool foundImage = false;
+                        for (int i = 0; i < clipboard.PrimaryClip.ItemCount; i++)
                         {
-                            System.Console.WriteLine($"[SyncActivity] Found URI: {item.Uri}");
-                            var contentResolver = this.ContentResolver;
-                            var type = contentResolver?.GetType(item.Uri);
-                            System.Console.WriteLine($"[SyncActivity] Resolved Type: {type}");
-                            
-                            bool isImage = type != null && type.StartsWith("image/");
-                            
-                            if (!isImage && clipboard.PrimaryClip.Description != null)
+                            var currentItem = clipboard.PrimaryClip.GetItemAt(i);
+                            if (currentItem?.Uri != null)
                             {
-                                for (int i = 0; i < clipboard.PrimaryClip.Description.MimeTypeCount; i++)
+                                System.Console.WriteLine($"[SyncActivity] Found URI at index {i}: {currentItem.Uri}");
+                                var contentResolver = this.ContentResolver;
+                                var type = contentResolver?.GetType(currentItem.Uri);
+                                
+                                bool isImage = type != null && type.StartsWith("image/");
+                                if (!isImage && clipboard.PrimaryClip.Description != null)
                                 {
-                                    var mime = clipboard.PrimaryClip.Description.GetMimeType(i);
-                                    System.Console.WriteLine($"[SyncActivity] Description MIME: {mime}");
-                                    if (mime != null && mime.StartsWith("image/")) isImage = true;
+                                    for (int j = 0; j < clipboard.PrimaryClip.Description.MimeTypeCount; j++)
+                                    {
+                                        var mime = clipboard.PrimaryClip.Description.GetMimeType(j);
+                                        if (mime != null && mime.StartsWith("image/")) isImage = true;
+                                    }
+                                }
+
+                                if (isImage)
+                                {
+                                    try
+                                    {
+                                        using var stream = contentResolver?.OpenInputStream(currentItem.Uri);
+                                        if (stream != null)
+                                        {
+                                            using var ms = new System.IO.MemoryStream();
+                                            stream.CopyTo(ms);
+                                            byte[] imageBytes = ms.ToArray();
+                                            await SyncManager.SendClipboardImageAsync(imageBytes);
+                                            Toast.MakeText(this, "Image Pushed to Laptop!", ToastLength.Short)?.Show();
+                                            foundImage = true;
+                                            Finish();
+                                            return;
+                                        }
+                                    }
+                                    catch (System.Exception ex)
+                                    {
+                                        System.Console.WriteLine($"[SyncActivity] Stream Error: {ex.Message}");
+                                    }
                                 }
                             }
+                        }
 
-                            if (isImage)
+                        if (!foundImage)
+                        {
+                            var text = clipboard.PrimaryClip.GetItemAt(0)?.CoerceToText(this)?.ToString();
+                            if (!string.IsNullOrEmpty(text))
                             {
-                                try
-                                {
-                                    System.Console.WriteLine("[SyncActivity] Attempting to open InputStream...");
-                                    using var stream = contentResolver?.OpenInputStream(item.Uri);
-                                    if (stream != null)
-                                    {
-                                        using var ms = new System.IO.MemoryStream();
-                                        stream.CopyTo(ms);
-                                        byte[] imageBytes = ms.ToArray();
-                                        System.Console.WriteLine($"[SyncActivity] Read {imageBytes.Length} bytes.");
-                                        await SyncManager.SendClipboardImageAsync(imageBytes);
-                                        Toast.MakeText(this, "Image Pushed to Laptop!", ToastLength.Short)?.Show();
-                                        Finish();
-                                        return;
-                                    }
-                                    else
-                                    {
-                                        System.Console.WriteLine("[SyncActivity] Stream was null.");
-                                    }
-                                }
-                                catch (System.Exception ex)
-                                {
-                                    System.Console.WriteLine($"[SyncActivity] Stream Error: {ex.Message}");
-                                    Toast.MakeText(this, $"Image Read Error: {ex.Message}", ToastLength.Long)?.Show();
-                                    Finish();
-                                    return;
-                                }
+                                await SyncManager.SendClipboardAsync(text);
+                                Toast.MakeText(this, "Text Pushed to Laptop!", ToastLength.Short)?.Show();
                             }
                             else
                             {
-                                System.Console.WriteLine("[SyncActivity] URI is not an image.");
+                                Toast.MakeText(this, "Clipboard contains unsupported data", ToastLength.Short)?.Show();
                             }
-                        }
-                        else
-                        {
-                            System.Console.WriteLine("[SyncActivity] item.Uri is NULL!");
-                        }
-
-                        var text = item.CoerceToText(this)?.ToString();
-
-                        if (!string.IsNullOrEmpty(text))
-                        {
-                            await SyncManager.SendClipboardAsync(text);
-                            Toast.MakeText(this, "Text Pushed to Laptop!", ToastLength.Short)?.Show();
-                        }
-                        else
-                        {
-                            Toast.MakeText(this, "Clipboard contains unsupported data", ToastLength.Short)?.Show();
                         }
                     }
                     else
