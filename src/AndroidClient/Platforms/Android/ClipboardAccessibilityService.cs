@@ -27,11 +27,23 @@ namespace AndroidClient.Platforms.Android
                 Console.WriteLine("[Android] Clipboard Accessibility Service Connected! Listening for copies...");
             }
 
+            // Restore notification if we reconnect via the app UI
+            AndroidClient.SyncManager.OnConnectionStatusChanged -= SyncManager_OnConnectionStatusChanged;
+            AndroidClient.SyncManager.OnConnectionStatusChanged += SyncManager_OnConnectionStatusChanged;
+
             // Auto-connect to laptop if we have saved preferences
             await AndroidClient.SyncManager.AutoConnectAsync();
 
             CreateNotificationChannel();
             ShowPersistentNotification();
+        }
+
+        private void SyncManager_OnConnectionStatusChanged(string status)
+        {
+            if (status == "Connected!")
+            {
+                ShowPersistentNotification();
+            }
         }
 
         private void CreateNotificationChannel()
