@@ -29,12 +29,43 @@ namespace AndroidClient.Platforms.Android
                     if (clipboard != null && clipboard.HasPrimaryClip)
                     {
                         var item = clipboard.PrimaryClip?.GetItemAt(0);
-                        var text = item?.CoerceToText(this)?.ToString();
+                        if (item == null)
+                        {
+                            Toast.MakeText(this, "Clipboard is completely empty", ToastLength.Short)?.Show();
+                            Finish();
+                            return;
+                        }
+
+                        if (item.Uri != null)
+                        {
+                            var contentResolver = this.ContentResolver;
+                            var type = contentResolver?.GetType(item.Uri);
+                            if (type != null && type.StartsWith("image/"))
+                            {
+                                try
+                                {
+                                    using var stream = contentResolver?.OpenInputStream(item.Uri);
+                                    if (stream != null)
+                                    {
+                                        using var ms = new System.IO.MemoryStream();
+                                        stream.CopyTo(ms);
+                                        byte[] imageBytes = ms.ToArray();
+                                        await SyncManager.SendClipboardImageAsync(imageBytes);
+                                        Toast.MakeText(this, "Image Pushed to Laptop!", ToastLength.Short)?.Show();
+                                        Finish();
+                                        return;
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+
+                        var text = item.CoerceToText(this)?.ToString();
 
                         if (!string.IsNullOrEmpty(text))
                         {
                             await SyncManager.SendClipboardAsync(text);
-                            Toast.MakeText(this, "Pushed to Laptop!", ToastLength.Short)?.Show();
+                            Toast.MakeText(this, "Text Pushed to Laptop!", ToastLength.Short)?.Show();
                         }
                         else
                         {
