@@ -10,15 +10,11 @@
 
             <!-- ══════════ Title row ══════════ -->
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="4,0,4,20">
-                <Grid Grid.Column="0" WidthRequest="18" HeightRequest="18" VerticalOptions="Center">
-                    <Ellipse WidthRequest="8" HeightRequest="8" HorizontalOptions="Start" VerticalOptions="Center"
-                             Fill="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
-                    <Ellipse WidthRequest="8" HeightRequest="8" HorizontalOptions="End" VerticalOptions="Center"
-                             Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
-                             StrokeThickness="1.6" Fill="Transparent" />
-                </Grid>
-                <Label Grid.Column="1" Text="Mesh Sync" Style="{StaticResource T.Title}"
-                       FontSize="15" VerticalOptions="Center" />
+                <Image Grid.Column="0" Source="mesh_mark.png"
+                       HeightRequest="17" WidthRequest="29" Aspect="AspectFit"
+                       VerticalOptions="Center" />
+                <Label Grid.Column="1" Text="MESH SYNC" Style="{StaticResource T.Title}"
+                       FontSize="14" CharacterSpacing="2.1" VerticalOptions="Center" />
             </Grid>
 
             <!-- ══════════ Status hero ══════════ -->

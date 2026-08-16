@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
-             xmlns:shapes="clr-namespace:Microsoft.Maui.Controls.Shapes;assembly=Microsoft.Maui.Controls"
              x:Class="AndroidClient.SetupPage"
              Style="{StaticResource MeshPage}">
 
@@ -32,52 +31,14 @@
             <Grid x:Name="StepCanvas">
             <VerticalStackLayout Spacing="0" VerticalOptions="Center">
 
-                <!-- Icon -->
-                <Grid HeightRequest="112" WidthRequest="112" HorizontalOptions="Center" Margin="0,10,0,26">
-                    <Ellipse Fill="{AppThemeBinding Light={StaticResource AccentSoftLight}, Dark={StaticResource AccentSoftDark}}"
-                             WidthRequest="112" HeightRequest="112" />
-
-                    <!-- Step 1: two devices linked -->
-                    <Grid x:Name="IconPair" WidthRequest="56" HeightRequest="34"
-                          HorizontalOptions="Center" VerticalOptions="Center">
-                        <shapes:Rectangle WidthRequest="16" HeightRequest="26" HorizontalOptions="Start"
-                                          Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
-                                          StrokeThickness="2" Fill="Transparent" RadiusX="3" RadiusY="3" />
-                        <shapes:Rectangle WidthRequest="24" HeightRequest="17" HorizontalOptions="End"
-                                          Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
-                                          StrokeThickness="2" Fill="Transparent" RadiusX="2" RadiusY="2"
-                                          VerticalOptions="Center" />
-                        <BoxView WidthRequest="10" HeightRequest="2" HorizontalOptions="Center" VerticalOptions="Center"
-                                 Color="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
-                    </Grid>
-
-                    <!-- Step 2: clipboard -->
-                    <Grid x:Name="IconClipboard" IsVisible="False" WidthRequest="40" HeightRequest="46"
-                          HorizontalOptions="Center" VerticalOptions="Center">
-                        <shapes:Rectangle WidthRequest="34" HeightRequest="42" VerticalOptions="End"
-                                          Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
-                                          StrokeThickness="2" Fill="Transparent" RadiusX="5" RadiusY="5" />
-                        <shapes:Rectangle WidthRequest="18" HeightRequest="10" VerticalOptions="Start"
-                                          HorizontalOptions="Center"
-                                          Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
-                                          StrokeThickness="2"
-                                          Fill="{AppThemeBinding Light={StaticResource AccentSoftLight}, Dark={StaticResource AccentSoftDark}}"
-                                          RadiusX="2" RadiusY="2" />
-                    </Grid>
-
-                    <!-- Step 3: image -->
-                    <Grid x:Name="IconImage" IsVisible="False" WidthRequest="46" HeightRequest="38"
-                          HorizontalOptions="Center" VerticalOptions="Center">
-                        <shapes:Rectangle WidthRequest="44" HeightRequest="36"
-                                          Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
-                                          StrokeThickness="2" Fill="Transparent" RadiusX="4" RadiusY="4" />
-                        <Ellipse WidthRequest="7" HeightRequest="7" HorizontalOptions="Start" VerticalOptions="Start"
-                                 Margin="8,8,0,0"
-                                 Fill="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
-                        <shapes:Path Data="M 4,28 L 15,15 L 24,25 L 30,19 L 40,30"
-                                     Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
-                                     StrokeThickness="2" StrokeLineJoin="Round" StrokeLineCap="Round" />
-                    </Grid>
+                <!-- Illustration. One per step, from the brand asset set. -->
+                <Grid HeightRequest="180" HorizontalOptions="Center" Margin="0,4,0,14">
+                    <Image x:Name="IconPair" Source="illo_pair.png"
+                           HeightRequest="180" WidthRequest="180" Aspect="AspectFit" />
+                    <Image x:Name="IconClipboard" Source="illo_copy.png" IsVisible="False"
+                           HeightRequest="180" WidthRequest="180" Aspect="AspectFit" />
+                    <Image x:Name="IconImage" Source="illo_send.png" IsVisible="False"
+                           HeightRequest="180" WidthRequest="180" Aspect="AspectFit" />
                 </Grid>
 
                 <Label x:Name="StepTitle" Text="Pair with your computer"

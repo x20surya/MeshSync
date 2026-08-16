@@ -32,17 +32,24 @@
             <!-- ══════════════ Title bar ══════════════ -->
             <Grid Grid.Row="0" Background="{DynamicResource B.Bg}">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                    <!-- Mark: two linked nodes -->
-                    <Canvas Width="16" Height="16" VerticalAlignment="Center">
-                        <Ellipse Canvas.Left="0" Canvas.Top="4" Width="7" Height="7"
-                                 Fill="{DynamicResource B.Accent}" />
-                        <Ellipse Canvas.Left="9" Canvas.Top="4" Width="7" Height="7"
-                                 Stroke="{DynamicResource B.Accent}" StrokeThickness="1.5" Fill="Transparent" />
-                        <Line X1="7" Y1="7.5" X2="9" Y2="7.5"
-                              Stroke="{DynamicResource B.Accent}" StrokeThickness="1.5" />
-                    </Canvas>
-                    <TextBlock Text="Mesh Sync" FontWeight="SemiBold" FontSize="12.5"
-                               Margin="9,0,0,0" VerticalAlignment="Center" />
+                    <!-- Brand mark: two rings of equal radius overlapped so they hold one
+                         shape in common. Native 167x99 coordinate space from the design
+                         handoff, shifted by the viewBox origin (36.5, 70.5) and scaled by
+                         the Viewbox. The lens is the only filled form in the identity. -->
+                    <Viewbox Width="23" Height="13.6" VerticalAlignment="Center">
+                        <Canvas Width="167" Height="99">
+                            <Ellipse Canvas.Left="5.5" Canvas.Top="5.5" Width="88" Height="88"
+                                     Stroke="{DynamicResource B.Accent}" StrokeThickness="11" Fill="Transparent" />
+                            <Ellipse Canvas.Left="73.5" Canvas.Top="5.5" Width="88" Height="88"
+                                     Stroke="{DynamicResource B.Accent}" StrokeThickness="11" Fill="Transparent" />
+                            <Path Fill="{DynamicResource B.Accent}"
+                                  Data="M 83.5 21.6 A 44 44 0 0 1 83.5 77.4 A 44 44 0 0 1 83.5 21.6 Z" />
+                        </Canvas>
+                    </Viewbox>
+                    <!-- Uppercase per the brand spec. WPF has no letter-spacing property,
+                         so the 0.15em tracking is not reproduced at this size. -->
+                    <TextBlock Text="MESH SYNC" FontWeight="SemiBold" FontSize="11.5"
+                               Margin="10,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

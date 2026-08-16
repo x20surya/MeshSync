@@ -52,15 +52,17 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!-- App Icon -->
-		<MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#512BD4" />
+		<!-- App Icon. The foreground is the brand mark on a transparent 1024 canvas,
+		     already inset to the centre-60% adaptive safe zone by the design handoff. -->
+		<MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#F7F6F3" />
 
-		<!-- Splash Screen -->
-		<MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
+		<!-- Splash Screen: the stacked mark and wordmark lockup. -->
+		<MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#F7F6F3" BaseSize="192,192" />
 
 		<!-- Images -->
 		<MauiImage Include="Resources\Images\*" />
-		<MauiImage Update="Resources\Images\dotnet_bot.png" Resize="True" BaseSize="300,185" />
+		<MauiImage Update="Resources\Images\illo_*.svg" BaseSize="512,512" />
+		<MauiImage Update="Resources\Images\mesh_mark.svg" BaseSize="167,99" />
 		
 		<!-- Custom Fonts -->
 		<MauiFont Include="Resources\Fonts\*" />
