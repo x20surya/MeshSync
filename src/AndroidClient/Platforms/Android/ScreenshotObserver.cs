@@ -9,15 +9,15 @@ namespace AndroidClient.Platforms.Android
 {
     public class ScreenshotObserver : ContentObserver
     {
-        private readonly Android.Content.Context _context;
+        private readonly global::Android.Content.Context _context;
         private DateTime _lastScreenshotTime = DateTime.MinValue;
 
-        public ScreenshotObserver(Android.Content.Context context, Handler handler) : base(handler)
+        public ScreenshotObserver(global::Android.Content.Context context, Handler handler) : base(handler)
         {
             _context = context;
         }
 
-        public override async void OnChange(bool selfChange, Uri? uri)
+        public override async void OnChange(bool selfChange, global::Android.Net.Uri? uri)
         {
             base.OnChange(selfChange, uri);
 
@@ -67,7 +67,7 @@ namespace AndroidClient.Platforms.Android
                             // Optional: notify user it pushed
                             var handler = new Handler(Looper.MainLooper!);
                             handler.Post(() => {
-                                Android.Widget.Toast.MakeText(_context, "Screenshot beamed to PC!", Android.Widget.ToastLength.Short)?.Show();
+                                global::Android.Widget.Toast.MakeText(_context, "Screenshot beamed to PC!", global::Android.Widget.ToastLength.Short)?.Show();
                             });
                         }
                     }

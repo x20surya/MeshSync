@@ -33,7 +33,7 @@ namespace AndroidClient.Platforms.Android
             {
                 _screenshotObserver = new ScreenshotObserver(this, new Handler(Looper.MainLooper!));
                 this.ContentResolver?.RegisterContentObserver(
-                    Android.Provider.MediaStore.Images.Media.ExternalContentUri, 
+                    global::Android.Provider.MediaStore.Images.Media.ExternalContentUri, 
                     true, 
                     _screenshotObserver
                 );
