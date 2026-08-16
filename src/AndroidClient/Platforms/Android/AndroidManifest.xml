@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
 	<application android:allowBackup="true" android:icon="@mipmap/appicon" android:roundIcon="@mipmap/appicon_round" android:supportsRtl="true">
 		<provider
 			android:name="androidx.core.content.FileProvider"
@@ -13,13 +14,22 @@
 	</application>
 	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 	<uses-permission android:name="android.permission.INTERNET" />
-	<uses-permission android:name="android.permission.BLUETOOTH" />
-	<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
-	<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+	<!-- Superseded by the BLUETOOTH_* runtime permissions on Android 12. -->
+	<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+	<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+
+	<!-- neverForLocation says we only look for our own service UUID and derive nothing about
+	     where the user is. Without it Android 12+ ties BLE scanning to location: the user is
+	     asked for a location permission they should not need, and scans silently return
+	     nothing whenever location services happen to be switched off. -->
+	<uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+	                 android:usesPermissionFlags="neverForLocation"
+	                 tools:targetApi="s" />
 	<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-	<uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
-	<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-	<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+	<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+
+	<!-- Only Android 11 and below needed location to scan for BLE devices. -->
+	<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 	<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 	<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />

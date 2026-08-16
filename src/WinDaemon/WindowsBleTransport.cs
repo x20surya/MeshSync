@@ -74,6 +74,9 @@ namespace WinDaemon
                 BleProtocol.OutboxCharacteristicUuid,
                 new GattLocalCharacteristicParameters
                 {
+                    // Notify, with our own receipts on top. Indicate would be acknowledged by
+                    // the ATT layer, but on this stack the confirmations never arrived and
+                    // Windows tore the link down with GATT status 19.
                     CharacteristicProperties = GattCharacteristicProperties.Notify,
                     ReadProtectionLevel = GattProtectionLevel.Plain
                 });
@@ -132,9 +135,11 @@ namespace WinDaemon
                     smallest = Math.Min(smallest, (int)client.MaxNotificationSize);
                 }
 
+                // Clamped: Windows reports MTU minus the ATT header, which overshoots the
+                // spec's 512-octet attribute ceiling and silently drops the notification.
                 return smallest <= BleFragmenter.HeaderSize
                     ? BleFragmenter.MinimumMtuPayload
-                    : smallest;
+                    : Math.Min(smallest, BleProtocol.MaxAttributeValueBytes);
             }
             catch
             {
@@ -154,6 +159,13 @@ namespace WinDaemon
                 byte[] chunk = request.Value.ToArray();
 
                 if (request.Option == GattWriteOption.WriteWithResponse) request.Respond();
+
+                // A receipt for something we sent, not inbound data.
+                if (BleProtocol.TryParseAck(chunk, out byte ackMessageId, out int ackSequence))
+                {
+                    NoteAck(ackMessageId, ackSequence);
+                    return;
+                }
 
                 byte[]? payload = _reassembler.Accept(chunk);
                 if (payload == null) return;
@@ -186,16 +198,25 @@ namespace WinDaemon
                 messageId = unchecked(++_messageId);
                 var chunks = BleFragmenter.Fragment(encryptedPayload, chunkSize, messageId);
 
-                foreach (var chunk in chunks)
+                for (int index = 0; index < chunks.Count; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
+                    // Arm before sending, so a fast receipt cannot arrive before we wait.
+                    ArmAck(messageId, index);
+
                     using var writer = new DataWriter();
-                    writer.WriteBytes(chunk);
+                    writer.WriteBytes(chunks[index]);
                     await _outbox.NotifyValueAsync(writer.DetachBuffer());
 
-                    // No application-level flow control, so pace the burst.
-                    if (chunks.Count > 1) await Task.Delay(BleProtocol.InterChunkDelayMs, cancellationToken).ConfigureAwait(false);
+                    // A single chunk needs no receipt: there is nothing behind it to overwrite it.
+                    if (chunks.Count == 1) break;
+
+                    if (!await WaitForAckAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        throw new InvalidOperationException(
+                            $"Chunk {index + 1} of {chunks.Count} was not acknowledged by the phone.");
+                    }
                 }
 
                 Log.Write("BleServer", $"Sent {encryptedPayload.Length} bytes as {chunks.Count} chunks of at most {chunkSize}.");
@@ -204,6 +225,52 @@ namespace WinDaemon
             {
                 _sendLock.Release();
             }
+        }
+
+        // ──────────────────────────────── chunk receipts
+
+        private readonly object _ackGate = new();
+        private TaskCompletionSource<bool>? _pendingAck;
+        private byte _awaitedMessageId;
+        private int _awaitedSequence = -1;
+
+        private void ArmAck(byte messageId, int sequence)
+        {
+            lock (_ackGate)
+            {
+                _awaitedMessageId = messageId;
+                _awaitedSequence = sequence;
+                _pendingAck = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
+        private void NoteAck(byte messageId, int sequence)
+        {
+            lock (_ackGate)
+            {
+                if (_pendingAck == null) return;
+                if (messageId != _awaitedMessageId || sequence != _awaitedSequence) return;
+
+                _pendingAck.TrySetResult(true);
+            }
+        }
+
+        private async Task<bool> WaitForAckAsync(CancellationToken cancellationToken)
+        {
+            Task<bool> pending;
+            lock (_ackGate)
+            {
+                if (_pendingAck == null) return false;
+                pending = _pendingAck.Task;
+            }
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(BleProtocol.AckTimeout);
+
+            var completed = await Task.WhenAny(pending, Task.Delay(Timeout.Infinite, timeout.Token))
+                .ConfigureAwait(false);
+
+            return completed == pending && pending.Result;
         }
 
         public Task ConnectAsync(string deviceId, CancellationToken cancellationToken = default) =>

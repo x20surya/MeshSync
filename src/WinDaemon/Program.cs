@@ -89,9 +89,13 @@ namespace WinDaemon
             _window.ExitRequested += ExitApp;
 
             CreateTrayIcon();
-            _transport.ClientConnected += (_, _) => UpdateTrayState();
-            _transport.ConnectionClosed += (_, _) => UpdateTrayState();
-            _transport.PeerIdentified += (_, _) => UpdateTrayState();
+
+            // Both transports report into ConnectionState; the tray and the dashboard read
+            // only that, so a Bluetooth-only link shows as connected like any other.
+            _transport.ClientConnected += (_, _) => ConnectionState.SetWiFi(true, _transport.RemoteDeviceName);
+            _transport.ConnectionClosed += (_, _) => ConnectionState.SetWiFi(false);
+            _transport.PeerIdentified += (_, e) => ConnectionState.SetWiFi(true, e.DeviceName);
+            ConnectionState.Changed += UpdateTrayState;
 
             if (!isStartup) _window.ShowDashboard();
 
@@ -124,13 +128,16 @@ namespace WinDaemon
 
             _app.Dispatcher.BeginInvoke(() =>
             {
-                bool connected = _transport?.IsConnected == true;
+                bool connected = ConnectionState.IsConnected;
                 var previous = _trayIcon.Icon;
                 _trayIcon.Icon = TrayIcons.Create(connected);
                 previous?.Dispose();
 
-                string peer = _transport?.RemoteDeviceName ?? "device";
-                _trayIcon.Text = connected ? $"Mesh Sync - connected to {peer}" : "Mesh Sync - waiting for a device";
+                string peer = ConnectionState.PeerName ?? "your phone";
+                string via = ConnectionState.ActiveLink == LinkKind.Ble ? " over Bluetooth" : "";
+                _trayIcon.Text = connected
+                    ? $"Mesh Sync - connected to {peer}{via}"
+                    : "Mesh Sync - waiting for a device";
             });
         }
 
@@ -185,13 +192,13 @@ namespace WinDaemon
             ble.ClientConnected += (_, _) =>
             {
                 Log.Write("Daemon", "Phone connected over BLE.");
-                UpdateTrayState();
+                ConnectionState.SetBle(true);
             };
 
             ble.ConnectionClosed += (_, _) =>
             {
                 Log.Write("Daemon", "BLE link closed.");
-                UpdateTrayState();
+                ConnectionState.SetBle(false);
             };
 
             ble.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE");

@@ -61,11 +61,11 @@ namespace WinDaemon
 
             // Set only after the handlers are attached, otherwise the chevron flips while
             // the panel stays hidden. Pairing is the only useful action until a peer exists.
-            if (!transport.IsConnected) PairToggle.IsChecked = true;
+            if (!ConnectionState.IsConnected) PairToggle.IsChecked = true;
 
-            _transport.ClientConnected += Transport_Changed;
-            _transport.ConnectionClosed += Transport_Changed;
-            _transport.PeerIdentified += Transport_Changed;
+            // Reads the shared state rather than the TCP transport, so a Bluetooth-only link
+            // shows as connected instead of the window claiming to still be waiting.
+            ConnectionState.Changed += ConnectionState_Changed;
             _activity.Changed += Activity_Changed;
 
             // Relative timestamps ("2s ago") go stale silently otherwise.
@@ -86,7 +86,7 @@ namespace WinDaemon
 
         // ────────────────────────────── status
 
-        private void Transport_Changed(object? sender, EventArgs e) =>
+        private void ConnectionState_Changed() =>
             Dispatcher.BeginInvoke(RefreshStatus);
 
         private void Activity_Changed(object? sender, EventArgs e) =>
@@ -94,7 +94,8 @@ namespace WinDaemon
 
         private void RefreshStatus()
         {
-            bool connected = _transport.IsConnected;
+            bool connected = ConnectionState.IsConnected;
+            bool overBle = ConnectionState.ActiveLink == LinkKind.Ble;
 
             IconTick.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
             IconSpinner.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
@@ -107,13 +108,20 @@ namespace WinDaemon
 
             if (connected)
             {
-                StatusHeadline.Text = "CONNECTED";
-                string peer = _transport.RemoteDeviceName ?? "Paired device";
-                string endpoint = _transport.RemoteEndPoint ?? "";
-                int colon = endpoint.LastIndexOf(':');
-                if (colon > 0) endpoint = endpoint.Substring(0, colon);
+                StatusHeadline.Text = overBle ? "CONNECTED OVER BLUETOOTH" : "CONNECTED";
+                string peer = ConnectionState.PeerName ?? "Paired device";
 
-                StatusDetail.Text = string.IsNullOrEmpty(endpoint) ? peer : $"{peer}  ·  {endpoint}";
+                if (overBle)
+                {
+                    StatusDetail.Text = $"{peer}  ·  no Wi-Fi needed";
+                }
+                else
+                {
+                    string endpoint = _transport.RemoteEndPoint ?? "";
+                    int colon = endpoint.LastIndexOf(':');
+                    if (colon > 0) endpoint = endpoint.Substring(0, colon);
+                    StatusDetail.Text = string.IsNullOrEmpty(endpoint) ? peer : $"{peer}  ·  {endpoint}";
+                }
 
                 var last = _activity.LastActivityUtc;
                 StatusSub.Text = last.HasValue
@@ -121,7 +129,9 @@ namespace WinDaemon
                     : "Ready - copy something to sync it";
 
                 PairHintBadge.Visibility = Visibility.Collapsed;
-                FooterHint.Text = "Everything stays on your local network";
+                FooterHint.Text = overBle
+                    ? "Text only over Bluetooth. Images need Wi-Fi."
+                    : "Everything stays on your local network";
             }
             else
             {
@@ -309,9 +319,7 @@ namespace WinDaemon
 
         public void Teardown()
         {
-            _transport.ClientConnected -= Transport_Changed;
-            _transport.ConnectionClosed -= Transport_Changed;
-            _transport.PeerIdentified -= Transport_Changed;
+            ConnectionState.Changed -= ConnectionState_Changed;
             _activity.Changed -= Activity_Changed;
             _ageTimer.Stop();
             _spinner?.Stop(this);

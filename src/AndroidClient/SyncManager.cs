@@ -31,6 +31,12 @@ namespace AndroidClient
         private const string PrefHostPubKey = "HostPubKey";
         private const string PrefPaused = "UserPaused";
 
+        /// <summary>How long to wait for Wi-Fi before falling back to Bluetooth.</summary>
+        private static readonly TimeSpan TcpConnectTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>Upper bound on the retry gap, so a Bluetooth peer is found promptly.</summary>
+        private static readonly TimeSpan BleRetryCeiling = TimeSpan.FromSeconds(8);
+
         private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(1);
         private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
 
@@ -492,7 +498,11 @@ namespace AndroidClient
                     failures = 0;
                 }
 
+                // Bluetooth is a local radio, not a network that comes and goes, so backing
+                // off for a minute before rescanning made the fallback feel broken - it only
+                // appeared after the user poked the service. Retry it briskly instead.
                 var delay = BackoffFor(failures);
+                if (delay > BleRetryCeiling) delay = BleRetryCeiling;
                 Report($"Reconnecting in {delay.TotalSeconds:F0}s...");
 
                 try
@@ -544,7 +554,16 @@ namespace AndroidClient
                 _transport = transport;
 
                 Report($"Connecting to {hostIp}...");
-                await transport.ConnectAsync(hostIp, token).ConfigureAwait(false);
+
+                // Bounded, because a TCP connect to an unreachable host waits for the OS
+                // default. Measured at over two minutes with Wi-Fi off, which is two minutes
+                // before the Bluetooth fallback is even attempted.
+                using (var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    connectTimeout.CancelAfter(TcpConnectTimeout);
+                    await transport.ConnectAsync(hostIp, connectTimeout.Token).ConfigureAwait(false);
+                }
+
                 ActiveTransport = TransportKind.WiFi;
 
                 Report("Connected!");
@@ -558,14 +577,14 @@ namespace AndroidClient
             }
             catch (Exception ex)
             {
-                Log.Write("Sync", $"Connect to {hostIp} failed", ex);
+                Log.Write("Sync", $"Connect to {hostIp} failed: {ex.GetType().Name}: {ex.Message}");
                 RetireTransport();
 
                 // No usable network is exactly the case BLE exists for, so fall back to it
                 // rather than reporting failure and waiting out a backoff.
                 if (await TryConnectOverBleAsync(token).ConfigureAwait(false)) return true;
 
-                Report($"Connection failed: {ex.Message}");
+                Report("Not reachable over Wi-Fi or Bluetooth");
                 return false;
             }
             finally
@@ -578,16 +597,39 @@ namespace AndroidClient
         /// Finds the computer by its Mesh Sync service UUID and opens a GATT link. Text only:
         /// BLE throughput would make an image take minutes, so images stay on Wi-Fi.
         /// </summary>
+        private static DateTime _lastBleScanUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// Android silently throttles an app that starts and stops BLE scans more than about
+        /// five times in thirty seconds - the scan simply returns nothing, with no error. The
+        /// reconnect loop retries far more often than that, which is why Bluetooth appeared
+        /// to connect only by luck, or only after the service was stopped and started. One
+        /// long scan, spaced out, stays under the limit.
+        /// </summary>
+        private static readonly TimeSpan BleScanCooldown = TimeSpan.FromSeconds(12);
+
+        private static readonly TimeSpan BleScanWindow = TimeSpan.FromSeconds(25);
+
         private static async Task<bool> TryConnectOverBleAsync(CancellationToken token)
         {
 #if ANDROID
+            var sinceLastScan = DateTime.UtcNow - _lastBleScanUtc;
+            if (sinceLastScan < BleScanCooldown)
+            {
+                var wait = BleScanCooldown - sinceLastScan;
+                Log.Write("Sync", $"Holding off the Bluetooth scan for {wait.TotalSeconds:F0}s to stay under Android's scan throttle.");
+                try { await Task.Delay(wait, token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return false; }
+            }
+
             Platforms.Android.AndroidBleDiscovery? discovery = null;
             try
             {
                 Report("No Wi-Fi. Looking over Bluetooth...");
 
+                _lastBleScanUtc = DateTime.UtcNow;
                 discovery = new Platforms.Android.AndroidBleDiscovery();
-                string? address = await discovery.FindPeerAsync(TimeSpan.FromSeconds(12), token).ConfigureAwait(false);
+                string? address = await discovery.FindPeerAsync(BleScanWindow, token).ConfigureAwait(false);
 
                 if (string.IsNullOrEmpty(address))
                 {

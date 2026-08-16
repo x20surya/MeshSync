@@ -144,14 +144,19 @@ namespace AndroidClient.Platforms.Android
                 return;
             }
 
+            // Notifications, with a receipt written back per chunk. Indications looked like
+            // the right answer but went unconfirmed on this stack and the peer dropped the
+            // link, so flow control lives in our own protocol instead.
+            var enable = BluetoothGattDescriptor.EnableNotificationValue!.ToArray();
+
             if (OperatingSystem.IsAndroidVersionAtLeast(33))
             {
-                gatt.WriteDescriptor(descriptor, BluetoothGattDescriptor.EnableNotificationValue!.ToArray());
+                gatt.WriteDescriptor(descriptor, enable);
             }
             else
             {
 #pragma warning disable CA1422 // Superseded on API 33+, still the only option below it.
-                descriptor.SetValue(BluetoothGattDescriptor.EnableNotificationValue!.ToArray());
+                descriptor.SetValue(enable);
                 gatt.WriteDescriptor(descriptor);
 #pragma warning restore CA1422
             }
@@ -194,6 +199,15 @@ namespace AndroidClient.Platforms.Android
         {
             try
             {
+                // Tell the server this one landed so it can release the next. Without it the
+                // server's second notification overwrites the first before it is transmitted.
+                if (chunk.Length >= BleFragmenter.HeaderSize)
+                {
+                    byte messageId = chunk[0];
+                    int sequence = chunk[1] | (chunk[2] << 8);
+                    _ = SendAckAsync(messageId, sequence);
+                }
+
                 byte[]? payload = _reassembler.Accept(chunk);
                 if (payload == null) return;
 
@@ -212,6 +226,35 @@ namespace AndroidClient.Platforms.Android
             if (characteristic?.Uuid?.Equals(InboxUuid) == true)
             {
                 try { _writeComplete.Release(); } catch (SemaphoreFullException) { }
+            }
+        }
+
+        /// <summary>
+        /// Writes a four-byte receipt for a chunk. Uses the send lock so it cannot interleave
+        /// with an outbound payload, since Android permits one outstanding write at a time.
+        /// </summary>
+        private async Task SendAckAsync(byte messageId, int sequence)
+        {
+            var gatt = _gatt;
+            var inbox = _inbox;
+            if (gatt == null || inbox == null) return;
+
+            try
+            {
+                await _sendLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await WriteChunkAsync(gatt, inbox, BleProtocol.BuildAck(messageId, sequence),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _sendLock.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("BleClient", $"Could not acknowledge chunk {sequence}", ex);
             }
         }
 
