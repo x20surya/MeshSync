@@ -5,17 +5,24 @@ using Konscious.Security.Cryptography;
 
 namespace CoreLib
 {
-    public class CryptoEngine
+    public static class CryptoEngine
     {
-        private const int KeySize = 32; // 256 bits for AES-256
-        private const int NonceSize = 12; // 96 bits for GCM
-        private const int TagSize = 16; // 128 bits for GCM
+        public const int KeySize = 32;   // 256 bits for AES-256
+        public const int NonceSize = 12; // 96 bits for GCM
+        public const int TagSize = 16;   // 128 bits for GCM
+
+        /// <summary>Overhead added to a plaintext by <see cref="Encrypt"/>.</summary>
+        public const int Overhead = NonceSize + TagSize;
 
         /// <summary>
         /// Derives a 256-bit encryption key from a master password using Argon2id.
+        /// This is deliberately expensive (~64 MB, ~200 ms) - never call it on a UI thread.
         /// </summary>
         public static byte[] DeriveKey(string masterPassword, byte[] salt)
         {
+            if (masterPassword == null) throw new ArgumentNullException(nameof(masterPassword));
+            if (salt == null) throw new ArgumentNullException(nameof(salt));
+
             using var argon2 = new Argon2id(Encoding.UTF8.GetBytes(masterPassword));
             argon2.Salt = salt;
             argon2.DegreeOfParallelism = 4; // 4 threads
@@ -26,61 +33,105 @@ namespace CoreLib
         }
 
         /// <summary>
-        /// Encrypts plaintext using AES-256-GCM. 
+        /// Encrypts plaintext using AES-256-GCM.
         /// Returns a single byte array containing [Nonce (12) | Tag (16) | Ciphertext].
         /// </summary>
-        public static byte[] Encrypt(byte[] plaintext, byte[] key)
+        public static byte[] Encrypt(ReadOnlySpan<byte> plaintext, byte[] key)
         {
-            if (key.Length != KeySize) throw new ArgumentException($"Key must be {KeySize} bytes.");
+            ValidateKey(key);
 
-            // Generate a random 12-byte Nonce (IV)
-            byte[] nonce = new byte[NonceSize];
+            // Written straight into the output buffer: the previous implementation allocated
+            // separate nonce, tag and ciphertext arrays and then copied all three, which cost
+            // three extra full-size copies of every screenshot.
+            byte[] payload = new byte[Overhead + plaintext.Length];
+            var nonce = payload.AsSpan(0, NonceSize);
+            var tag = payload.AsSpan(NonceSize, TagSize);
+            var ciphertext = payload.AsSpan(Overhead, plaintext.Length);
+
             RandomNumberGenerator.Fill(nonce);
 
-            byte[] ciphertext = new byte[plaintext.Length];
-            byte[] tag = new byte[TagSize];
-
-            using (var aesGcm = new AesGcm(key))
-            {
-                // Encrypt payload
-                aesGcm.Encrypt(nonce, plaintext, ciphertext, tag);
-            }
-
-            // Pack the payload: Nonce + Tag + Ciphertext
-            byte[] payload = new byte[NonceSize + TagSize + ciphertext.Length];
-            Buffer.BlockCopy(nonce, 0, payload, 0, NonceSize);
-            Buffer.BlockCopy(tag, 0, payload, NonceSize, TagSize);
-            Buffer.BlockCopy(ciphertext, 0, payload, NonceSize + TagSize, ciphertext.Length);
+            using var aesGcm = new AesGcm(key, TagSize);
+            aesGcm.Encrypt(nonce, plaintext, ciphertext, tag);
 
             return payload;
         }
 
         /// <summary>
         /// Decrypts a payload formatted as [Nonce (12) | Tag (16) | Ciphertext] using AES-256-GCM.
+        /// Throws <see cref="CryptographicException"/> if the payload was tampered with
+        /// or was produced with a different key.
         /// </summary>
-        public static byte[] Decrypt(byte[] payload, byte[] key)
+        public static byte[] Decrypt(ReadOnlySpan<byte> payload, byte[] key)
         {
-            if (key.Length != KeySize) throw new ArgumentException($"Key must be {KeySize} bytes.");
-            if (payload.Length < NonceSize + TagSize) throw new ArgumentException("Payload is too short to contain a valid ciphertext.");
+            ValidateKey(key);
+            if (payload.Length < Overhead)
+                throw new ArgumentException("Payload is too short to contain a valid ciphertext.", nameof(payload));
 
-            // Extract the Nonce, Tag, and Ciphertext from the payload
-            byte[] nonce = new byte[NonceSize];
-            byte[] tag = new byte[TagSize];
-            byte[] ciphertext = new byte[payload.Length - NonceSize - TagSize];
+            byte[] plaintext = new byte[payload.Length - Overhead];
 
-            Buffer.BlockCopy(payload, 0, nonce, 0, NonceSize);
-            Buffer.BlockCopy(payload, NonceSize, tag, 0, TagSize);
-            Buffer.BlockCopy(payload, NonceSize + TagSize, ciphertext, 0, ciphertext.Length);
-
-            byte[] plaintext = new byte[ciphertext.Length];
-
-            using (var aesGcm = new AesGcm(key))
-            {
-                // Decrypt payload. If the tag is invalid, this throws a CryptographicException.
-                aesGcm.Decrypt(nonce, ciphertext, tag, plaintext);
-            }
+            using var aesGcm = new AesGcm(key, TagSize);
+            aesGcm.Decrypt(
+                payload.Slice(0, NonceSize),
+                payload.Slice(Overhead),
+                payload.Slice(NonceSize, TagSize),
+                plaintext);
 
             return plaintext;
+        }
+
+        /// <summary>
+        /// Encrypts <paramref name="body"/> prefixed with a one-byte content type, in a single pass.
+        /// Callers previously built the tagged plaintext into a throwaway array first, which
+        /// duplicated the entire image in memory before encryption.
+        /// </summary>
+        public static byte[] EncryptTagged(byte contentType, ReadOnlySpan<byte> body, byte[] key)
+        {
+            ValidateKey(key);
+
+            byte[] payload = new byte[Overhead + 1 + body.Length];
+            var nonce = payload.AsSpan(0, NonceSize);
+            var tag = payload.AsSpan(NonceSize, TagSize);
+            var ciphertext = payload.AsSpan(Overhead, 1 + body.Length);
+
+            RandomNumberGenerator.Fill(nonce);
+
+            // Build the tagged plaintext in a rented-free stack/heap buffer sized once.
+            byte[] tagged = new byte[1 + body.Length];
+            tagged[0] = contentType;
+            body.CopyTo(tagged.AsSpan(1));
+
+            try
+            {
+                using var aesGcm = new AesGcm(key, TagSize);
+                aesGcm.Encrypt(nonce, tagged, ciphertext, tag);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(tagged);
+            }
+
+            return payload;
+        }
+
+        /// <summary>Decrypts a payload produced by <see cref="EncryptTagged"/>.</summary>
+        public static (byte ContentType, byte[] Body) DecryptTagged(ReadOnlySpan<byte> payload, byte[] key)
+        {
+            byte[] plaintext = Decrypt(payload, key);
+            if (plaintext.Length == 0)
+                throw new CryptographicException("Decrypted payload was empty.");
+
+            byte contentType = plaintext[0];
+            byte[] body = new byte[plaintext.Length - 1];
+            Buffer.BlockCopy(plaintext, 1, body, 0, body.Length);
+            CryptographicOperations.ZeroMemory(plaintext);
+
+            return (contentType, body);
+        }
+
+        private static void ValidateKey(byte[] key)
+        {
+            if (key == null) throw new ArgumentNullException(nameof(key));
+            if (key.Length != KeySize) throw new ArgumentException($"Key must be {KeySize} bytes.", nameof(key));
         }
     }
 }

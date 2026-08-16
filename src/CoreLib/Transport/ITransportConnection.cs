@@ -9,6 +9,11 @@ namespace CoreLib.Transport
         public byte[] EncryptedPayload { get; set; } = Array.Empty<byte>();
     }
 
+    public class PeerIdentifiedEventArgs : EventArgs
+    {
+        public string DeviceName { get; set; } = string.Empty;
+    }
+
     /// <summary>
     /// Abstract interface for a secure socket connection between two trusted mesh devices.
     /// </summary>
