@@ -83,6 +83,46 @@ namespace CoreLib.Transport
         /// <summary>How long the server waits for a chunk receipt before giving up.</summary>
         public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(5);
 
+        // ──────────────────────────── liveness
+
+        /// <summary>
+        /// Marks a two-byte control frame: [Control][kind]. Shorter than both a receipt (4)
+        /// and the smallest data chunk (5), so the three can never be confused.
+        ///
+        /// A GATT link outlives the process that published the service. Restart the desktop
+        /// app and the phone's connection survives at the OS level: its writes still arrive,
+        /// so the computer receives clipboard items, but it subscribed to the previous
+        /// service instance and that subscription is never re-announced. The computer is
+        /// then deaf in one direction - it shows no device and cannot notify - while the
+        /// phone still believes it is connected. Pinging proves the link end to end rather
+        /// than trusting a subscription event that only ever fires once.
+        /// </summary>
+        public const byte ControlMarker = 0xC7;
+
+        public const int ControlLength = 2;
+        public const byte ControlPing = 0x01;
+        public const byte ControlPong = 0x02;
+
+        public static byte[] BuildControl(byte kind) => new[] { ControlMarker, kind };
+
+        public static bool TryParseControl(ReadOnlySpan<byte> data, out byte kind)
+        {
+            if (data.Length == ControlLength && data[0] == ControlMarker)
+            {
+                kind = data[1];
+                return true;
+            }
+
+            kind = 0;
+            return false;
+        }
+
+        /// <summary>How often the phone proves the link is still whole.</summary>
+        public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(8);
+
+        /// <summary>Silence beyond this means the peer is gone, whatever the radio thinks.</summary>
+        public static readonly TimeSpan PeerTimeout = TimeSpan.FromSeconds(24);
+
         /// <summary>
         /// Usable bytes in a single write or notification: the MTU less the ATT header, then
         /// clamped to the spec's 512-octet attribute ceiling.

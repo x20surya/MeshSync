@@ -36,8 +36,7 @@ namespace WinDaemon
         public event EventHandler? ConnectionClosed;
         public event EventHandler? ClientConnected;
 
-        /// <summary>True once a phone has subscribed to notifications, which is our liveness signal.</summary>
-        public bool IsConnected => _hasSubscriber;
+        public bool IsConnected => HasLivePeer;
 
         public async Task StartListeningAsync(CancellationToken cancellationToken = default)
         {
@@ -160,6 +159,17 @@ namespace WinDaemon
 
                 if (request.Option == GattWriteOption.WriteWithResponse) request.Respond();
 
+                // Traffic arriving is proof of a live peer, whatever the subscription event
+                // did or did not tell us. Without this the window sat on "waiting for a
+                // device" while clipboard items were visibly arriving.
+                NotePeerAlive();
+
+                if (BleProtocol.TryParseControl(chunk, out byte controlKind))
+                {
+                    if (controlKind == BleProtocol.ControlPing) await SendControlAsync(BleProtocol.ControlPong);
+                    return;
+                }
+
                 // A receipt for something we sent, not inbound data.
                 if (BleProtocol.TryParseAck(chunk, out byte ackMessageId, out int ackSequence))
                 {
@@ -182,7 +192,10 @@ namespace WinDaemon
         public async Task SendPayloadAsync(byte[] encryptedPayload, CancellationToken cancellationToken = default)
         {
             if (encryptedPayload == null) throw new ArgumentNullException(nameof(encryptedPayload));
-            if (_outbox == null || !_hasSubscriber) throw new InvalidOperationException("No BLE subscriber.");
+            // Checks the live subscriber list rather than the cached flag: after a restart
+            // the flag is false even though the phone is still subscribed at the OS level.
+            if (_outbox == null || _outbox.SubscribedClients.Count == 0)
+                throw new InvalidOperationException("No BLE subscriber to notify.");
 
             if (encryptedPayload.Length > BleProtocol.MaxPayloadBytes)
                 throw new ArgumentException(
@@ -224,6 +237,48 @@ namespace WinDaemon
             finally
             {
                 _sendLock.Release();
+            }
+        }
+
+        // ──────────────────────────────── liveness
+
+        private DateTime _lastInboundUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// True when a peer subscribed, or when one has written to us recently. The second
+        /// case covers a restarted process: the phone's GATT link survives and it keeps
+        /// writing, but it subscribed to the previous service instance so no subscription
+        /// event ever arrives for this one.
+        /// </summary>
+        private bool HasLivePeer =>
+            _hasSubscriber || DateTime.UtcNow - _lastInboundUtc < BleProtocol.PeerTimeout;
+
+        private void NotePeerAlive()
+        {
+            bool wasConnected = IsConnected;
+            _lastInboundUtc = DateTime.UtcNow;
+
+            if (!wasConnected)
+            {
+                Log.Write("BleServer", "Peer traffic seen without a subscription event; treating the link as live.");
+                ClientConnected?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        private async Task SendControlAsync(byte kind)
+        {
+            var outbox = _outbox;
+            if (outbox == null) return;
+
+            try
+            {
+                using var writer = new DataWriter();
+                writer.WriteBytes(BleProtocol.BuildControl(kind));
+                await outbox.NotifyValueAsync(writer.DetachBuffer());
+            }
+            catch (Exception ex)
+            {
+                Log.Write("BleServer", "Could not answer a ping", ex);
             }
         }
 

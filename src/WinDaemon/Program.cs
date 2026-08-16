@@ -78,7 +78,19 @@ namespace WinDaemon
 
             _ = Task.Run(InitialiseNetworkAsync);
 
+            // A GATT service registration outlives a process that dies without releasing it,
+            // and the phone then keeps discovering the orphan instead of the next instance:
+            // it connects, subscribes, reports success, and nothing crosses in either
+            // direction. Releasing it on every exit path we control keeps that to genuine
+            // crashes and Task Manager kills, which user code cannot intercept.
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseBluetooth();
+
             _app = new Wpf.Application { ShutdownMode = Wpf.ShutdownMode.OnExplicitShutdown };
+            _app.SessionEnding += (_, _) =>
+            {
+                Log.Write("Daemon", "Windows is signing out or shutting down.");
+                ReleaseBluetooth();
+            };
             _app.Resources.MergedDictionaries.Add(new Wpf.ResourceDictionary
             {
                 Source = new Uri("pack://application:,,,/WinDaemon;component/Themes/MeshTheme.xaml", UriKind.Absolute)
@@ -402,9 +414,31 @@ namespace WinDaemon
             _app?.Dispatcher.BeginInvoke(() => _app.Shutdown());
         }
 
+        private static int _bluetoothReleased;
+
+        /// <summary>
+        /// Stops advertising and tears down the GATT service. Safe to call more than once,
+        /// because several exit paths race to run it.
+        /// </summary>
+        private static void ReleaseBluetooth()
+        {
+            if (Interlocked.Exchange(ref _bluetoothReleased, 1) != 0) return;
+
+            try
+            {
+                _bleTransport?.Dispose();
+                Log.Write("Daemon", "Released the Bluetooth service.");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Daemon", "Releasing the Bluetooth service failed", ex);
+            }
+        }
+
         private static void Shutdown()
         {
             Log.Write("Daemon", "Shutting down.");
+            ReleaseBluetooth();
 
             try { _window?.Teardown(); } catch { }
             try
@@ -419,7 +453,7 @@ namespace WinDaemon
             catch { }
             try { _listener?.Dispose(); } catch { }
             try { _transport?.Dispose(); } catch { }
-            try { _bleTransport?.Dispose(); } catch { }
+            
             try { _clipboard?.Dispose(); } catch { }
 
             var key = Interlocked.Exchange(ref _aesKey, null);

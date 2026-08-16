@@ -76,6 +76,20 @@ namespace AndroidClient.Platforms.Android
 
             await _readySignal.Task.ConfigureAwait(false);
             Log.Write("BleClient", $"Link ready. Usable payload {_usablePayload} bytes per write.");
+
+            // Ready is not the same as usable. Android reports the subscription write as
+            // successful even when it lands on a service published by a process that has
+            // since exited, so both ends believe they are talking and nothing crosses.
+            // Requiring an answer before declaring the transport connected turns that
+            // silent half-open state into an ordinary failed attempt the loop can retry.
+            if (!await ExchangeGreetingAsync(cancellationToken).ConfigureAwait(false))
+            {
+                _ready = false;
+                throw new InvalidOperationException(
+                    "The computer accepted the connection but did not answer; its Bluetooth service is stale.");
+            }
+
+            Log.Write("BleClient", "Computer answered - link confirmed.");
         }
 
         // ──────────────────────────────── GATT callbacks
@@ -85,6 +99,13 @@ namespace AndroidClient.Platforms.Android
             if (newState == ProfileState.Connected)
             {
                 Log.Write("BleClient", "Connected. Negotiating MTU.");
+
+                // Android caches a device's service and handle table across connections. If
+                // the computer restarts, it republishes the service with fresh handles while
+                // the phone keeps writing to the stale ones, so both sides look connected and
+                // nothing whatsoever gets through. Clearing the cache forces a real rediscovery.
+                if (gatt != null) RefreshServiceCache(gatt);
+
                 // Ask before discovering services: a later MTU change would not resize
                 // characteristics already in flight.
                 if (gatt?.RequestMtu(BleProtocol.PreferredMtu) != true) gatt?.DiscoverServices();
@@ -169,6 +190,9 @@ namespace AndroidClient.Platforms.Android
             if (status == GattStatus.Success)
             {
                 _ready = true;
+                _lastInboundUtc = DateTime.UtcNow;
+                _heartbeatCts = new CancellationTokenSource();
+                _ = HeartbeatLoopAsync(_heartbeatCts.Token);
                 _readySignal?.TrySetResult(true);
             }
             else
@@ -199,6 +223,15 @@ namespace AndroidClient.Platforms.Android
         {
             try
             {
+                _lastInboundUtc = DateTime.UtcNow;
+
+                // A pong, not data. Its only job is to prove the peer is still answering.
+                if (BleProtocol.TryParseControl(chunk, out _))
+                {
+                    _pong?.TrySetResult(true);
+                    return;
+                }
+
                 // Tell the server this one landed so it can release the next. Without it the
                 // server's second notification overwrites the first before it is transmitted.
                 if (chunk.Length >= BleFragmenter.HeaderSize)
@@ -226,6 +259,131 @@ namespace AndroidClient.Platforms.Android
             if (characteristic?.Uuid?.Equals(InboxUuid) == true)
             {
                 try { _writeComplete.Release(); } catch (SemaphoreFullException) { }
+            }
+        }
+
+        /// <summary>
+        /// Clears Android's cached service and handle table for this device.
+        ///
+        /// BluetoothGatt.refresh() is public in AOSP but not part of the SDK, so reflection
+        /// is the only route. It is the long-standing remedy for a peripheral whose service
+        /// definition changes between connections, which is exactly what happens when the
+        /// desktop app restarts and republishes its GATT service.
+        /// </summary>
+        private static void RefreshServiceCache(BluetoothGatt gatt)
+        {
+            try
+            {
+                var method = gatt.Class.GetMethod("refresh");
+                if (method == null)
+                {
+                    Log.Write("BleClient", "No refresh() on BluetoothGatt; service cache left alone.");
+                    return;
+                }
+
+                var result = method.Invoke(gatt);
+                Log.Write("BleClient", $"Cleared the cached service table (refresh returned {result}).");
+            }
+            catch (Exception ex)
+            {
+                // Not fatal: it only matters when the peer's services changed.
+                Log.Write("BleClient", "Could not clear the cached service table", ex);
+            }
+        }
+
+        // ──────────────────────────────── liveness
+
+        private DateTime _lastInboundUtc = DateTime.MinValue;
+        private CancellationTokenSource? _heartbeatCts;
+        private TaskCompletionSource<bool>? _pong;
+
+        /// <summary>
+        /// Pings the computer and waits for its reply, proving the link carries traffic in
+        /// both directions before the transport is reported as connected.
+        /// </summary>
+        private async Task<bool> ExchangeGreetingAsync(CancellationToken cancellationToken)
+        {
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                _pong = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                try { await SendControlAsync(BleProtocol.ControlPing).ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    Log.Write("BleClient", $"Greeting attempt {attempt} could not be written", ex);
+                    continue;
+                }
+
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(2));
+
+                var finished = await Task.WhenAny(
+                    _pong.Task,
+                    Task.Delay(Timeout.Infinite, timeout.Token)).ConfigureAwait(false);
+
+                if (finished == _pong.Task) return true;
+
+                Log.Write("BleClient", $"Greeting attempt {attempt} went unanswered.");
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Pings the computer and gives up on the link if it stops answering.
+        ///
+        /// A GATT connection outlives the process that published the service, so restarting
+        /// the desktop app leaves the phone connected to nothing: writes still appear to
+        /// succeed, but the computer never re-announces its subscription and can no longer
+        /// notify back. Only an end-to-end exchange catches that; the radio reports the link
+        /// as perfectly healthy throughout.
+        /// </summary>
+        private async Task HeartbeatLoopAsync(CancellationToken token)
+        {
+            try
+            {
+                while (!token.IsCancellationRequested && _ready)
+                {
+                    await Task.Delay(BleProtocol.HeartbeatInterval, token).ConfigureAwait(false);
+                    if (!_ready || token.IsCancellationRequested) return;
+
+                    if (DateTime.UtcNow - _lastInboundUtc > BleProtocol.PeerTimeout)
+                    {
+                        Log.Write("BleClient",
+                            $"No answer from the computer for {BleProtocol.PeerTimeout.TotalSeconds:F0}s - dropping the link.");
+                        _ready = false;
+                        ConnectionClosed?.Invoke(this, EventArgs.Empty);
+                        return;
+                    }
+
+                    try { await SendControlAsync(BleProtocol.ControlPing).ConfigureAwait(false); }
+                    catch (Exception ex)
+                    {
+                        Log.Write("BleClient", "Heartbeat write failed - dropping the link", ex);
+                        _ready = false;
+                        ConnectionClosed?.Invoke(this, EventArgs.Empty);
+                        return;
+                    }
+                }
+            }
+            catch (System.OperationCanceledException) { /* expected on teardown */ }
+        }
+
+        private async Task SendControlAsync(byte kind)
+        {
+            var gatt = _gatt;
+            var inbox = _inbox;
+            if (gatt == null || inbox == null) return;
+
+            await _sendLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await WriteChunkAsync(gatt, inbox, BleProtocol.BuildControl(kind), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                _sendLock.Release();
             }
         }
 
@@ -329,21 +487,37 @@ namespace AndroidClient.Platforms.Android
 
         // ──────────────────────────────── lifetime
 
-        public Task DisconnectAsync()
+        public async Task DisconnectAsync()
         {
             _ready = false;
+            try { _heartbeatCts?.Cancel(); } catch { }
+            _heartbeatCts = null;
             _reassembler.Reset();
+
+            var gatt = _gatt;
+            _gatt = null;
+            _inbox = null;
+
+            if (gatt == null) return;
 
             try
             {
-                _gatt?.Disconnect();
-                _gatt?.Close();
-            }
-            catch (Exception ex) { Log.Write("BleClient", "Closing the GATT client failed", ex); }
+                gatt.Disconnect();
 
-            _gatt = null;
-            _inbox = null;
-            return Task.CompletedTask;
+                // Close() immediately after Disconnect() leaves the underlying link up for a
+                // moment. Reconnecting into that half-torn-down link is what let the phone
+                // reattach to a connection the computer's newly published service was never
+                // bound to: both ends reported success and nothing crossed. Letting the
+                // disconnect land first forces a genuinely new connection.
+                await Task.Delay(TimeSpan.FromMilliseconds(600)).ConfigureAwait(false);
+
+                gatt.Close();
+                await Task.Delay(TimeSpan.FromMilliseconds(400)).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("BleClient", "Closing the GATT client failed", ex);
+            }
         }
 
         public new void Dispose()
@@ -351,7 +525,9 @@ namespace AndroidClient.Platforms.Android
             if (_disposed) return;
             _disposed = true;
 
-            DisconnectAsync().GetAwaiter().GetResult();
+            // Blocking here would stall the reconnect loop for a second on every retry, and
+            // the teardown does not need to be observed.
+            try { DisconnectAsync().GetAwaiter().GetResult(); } catch { }
 
             PayloadReceived = null;
             ConnectionClosed = null;
