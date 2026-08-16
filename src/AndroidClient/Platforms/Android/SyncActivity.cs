@@ -37,20 +37,6 @@ namespace AndroidClient.Platforms.Android
                         }
 
                         bool foundImage = false;
-                        
-                        System.Console.WriteLine($"[SyncActivity] === CLIPBOARD DUMP START ===");
-                        System.Console.WriteLine($"[SyncActivity] ItemCount: {clipboard.PrimaryClip.ItemCount}");
-                        for (int i = 0; i < clipboard.PrimaryClip.ItemCount; i++) {
-                            var currentItem = clipboard.PrimaryClip.GetItemAt(i);
-                            System.Console.WriteLine($"[SyncActivity] Item {i} - Uri: {currentItem?.Uri}, Text: {currentItem?.Text}, HtmlText: {currentItem?.HtmlText}, Intent: {currentItem?.Intent}");
-                        }
-                        if (clipboard.PrimaryClip.Description != null) {
-                            for (int i = 0; i < clipboard.PrimaryClip.Description.MimeTypeCount; i++) {
-                                System.Console.WriteLine($"[SyncActivity] MIME {i}: {clipboard.PrimaryClip.Description.GetMimeType(i)}");
-                            }
-                        }
-                        System.Console.WriteLine($"[SyncActivity] === CLIPBOARD DUMP END ===");
-
                         for (int i = 0; i < clipboard.PrimaryClip.ItemCount; i++)
                         {
                             var currentItem = clipboard.PrimaryClip.GetItemAt(i);

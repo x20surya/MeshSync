@@ -18,6 +18,27 @@ public class MainActivity : MauiAppCompatActivity
         
         // Always attempt auto-connect when the app is opened
         _ = SyncManager.AutoConnectAsync(true);
+        
+        _ = RequestScreenshotPermissionsAsync();
+    }
+
+    private async System.Threading.Tasks.Task RequestScreenshotPermissionsAsync()
+    {
+        try 
+        {
+            if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu)
+            {
+                await Microsoft.Maui.ApplicationModel.Permissions.RequestAsync<Microsoft.Maui.ApplicationModel.Permissions.Photos>();
+            }
+            else
+            {
+                await Microsoft.Maui.ApplicationModel.Permissions.RequestAsync<Microsoft.Maui.ApplicationModel.Permissions.StorageRead>();
+            }
+        }
+        catch (System.Exception ex)
+        {
+            System.Console.WriteLine($"[Android] Failed to request permissions: {ex.Message}");
+        }
     }
 
     protected override void OnNewIntent(Intent? intent)

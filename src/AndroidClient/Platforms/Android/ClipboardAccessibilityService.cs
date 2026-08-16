@@ -14,6 +14,8 @@ namespace AndroidClient.Platforms.Android
     {
         private ClipboardManager? _clipboardManager;
 
+        private ScreenshotObserver? _screenshotObserver;
+
         protected override async void OnServiceConnected()
         {
             base.OnServiceConnected();
@@ -25,6 +27,21 @@ namespace AndroidClient.Platforms.Android
             {
                 _clipboardManager.AddPrimaryClipChangedListener(this);
                 Console.WriteLine("[Android] Clipboard Accessibility Service Connected! Listening for copies...");
+            }
+
+            try 
+            {
+                _screenshotObserver = new ScreenshotObserver(this, new Handler(Looper.MainLooper!));
+                this.ContentResolver?.RegisterContentObserver(
+                    Android.Provider.MediaStore.Images.Media.ExternalContentUri, 
+                    true, 
+                    _screenshotObserver
+                );
+                Console.WriteLine("[Android] Screenshot Observer Registered!");
+            } 
+            catch (Exception ex) 
+            {
+                Console.WriteLine($"[Android] Failed to register screenshot observer: {ex.Message}");
             }
 
             // Restore notification if we reconnect via the app UI
@@ -142,6 +159,10 @@ namespace AndroidClient.Platforms.Android
             if (_clipboardManager != null)
             {
                 _clipboardManager.RemovePrimaryClipChangedListener(this);
+            }
+            if (_screenshotObserver != null)
+            {
+                this.ContentResolver?.UnregisterContentObserver(_screenshotObserver);
             }
             return base.OnUnbind(intent);
         }
