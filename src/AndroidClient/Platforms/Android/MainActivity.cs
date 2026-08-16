@@ -15,6 +15,9 @@ public class MainActivity : MauiAppCompatActivity
     {
         base.OnCreate(savedInstanceState);
         HandleIntent(Intent);
+        
+        // Always attempt auto-connect when the app is opened
+        _ = SyncManager.AutoConnectAsync();
     }
 
     protected override void OnNewIntent(Intent? intent)

@@ -20,7 +20,7 @@ namespace AndroidClient
         public static event Action<string>? OnConnectionStatusChanged;
         public static event Action<string>? OnClipboardReceived;
 
-        public static async Task ConnectAsync(string hostIp, string hostPubKey)
+        public static async Task<bool> ConnectAsync(string hostIp, string hostPubKey)
         {
 #if ANDROID
             var prefs = Android.App.Application.Context.GetSharedPreferences("SyncPrefs", FileCreationMode.Private);
@@ -55,7 +55,6 @@ namespace AndroidClient
                     }
 #endif
                     
-                    // Small delay to prevent infinite loop
                     await Task.Delay(500);
                     IsInjectingClipboard = false;
                 }
@@ -68,8 +67,7 @@ namespace AndroidClient
             Transport.ConnectionClosed += async (s, args) =>
             {
                 OnConnectionStatusChanged?.Invoke("Disconnected. Retrying...");
-                await Task.Delay(3000);
-                _ = AutoConnectAsync(); // Try to automatically reconnect!
+                _ = AutoConnectAsync(); // Try to automatically reconnect
             };
 
             OnConnectionStatusChanged?.Invoke($"Connecting to {hostIp}...");
@@ -77,15 +75,24 @@ namespace AndroidClient
             {
                 await Transport.ConnectAsync(hostIp);
                 OnConnectionStatusChanged?.Invoke("Connected!");
+                return true;
             }
             catch (Exception ex)
             {
                 OnConnectionStatusChanged?.Invoke($"Connection Failed: {ex.Message}");
+                return false;
             }
         }
 
+        private static bool _isAutoConnecting = false;
+        private static bool _shouldStopConnecting = false;
+
         public static async Task AutoConnectAsync()
         {
+            if (_isAutoConnecting) return;
+            _isAutoConnecting = true;
+            _shouldStopConnecting = false;
+
             string hostIp = "";
             string hostPubKey = "";
 
@@ -97,8 +104,18 @@ namespace AndroidClient
             
             if (!string.IsNullOrEmpty(hostIp) && !string.IsNullOrEmpty(hostPubKey))
             {
-                await ConnectAsync(hostIp, hostPubKey);
+                bool connected = false;
+                while (!connected && !_shouldStopConnecting)
+                {
+                    connected = await ConnectAsync(hostIp, hostPubKey);
+                    if (!connected && !_shouldStopConnecting)
+                    {
+                        await Task.Delay(3000); // Wait 3 seconds before retrying
+                    }
+                }
             }
+
+            _isAutoConnecting = false;
         }
 
         public static async Task SendClipboardAsync(string text)
@@ -112,13 +129,12 @@ namespace AndroidClient
 
         public static async Task DisconnectAsync()
         {
-#if ANDROID
-            var prefs = Android.App.Application.Context.GetSharedPreferences("SyncPrefs", FileCreationMode.Private);
-            prefs?.Edit()?.Remove("HostIp")?.Apply(); // Prevent auto-reconnect
-#endif
+            _shouldStopConnecting = true;
+            // Do NOT remove HostIp here, so we can auto-reconnect when the service starts again!
             if (Transport != null)
             {
                 await Transport.DisconnectAsync();
+                Transport = null;
             }
         }
     }
