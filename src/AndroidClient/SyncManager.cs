@@ -470,11 +470,29 @@ namespace AndroidClient
                 var (hostIp, hostPubKey) = LoadHost();
                 if (string.IsNullOrEmpty(hostIp))
                 {
+                    // Logged, not just reported: a silent exit here looks identical to a
+                    // hung loop when reading the device log.
+                    Log.Write("Sync", "Reconnect loop stopping: no paired host saved.");
                     Report("Not paired yet.");
                     return;
                 }
 
-                bool connected = await TryConnectAsync(hostIp, hostPubKey, token).ConfigureAwait(false);
+                bool connected;
+
+                // Asking the OS first is far cheaper than finding out by timing out. With
+                // Wi-Fi off, the doomed TCP attempt was most of the wait before Bluetooth
+                // was even tried.
+                if (HasUsableNetwork())
+                {
+                    Log.Write("Sync", $"Attempt {failures + 1}: trying Wi-Fi at {hostIp}.");
+                    connected = await TryConnectAsync(hostIp, hostPubKey, token).ConfigureAwait(false);
+                }
+                else
+                {
+                    Log.Write("Sync", $"Attempt {failures + 1}: no network, going straight to Bluetooth.");
+                    connected = await TryConnectOverBleAsync(token).ConfigureAwait(false);
+                    if (!connected) Report("Not reachable over Wi-Fi or Bluetooth");
+                }
 
                 if (connected)
                 {
@@ -570,14 +588,25 @@ namespace AndroidClient
                 Log.Write("Sync", $"Connected to {hostIp}. Paired key: {Truncate(hostPubKey)}");
                 return true;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
+                // The loop itself is shutting down, so do not start anything new.
                 RetireTransport();
                 return false;
             }
             catch (Exception ex)
             {
-                Log.Write("Sync", $"Connect to {hostIp} failed: {ex.GetType().Name}: {ex.Message}");
+                // Everything else is a failed Wi-Fi attempt, including our own connect
+                // timeout firing. That timeout surfaces as OperationCanceledException, and
+                // catching it as cancellation meant a phone with Wi-Fi already off never
+                // reached the Bluetooth fallback at all - it only got there when Wi-Fi
+                // dropped mid-session and the socket failed with an unreachable error
+                // instead. The guard above is what separates the two.
+                bool timedOut = ex is OperationCanceledException;
+                Log.Write("Sync", timedOut
+                    ? $"Connect to {hostIp} timed out after {TcpConnectTimeout.TotalSeconds:F0}s."
+                    : $"Connect to {hostIp} failed: {ex.GetType().Name}: {ex.Message}");
+
                 RetireTransport();
 
                 // No usable network is exactly the case BLE exists for, so fall back to it
@@ -597,6 +626,43 @@ namespace AndroidClient
         /// Finds the computer by its Mesh Sync service UUID and opens a GATT link. Text only:
         /// BLE throughput would make an image take minutes, so images stay on Wi-Fi.
         /// </summary>
+        /// <summary>
+        /// True when a transport exists that could actually reach the paired computer.
+        ///
+        /// Specifically Wi-Fi or Ethernet, not merely "some network": the host is a private
+        /// LAN address, and mobile data can never route to it. Asking only whether a network
+        /// existed answered yes on cellular and spent the TCP timeout proving otherwise
+        /// before Bluetooth got a turn.
+        /// </summary>
+        private static bool HasUsableNetwork()
+        {
+#if ANDROID
+            try
+            {
+                var manager = (global::Android.Net.ConnectivityManager?)global::Android.App.Application.Context
+                    .GetSystemService(Context.ConnectivityService);
+
+                var network = manager?.ActiveNetwork;
+                if (network == null) return false;
+
+                var capabilities = manager?.GetNetworkCapabilities(network);
+                if (capabilities == null) return false;
+
+                // Deliberately not checking Validated: a local-only network with no internet
+                // uplink is exactly the setup this project is built for.
+                return capabilities.HasTransport(global::Android.Net.TransportType.Wifi)
+                       || capabilities.HasTransport(global::Android.Net.TransportType.Ethernet);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Sync", "Could not read network state, assuming one exists", ex);
+                return true;
+            }
+#else
+            return true;
+#endif
+        }
+
         private static DateTime _lastBleScanUtc = DateTime.MinValue;
 
         /// <summary>
