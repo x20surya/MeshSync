@@ -66,8 +66,10 @@ namespace AndroidClient
 
             Transport.ConnectionClosed += async (s, args) =>
             {
+                if (_shouldStopConnecting) return;
+
                 OnConnectionStatusChanged?.Invoke("Disconnected. Retrying...");
-                _ = AutoConnectAsync(); // Try to automatically reconnect
+                _ = AutoConnectAsync(false); // Try to automatically reconnect
             };
 
             OnConnectionStatusChanged?.Invoke($"Connecting to {hostIp}...");
@@ -87,8 +89,10 @@ namespace AndroidClient
         private static bool _isAutoConnecting = false;
         private static bool _shouldStopConnecting = false;
 
-        public static async Task AutoConnectAsync()
+        public static async Task AutoConnectAsync(bool isUserInitiated = false)
         {
+            if (!isUserInitiated && _shouldStopConnecting) return;
+
             if (_isAutoConnecting) return;
             _isAutoConnecting = true;
             _shouldStopConnecting = false;

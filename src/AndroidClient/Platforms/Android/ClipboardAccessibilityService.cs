@@ -32,7 +32,7 @@ namespace AndroidClient.Platforms.Android
             AndroidClient.SyncManager.OnConnectionStatusChanged += SyncManager_OnConnectionStatusChanged;
 
             // Auto-connect to laptop if we have saved preferences
-            await AndroidClient.SyncManager.AutoConnectAsync();
+            await AndroidClient.SyncManager.AutoConnectAsync(true);
 
             CreateNotificationChannel();
             ShowPersistentNotification();
