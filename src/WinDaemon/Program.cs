@@ -162,7 +162,15 @@ namespace WinDaemon
             {
                 _aesKey = CryptoEngine.DeriveKey("MasterPassword123", System.Text.Encoding.UTF8.GetBytes("Salt"));
                 Log.Write("Daemon", "Key derivation complete.");
-                await _transport!.StartListeningAsync().ConfigureAwait(false);
+
+                if (TransportSettings.AllowsWiFi)
+                {
+                    await _transport!.StartListeningAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    Log.Write("Daemon", "Wi-Fi listener not started: the transport preference is Bluetooth only.");
+                }
             }
             catch (Exception ex)
             {
@@ -175,11 +183,46 @@ namespace WinDaemon
             {
                 _bleTransport = new WindowsBleTransport();
                 WireBleTransport(_bleTransport);
-                await _bleTransport.StartListeningAsync().ConfigureAwait(false);
+
+                if (TransportSettings.AllowsBle)
+                {
+                    await _bleTransport.StartListeningAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    Log.Write("Daemon", "Bluetooth not advertised: the transport preference is Wi-Fi only.");
+                }
             }
             catch (Exception ex)
             {
                 Log.Write("Daemon", "BLE unavailable, continuing on Wi-Fi only", ex);
+            }
+
+            TransportSettings.Changed += ApplyTransportPreference;
+        }
+
+        /// <summary>
+        /// Applies a preference change without a restart, so the control in the window means
+        /// something the moment it is used.
+        /// </summary>
+        private static async void ApplyTransportPreference(TransportPreference preference)
+        {
+            try
+            {
+                if (TransportSettings.AllowsWiFi) await _transport!.StartListeningAsync().ConfigureAwait(false);
+                else await _transport!.DisconnectAsync().ConfigureAwait(false);
+
+                if (_bleTransport != null)
+                {
+                    if (TransportSettings.AllowsBle) await _bleTransport.StartListeningAsync().ConfigureAwait(false);
+                    else await _bleTransport.DisconnectAsync().ConfigureAwait(false);
+                }
+
+                Log.Write("Daemon", $"Applied transport preference {preference}.");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Daemon", "Could not apply the transport preference", ex);
             }
         }
 

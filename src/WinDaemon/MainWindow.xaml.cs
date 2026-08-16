@@ -1,9 +1,10 @@
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
@@ -17,6 +18,9 @@ namespace WinDaemon
 {
     public partial class MainWindow : Window
     {
+        private const double SidebarWide = 196;
+        private const double SidebarNarrow = 62;
+
         private readonly TcpTransportConnection _transport;
         private readonly SyncActivityLog _activity;
         private readonly string _ipAddress;
@@ -25,6 +29,8 @@ namespace WinDaemon
         private readonly ObservableCollection<ActivityRow> _rows = new();
         private readonly DispatcherTimer _ageTimer;
         private Storyboard? _spinner;
+        private bool _sidebarCollapsed;
+        private bool _suppressModeEvent;
 
         public event Action? ExitRequested;
 
@@ -45,6 +51,7 @@ namespace WinDaemon
             RenderQrCode();
 
             StartupSwitch.IsChecked = Program.IsStartupEnabled();
+            AboutVersion.Text = $"Version {AppVersion()}";
 
             switch (ThemeManager.Current)
             {
@@ -53,22 +60,19 @@ namespace WinDaemon
                 default: ThemeSystem.IsChecked = true; break;
             }
 
+            _suppressModeEvent = true;
+            TransportMode.SelectedIndex = TransportSettings.Current switch
+            {
+                TransportPreference.WiFi => 1,
+                TransportPreference.Ble => 2,
+                _ => 0
+            };
+            _suppressModeEvent = false;
 
-            PairToggle.Checked += (_, _) => PairPanel.Visibility = Visibility.Visible;
-            PairToggle.Unchecked += (_, _) => PairPanel.Visibility = Visibility.Collapsed;
-            SettingsToggle.Checked += (_, _) => SettingsPanel.Visibility = Visibility.Visible;
-            SettingsToggle.Unchecked += (_, _) => SettingsPanel.Visibility = Visibility.Collapsed;
-
-            // Set only after the handlers are attached, otherwise the chevron flips while
-            // the panel stays hidden. Pairing is the only useful action until a peer exists.
-            if (!ConnectionState.IsConnected) PairToggle.IsChecked = true;
-
-            // Reads the shared state rather than the TCP transport, so a Bluetooth-only link
-            // shows as connected instead of the window claiming to still be waiting.
             ConnectionState.Changed += ConnectionState_Changed;
             _activity.Changed += Activity_Changed;
 
-            // Relative timestamps ("2s ago") go stale silently otherwise.
+            // Relative timestamps go stale silently otherwise.
             _ageTimer = new DispatcherTimer(DispatcherPriority.Background)
             {
                 Interval = TimeSpan.FromSeconds(10)
@@ -84,10 +88,45 @@ namespace WinDaemon
             };
         }
 
+        // ────────────────────────────── navigation
+
+        private void Nav_Checked(object sender, RoutedEventArgs e)
+        {
+            if (PageHome == null) return; // fires once during template application
+
+            string section = (sender as FrameworkElement)?.Tag as string ?? "Home";
+            SectionTitle.Text = section;
+
+            PageHome.Visibility = section == "Home" ? Visibility.Visible : Visibility.Collapsed;
+            PageActivity.Visibility = section == "Activity" ? Visibility.Visible : Visibility.Collapsed;
+            PageDevices.Visibility = section == "Devices" ? Visibility.Visible : Visibility.Collapsed;
+            PageSettings.Visibility = section == "Settings" ? Visibility.Visible : Visibility.Collapsed;
+            PageAbout.Visibility = section == "About" ? Visibility.Visible : Visibility.Collapsed;
+
+            if (section == "Activity") RefreshActivity();
+        }
+
+        private void BtnCollapse_Click(object sender, RoutedEventArgs e)
+        {
+            _sidebarCollapsed = !_sidebarCollapsed;
+            Sidebar.Width = _sidebarCollapsed ? SidebarNarrow : SidebarWide;
+            BrandText.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+
+            // Labels go, icons stay, so the rail still works when narrow.
+            foreach (var nav in new[] { NavHome, NavActivity, NavDevices, NavSettings, NavAbout })
+            {
+                if (nav.Content is System.Windows.Controls.Panel panel && panel.Children.Count > 1)
+                {
+                    panel.Children[1].Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+                }
+            }
+
+            SidebarStatus.Visibility = _sidebarCollapsed ? Visibility.Collapsed : Visibility.Visible;
+        }
+
         // ────────────────────────────── status
 
-        private void ConnectionState_Changed() =>
-            Dispatcher.BeginInvoke(RefreshStatus);
+        private void ConnectionState_Changed() => Dispatcher.BeginInvoke(RefreshStatus);
 
         private void Activity_Changed(object? sender, EventArgs e) =>
             Dispatcher.BeginInvoke(() => { RefreshActivity(); RefreshStatus(); });
@@ -101,45 +140,38 @@ namespace WinDaemon
             IconSpinner.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
             StatusRing.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
 
-            var accent = connected ? "B.Accent" : "B.Warn";
-            var soft = connected ? "B.AccentSoft" : "B.WarnSoft";
+            string accent = connected ? "B.Accent" : "B.Warn";
+            string soft = connected ? "B.AccentSoft" : "B.WarnSoft";
             StatusHalo.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, soft);
             StatusHeadline.SetResourceReference(ForegroundProperty, accent);
+            SidebarDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, accent);
+
+            string peer = ConnectionState.PeerName ?? "your phone";
 
             if (connected)
             {
-                StatusHeadline.Text = overBle ? "CONNECTED OVER BLUETOOTH" : "CONNECTED";
-                string peer = ConnectionState.PeerName ?? "Paired device";
-
-                if (overBle)
-                {
-                    StatusDetail.Text = $"{peer}  ·  no Wi-Fi needed";
-                }
-                else
-                {
-                    string endpoint = _transport.RemoteEndPoint ?? "";
-                    int colon = endpoint.LastIndexOf(':');
-                    if (colon > 0) endpoint = endpoint.Substring(0, colon);
-                    StatusDetail.Text = string.IsNullOrEmpty(endpoint) ? peer : $"{peer}  ·  {endpoint}";
-                }
+                StatusHeadline.Text = overBle ? "Connected over Bluetooth" : "Connected";
+                StatusDetail.Text = overBle
+                    ? $"{peer}. No Wi-Fi needed - text syncs directly over Bluetooth."
+                    : $"{peer}. Copy on either device and it appears on the other.";
 
                 var last = _activity.LastActivityUtc;
-                StatusSub.Text = last.HasValue
-                    ? $"Last sync {Relative(last.Value)}"
-                    : "Ready - copy something to sync it";
+                StatusSub.Text = last.HasValue ? $"Last sync {Relative(last.Value)}" : "Ready - copy something to sync it";
 
-                PairHintBadge.Visibility = Visibility.Collapsed;
+                BtnPrimary.Content = "Pair another device";
+                SidebarStatus.Text = overBle ? "Bluetooth" : "Connected";
                 FooterHint.Text = overBle
                     ? "Text only over Bluetooth. Images need Wi-Fi."
                     : "Everything stays on your local network";
             }
             else
             {
-                StatusHeadline.Text = "WAITING FOR A DEVICE";
+                StatusHeadline.Text = "Waiting for a device";
                 StatusDetail.Text = "Open Mesh Sync on your phone and scan the pairing code.";
                 StatusSub.Text = "";
-                PairHintBadge.Visibility = Visibility.Visible;
-                FooterHint.Text = "Both devices must be on the same Wi-Fi";
+                BtnPrimary.Content = "Pair a device";
+                SidebarStatus.Text = "Waiting";
+                FooterHint.Text = "Both devices must be on the same Wi-Fi, or in Bluetooth range";
             }
 
             SentCount.Text = _activity.SentCount.ToString();
@@ -190,6 +222,45 @@ namespace WinDaemon
             return $"{(int)elapsed.TotalHours}h ago";
         }
 
+        private static string AppVersion()
+        {
+            try
+            {
+                var name = Assembly.GetExecutingAssembly().GetName();
+                return name.Version?.ToString(3) ?? "1.0.0";
+            }
+            catch
+            {
+                return "1.0.0";
+            }
+        }
+
+        // ────────────────────────────── transport mode
+
+        private void TransportMode_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressModeEvent || TransportHint == null) return;
+
+            var preference = TransportMode.SelectedIndex switch
+            {
+                1 => TransportPreference.WiFi,
+                2 => TransportPreference.Ble,
+                _ => TransportPreference.Both
+            };
+
+            TransportSettings.Set(preference);
+
+            TransportHint.Text = preference switch
+            {
+                TransportPreference.WiFi =>
+                    "Bluetooth is off. Nothing will sync when there is no network.",
+                TransportPreference.Ble =>
+                    "Wi-Fi is off. Text syncs with no network at all, but images will not send.",
+                _ =>
+                    "Wi-Fi carries text and images. Bluetooth carries text with no network at all."
+            };
+        }
+
         // ────────────────────────────── pairing
 
         private void RenderQrCode()
@@ -229,6 +300,11 @@ namespace WinDaemon
             string.IsNullOrEmpty(code) ? "unavailable"
             : code.Length <= 22 ? code
             : $"{code.Substring(0, 10)}…{code.Substring(code.Length - 8)}";
+
+        private void BtnPrimary_Click(object sender, RoutedEventArgs e)
+        {
+            NavDevices.IsChecked = true;
+        }
 
         private void BtnCopyCode_Click(object sender, RoutedEventArgs e)
         {
@@ -273,11 +349,7 @@ namespace WinDaemon
         {
             try
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = Program.LogDirectory,
-                    UseShellExecute = true
-                });
+                Process.Start(new ProcessStartInfo { FileName = Program.LogDirectory, UseShellExecute = true });
             }
             catch (Exception ex)
             {

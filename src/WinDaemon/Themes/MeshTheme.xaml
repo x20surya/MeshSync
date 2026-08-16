@@ -270,6 +270,122 @@
         </Setter>
     </Style>
 
+    <!-- ═══════════════════════ Sidebar navigation ═══════════════════════ -->
+
+    <SolidColorBrush x:Key="B.Sidebar" Color="{DynamicResource C.SurfaceAlt}" />
+
+    <Style TargetType="RadioButton" x:Key="S.NavItem">
+        <Setter Property="FontFamily" Value="{DynamicResource F.Sans}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{DynamicResource B.TextMuted}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Margin" Value="8,1" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid>
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Height="38" />
+                        <!-- Accent rail marks the active section, as in the reference. -->
+                        <Border x:Name="Rail" Width="3" Height="18" CornerRadius="2"
+                                HorizontalAlignment="Left" Margin="-8,0,0,0"
+                                Background="{DynamicResource B.Accent}"
+                                Visibility="Collapsed" />
+                        <ContentPresenter Margin="12,0,10,0" VerticalAlignment="Center" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Surface}" />
+                            <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Surface}" />
+                            <Setter TargetName="Rail" Property="Visibility" Value="Visible" />
+                            <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ═══════════════════════ ComboBox ═══════════════════════ -->
+
+    <Style TargetType="ComboBoxItem" x:Key="S.ComboItem">
+        <Setter Property="FontFamily" Value="{DynamicResource F.Sans}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+        <Setter Property="Padding" Value="12,9" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBoxItem">
+                    <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.SurfaceAlt}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.AccentSoft}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="ComboBox" x:Key="S.Combo">
+        <Setter Property="FontFamily" Value="{DynamicResource F.Sans}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="ItemContainerStyle" Value="{StaticResource S.ComboItem}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                Background="{DynamicResource B.Surface}"
+                                BorderBrush="{DynamicResource B.BorderStrong}"
+                                BorderThickness="1" CornerRadius="8" />
+                        <ToggleButton Background="Transparent" BorderThickness="0" Focusable="False"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="Transparent" />
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ContentPresenter Content="{TemplateBinding SelectionBoxItem}"
+                                          Margin="13,0,34,0" VerticalAlignment="Center"
+                                          IsHitTestVisible="False" />
+                        <Path Data="M 0,0 L 5,5 L 10,0" Stroke="{DynamicResource B.TextMuted}"
+                              StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round"
+                              HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0"
+                              IsHitTestVisible="False" />
+                        <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
+                               AllowsTransparency="True" PopupAnimation="Fade" Focusable="False">
+                            <Border Background="{DynamicResource B.Surface}"
+                                    BorderBrush="{DynamicResource B.Border}" BorderThickness="1"
+                                    CornerRadius="8" Margin="0,4,0,0"
+                                    MinWidth="{TemplateBinding ActualWidth}">
+                                <StackPanel IsItemsHost="True" />
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource B.Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ═══════════════════════ Segmented control ═══════════════════════ -->
 
     <Style TargetType="RadioButton" x:Key="S.Segment">
