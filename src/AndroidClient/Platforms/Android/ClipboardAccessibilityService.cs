@@ -89,7 +89,7 @@ namespace AndroidClient.Platforms.Android
 
                     if (item.Uri != null)
                     {
-                        var contentResolver = Android.App.Application.Context.ContentResolver;
+                        var contentResolver = this.ContentResolver;
                         var type = contentResolver?.GetType(item.Uri);
                         if (type != null && type.StartsWith("image/"))
                         {
