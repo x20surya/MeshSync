@@ -42,18 +42,49 @@ namespace AndroidClient
                 try
                 {
                     byte[] decrypted = CryptoEngine.Decrypt(args.EncryptedPayload, _aesKey);
-                    string receivedText = System.Text.Encoding.UTF8.GetString(decrypted);
+                    if (decrypted.Length == 0) return;
+                    
+                    byte type = decrypted[0];
+                    byte[] data = new byte[decrypted.Length - 1];
+                    Buffer.BlockCopy(decrypted, 1, data, 0, data.Length);
 
                     IsInjectingClipboard = true;
-                    OnClipboardReceived?.Invoke(receivedText);
-                    
-#if ANDROID
-                    var clipboard = (ClipboardManager?)Android.App.Application.Context.GetSystemService(Context.ClipboardService);
-                    if (clipboard != null)
+
+                    if (type == 0x00) // Text
                     {
-                        clipboard.PrimaryClip = ClipData.NewPlainText("Mesh", receivedText);
-                    }
+                        string receivedText = System.Text.Encoding.UTF8.GetString(data);
+                        OnClipboardReceived?.Invoke(receivedText);
+                        
+#if ANDROID
+                        var clipboard = (ClipboardManager?)Android.App.Application.Context.GetSystemService(Context.ClipboardService);
+                        if (clipboard != null)
+                        {
+                            clipboard.PrimaryClip = ClipData.NewPlainText("Mesh", receivedText);
+                        }
 #endif
+                    }
+                    else if (type == 0x01) // Image
+                    {
+                        OnClipboardReceived?.Invoke("[Image Received]");
+#if ANDROID
+                        var context = Android.App.Application.Context;
+                        var cacheDir = new Java.IO.File(context.CacheDir, "images");
+                        if (!cacheDir.Exists()) cacheDir.Mkdirs();
+                        
+                        var imageFile = new Java.IO.File(cacheDir, "clipboard.jpg");
+                        if (imageFile.Exists()) imageFile.Delete();
+                        
+                        System.IO.File.WriteAllBytes(imageFile.AbsolutePath, data);
+
+                        var uri = AndroidX.Core.Content.FileProvider.GetUriForFile(context, "com.companyname.androidclient.fileprovider", imageFile);
+                        var clipboard = (ClipboardManager?)context.GetSystemService(Context.ClipboardService);
+                        if (clipboard != null)
+                        {
+                            var clip = ClipData.NewUri(context.ContentResolver, "Mesh Sync Image", uri);
+                            clipboard.PrimaryClip = clip;
+                        }
+#endif
+                    }
                     
                     await Task.Delay(500);
                     IsInjectingClipboard = false;
@@ -126,8 +157,26 @@ namespace AndroidClient
         {
             if (Transport != null && Transport.IsConnected && !IsInjectingClipboard)
             {
-                byte[] payload = CryptoEngine.Encrypt(System.Text.Encoding.UTF8.GetBytes(text), _aesKey);
-                await Transport.SendPayloadAsync(payload);
+                byte[] textBytes = System.Text.Encoding.UTF8.GetBytes(text);
+                byte[] payload = new byte[textBytes.Length + 1];
+                payload[0] = 0x00;
+                Buffer.BlockCopy(textBytes, 0, payload, 1, textBytes.Length);
+
+                byte[] encrypted = CryptoEngine.Encrypt(payload, _aesKey);
+                await Transport.SendPayloadAsync(encrypted);
+            }
+        }
+
+        public static async Task SendClipboardImageAsync(byte[] imageBytes)
+        {
+            if (Transport != null && Transport.IsConnected && !IsInjectingClipboard)
+            {
+                byte[] payload = new byte[imageBytes.Length + 1];
+                payload[0] = 0x01;
+                Buffer.BlockCopy(imageBytes, 0, payload, 1, imageBytes.Length);
+
+                byte[] encrypted = CryptoEngine.Encrypt(payload, _aesKey);
+                await Transport.SendPayloadAsync(encrypted);
             }
         }
 

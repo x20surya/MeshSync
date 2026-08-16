@@ -118,14 +118,27 @@ namespace WinDaemon
                 try
                 {
                     byte[] decrypted = CoreLib.CryptoEngine.Decrypt(e.EncryptedPayload, aesKey);
-                    string receivedText = System.Text.Encoding.UTF8.GetString(decrypted);
+                    if (decrypted.Length == 0) return;
+                    
+                    byte type = decrypted[0];
+                    byte[] data = new byte[decrypted.Length - 1];
+                    Buffer.BlockCopy(decrypted, 1, data, 0, data.Length);
                     
                     IsInjecting = true;
                     Thread thread = new Thread(() =>
                     {
                         try
                         {
-                            Clipboard.SetText(receivedText);
+                            if (type == 0x00)
+                            {
+                                Clipboard.SetText(System.Text.Encoding.UTF8.GetString(data));
+                            }
+                            else if (type == 0x01)
+                            {
+                                using var ms = new System.IO.MemoryStream(data);
+                                using var img = System.Drawing.Image.FromStream(ms);
+                                Clipboard.SetImage(img);
+                            }
                         }
                         catch { }
                     });
@@ -145,8 +158,31 @@ namespace WinDaemon
                 {
                     try
                     {
-                        byte[] payload = CoreLib.CryptoEngine.Encrypt(System.Text.Encoding.UTF8.GetBytes(text), aesKey);
-                        await _tcpTransport.SendPayloadAsync(payload);
+                        byte[] textBytes = System.Text.Encoding.UTF8.GetBytes(text);
+                        byte[] payload = new byte[textBytes.Length + 1];
+                        payload[0] = 0x00; // Type 0 = Text
+                        Buffer.BlockCopy(textBytes, 0, payload, 1, textBytes.Length);
+                        
+                        byte[] encrypted = CoreLib.CryptoEngine.Encrypt(payload, aesKey);
+                        await _tcpTransport.SendPayloadAsync(encrypted);
+                    }
+                    catch { }
+                }
+            };
+
+            listener.ClipboardImageChanged += async (imgBytes) =>
+            {
+                if (IsInjecting) return;
+                if (_tcpTransport.IsConnected)
+                {
+                    try
+                    {
+                        byte[] payload = new byte[imgBytes.Length + 1];
+                        payload[0] = 0x01; // Type 1 = Image
+                        Buffer.BlockCopy(imgBytes, 0, payload, 1, imgBytes.Length);
+                        
+                        byte[] encrypted = CoreLib.CryptoEngine.Encrypt(payload, aesKey);
+                        await _tcpTransport.SendPayloadAsync(encrypted);
                     }
                     catch { }
                 }
@@ -181,6 +217,7 @@ namespace WinDaemon
 
         private const int WM_CLIPBOARDUPDATE = 0x031D;
         public event Action<string>? ClipboardTextChanged;
+        public event Action<byte[]>? ClipboardImageChanged;
 
         public ClipboardListenerWindow()
         {
@@ -200,7 +237,17 @@ namespace WinDaemon
                 try
                 {
                     System.Threading.Thread.Sleep(50);
-                    if (Clipboard.ContainsText())
+                    if (Clipboard.ContainsImage())
+                    {
+                        using var img = Clipboard.GetImage();
+                        if (img != null)
+                        {
+                            using var ms = new System.IO.MemoryStream();
+                            img.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
+                            ClipboardImageChanged?.Invoke(ms.ToArray());
+                        }
+                    }
+                    else if (Clipboard.ContainsText())
                     {
                         ClipboardTextChanged?.Invoke(Clipboard.GetText());
                     }

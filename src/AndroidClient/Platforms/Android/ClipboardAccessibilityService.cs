@@ -85,7 +85,35 @@ namespace AndroidClient.Platforms.Android
                 if (clipData != null && clipData.ItemCount > 0)
                 {
                     var item = clipData.GetItemAt(0);
-                    var text = item?.CoerceToText(this)?.ToString();
+                    if (item == null) return;
+
+                    if (item.Uri != null)
+                    {
+                        var contentResolver = Android.App.Application.Context.ContentResolver;
+                        var type = contentResolver?.GetType(item.Uri);
+                        if (type != null && type.StartsWith("image/"))
+                        {
+                            try
+                            {
+                                using var stream = contentResolver?.OpenInputStream(item.Uri);
+                                if (stream != null)
+                                {
+                                    using var ms = new System.IO.MemoryStream();
+                                    stream.CopyTo(ms);
+                                    byte[] imageBytes = ms.ToArray();
+                                    Console.WriteLine($"[Android] Copied Image captured: {imageBytes.Length} bytes");
+                                    await AndroidClient.SyncManager.SendClipboardImageAsync(imageBytes);
+                                    return; // Done processing image
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[Android] Failed to process copied image: {ex.Message}");
+                            }
+                        }
+                    }
+
+                    var text = item.CoerceToText(this)?.ToString();
                     
                     if (!string.IsNullOrEmpty(text))
                     {
