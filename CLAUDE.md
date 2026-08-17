@@ -22,6 +22,11 @@ dotnet run --project src/WinDaemon/WinDaemon.csproj
 Because of .NET 10 MAUI device deployment bugs, we compile and push manually.
 Use `install -r`, which preserves app data, the accessibility grant, the device identity and the
 paired devices.
+
+**The next install after the rename is the exception.** The application id moved from
+`com.companyname.androidclient` to `dev.meshsync.app`, and Android treats that as a different app:
+the old one has to be uninstalled, the accessibility grant regranted by hand, and the devices
+paired again. Once only.
 Never use `pm clear`: it revokes the grant, and only the user can restore it by hand.
 
 ```powershell
@@ -41,7 +46,7 @@ adb shell settings get secure enabled_accessibility_services
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-138 tests. Both apps hold a zero-warning bar, and an incremental build will not re-report
+205 tests. Both apps hold a zero-warning bar, and an incremental build will not re-report
 warnings, so use `-t:Rebuild` when you need to be sure.
 
 `src/CryptoTest` and `src/TransportTest` are console demos kept from early development.
@@ -74,16 +79,20 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
 ## Project Structure
 
 - `src/CoreLib`: cross-platform logic shared by both apps.
-  - `Identity/`: the device keypair, the peer registry, per-pair session keys, the pairing window.
+  - `Identity/`: the device keypair, the peer registry, per-connection session keys and the
+    agreement behind them, key-at-rest wrapping, the pairing window and its confirmation queue.
   - `Transport/`: the TCP acceptor and framed session, the per-peer mesh link table, Bluetooth
-    fragmentation, protocol constants and role negotiation, content types.
+    fragmentation, protocol constants and role negotiation, content types, file transfer and
+    notification framing.
   - Crypto (AES-256-GCM, Argon2id for the future vault), echo suppression, the in-memory activity
     log, and the logging sink.
-- `src/WinDaemon`: WPF window with sidebar navigation and a device list, Win32 clipboard listener,
-  TCP listener and dialler, Bluetooth GATT server and client, and the tray icon.
+- `src/WinDaemon`: WPF window with sidebar navigation, a device list, mirrored notifications and a
+  file drop target; Win32 clipboard listener, TCP listener and dialler, Bluetooth GATT server and
+  client, the ringer, and the tray icon.
 - `src/AndroidClient`: .NET MAUI app with a navigation drawer (Home, Activity, Devices, Settings,
-  About) plus the setup wizard, an accessibility service for the clipboard, a MediaStore observer
-  for screenshots, a `connectedDevice` foreground service, TCP listener and dialler, Bluetooth
-  GATT client and server, and the `PROCESS_TEXT` and share targets.
+  About) plus the setup wizard, an accessibility service for the clipboard, a notification listener
+  for mirroring, a MediaStore observer for screenshots, a `connectedDevice` foreground service, TCP
+  listener and dialler, Bluetooth GATT client and server, the ringer, and the `PROCESS_TEXT` and
+  share targets.
 - `src/assets`: brand handoff, the source of truth for the mark, palette and illustrations.
-- `tests/CoreLib.Tests`: 138 tests, including transport tests over real loopback sockets.
+- `tests/CoreLib.Tests`: 205 tests, including transport tests over real loopback sockets.

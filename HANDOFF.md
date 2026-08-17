@@ -5,10 +5,49 @@ Read this alongside [AGENTS.md](AGENTS.md), which describes the architecture and
 
 ---
 
+## The most recent session, in short
+
+The whole plan in `.lavish/mesh-sync-plan.html` was executed as far as phase 5.
+205 tests, up from 138; both apps build with no warnings.
+
+**Committed the tree first.** Everything below the identity work had been sitting uncommitted -
+about 3,600 insertions including the entire `Identity` tree - while the two most recent commits
+were documentation describing code git did not have. It went in as one safety commit, then was
+rewritten into a six-commit series before anything was pushed.
+
+**Forward secrecy on both tiers.** The agreement was static-static, so a recovered private key
+would have opened every session that pair had ever had. Each connection now mints an ephemeral
+keypair and mixes two ECDH secrets through HKDF. The key belongs to the connection rather than the
+peer, which is what `PeerSession` is.
+
+**The identity key is wrapped before it reaches the disk**, by DPAPI on Windows and a
+Keystore-held AES key on Android.
+
+**Pairing takes two steps.** Showing the code says somebody was invited; comparing the fingerprint
+on both screens says it is the right somebody.
+
+**Open source.** GPL-3.0, renamed to `dev.meshsync.app`, CI, and a threat model that says what is
+*not* covered.
+
+**Three features.** File transfer, find my device, notification mirroring.
+
+### What has not been near a phone
+
+Everything since the identity work, except the Windows DPAPI migration - that was verified end to
+end on a real key file: 138 bytes plaintext became 362 wrapped, same fingerprint, paired device
+intact, and the next run read it back without rewriting.
+
+The rest is tested over loopback and against its own protocols, which is real coverage and is not
+the same as a radio. **The first thing to do with a phone attached is a clean pair**, because the
+application id changed and Android will treat this as a different app: the accessibility grant and
+the existing pairing are both gone.
+
+---
+
 ## Where things stand
 
 The whole plan in `.lavish/ble-standby-build-order.html` is implemented.
-The solution builds with **0 warnings** and passes **138 tests**, up from 57 at the start.
+The solution builds with **0 warnings** and passes **205 tests**, up from 57 when this began.
 
 The shape of the project changed completely.
 It was a phone that dialled one hardcoded laptop, both sharing a single key baked into the source.
@@ -19,7 +58,8 @@ peer, and treat Bluetooth as the standing link with Wi-Fi raised on demand.
 
 **Every install no longer shares one key.**
 `DeriveKey("MasterPassword123", "Salt")` is gone from both sides.
-Each device has a persisted P-256 keypair; each *pair* agrees its own AES-256 key by ECDH.
+Each device has a persisted P-256 keypair, and each *connection* agrees its own AES-256 key - see
+the session above, which moved this on again from the per-pair key described here.
 A listener refuses a peer it has not paired with, rather than accepting anything that reaches it.
 
 **Bluetooth is the standing link.**
@@ -64,6 +104,19 @@ Devices announce their address to each other over whichever link is up.
 
 ### Not verified
 
+Everything in the table above was confirmed on hardware **before** the security and features work.
+Nothing since has been near a phone, so the whole list below is open, and the first four items in
+particular are things only a radio can answer.
+
+- **A pair under the new handshake.** Forward secrecy changed both wire formats and both ends must
+  update together. Loopback proves the agreement; it does not prove two radios agreeing.
+- **The fingerprint comparison, end to end.** Confirming on one device and watching the other
+  connect on its next retry.
+- **The Android Keystore wrap.** It compiles. The Windows half was verified on a real key file;
+  this half has not been run.
+- **A file crossing between two real devices**, and landing in Downloads through MediaStore.
+- **Ringing a phone that is face-down on silent**, which is the case the alarm stream exists for.
+- **Notification mirroring**, including whether dismissal really round-trips.
 - **Three devices at once.** The code holds a link per peer and fans out, but that path has only
   been exercised by tests over loopback.
 - **A phone acting as peripheral carrying real traffic.** The GATT server advertises and accepts
@@ -79,6 +132,58 @@ Devices announce their address to each other over whichever link is up.
 
 These cost real time to isolate.
 None of them are guessable from the documentation.
+
+### From the security and features work
+
+**A session key that belongs to the peer quietly breaks revocation.**
+The old key lived in a cache the registry could clear, so forgetting a device stopped it syncing
+at once.
+A session holds its own copy, so without an explicit check a forgotten device keeps working until
+its link happens to drop.
+`PeerSession.IsUsable` asks the registry on every payload for exactly that reason.
+
+**A hardcoded wire version in a test makes it pass for the wrong reason - again.**
+This is the second time. Bumping to 3 broke the same reassembly test, because a version mismatch
+drops a connection in precisely the way the test is trying to provoke.
+The constant is `internal` now and the test reads it, so the copy cannot go stale a third time.
+
+**Refusing to load a key file is not the same as being allowed to replace it.**
+The first attempt returned null for both, so a wrapped key that could not be unwrapped - a
+Keystore briefly unavailable, say - was overwritten by a fresh identity.
+A test caught it. There are two outcomes, and only one of them may touch the file.
+
+**An empty file never completes if completion is driven by chunks.**
+There is no chunk coming, because there is nothing to put in one.
+The transfer finishes at the offer instead. Another one a test caught rather than a person.
+
+**`SizeBytes` was an `int`.**
+Fine for a clipboard item, which cannot reach two gigabytes. A video can, and it would have been
+reported as a negative size.
+
+**WinForms makes `Timer` ambiguous too**, not only `Brush` and `MessageBox`.
+`Android.Media.Stream` collides with `System.IO.Stream` on the other side.
+Both are qualified where they appear.
+
+**`System.Security.Cryptography.ProtectedData` is in the SDK now.**
+Referencing the package explicitly produces `NU1510` rather than working quietly, which costs the
+zero-warning bar.
+
+**Play Store is closed to this app, and it is the accessibility service that closes it.**
+Google's accessibility policy is about serving users with disabilities, and a service configured
+with `canRetrieveWindowContent` reading `typeViewTextChanged` is the exact pattern it targets.
+It is also the only reason background clipboard capture works at all on Android 10 and above, so
+there is nothing to trim - removing it removes the product.
+
+**iOS can never be a peer**, for two separate reasons.
+Background pasteboard reads have returned nil since iOS 9, and a backgrounded app's advertised
+service UUIDs move to Apple's overflow area, which Windows and Android cannot see.
+`BleRoleRules` already handles the second one: iOS declares `Central` only, exactly like an
+Android phone without advertising hardware.
+
+**GNOME Wayland has no background clipboard access.**
+KWin and the wlroots compositors implement `wlr-data-control` and its successor
+`ext-data-control-v1`; Mutter implements neither, and GNOME is the default on Ubuntu, Fedora and
+Debian. A companion GNOME Shell extension is the way out.
 
 ### Identity and pairing
 
@@ -355,7 +460,7 @@ src/AndroidClient/    MAUI app with a navigation drawer: Home, Activity, Devices
                       About, plus the setup wizard. Accessibility service, foreground service,
                       screen watcher, GATT client and server, PROCESS_TEXT and share targets
 src/assets/           brand handoff: SVG, PNG, style sheet
-tests/CoreLib.Tests/  138 tests: crypto, identity, registry, wire formats, Bluetooth roles,
+tests/CoreLib.Tests/  205 tests: crypto, key agreement, identity, key storage, the registry,
                       and mesh links over real loopback sockets
 ```
 

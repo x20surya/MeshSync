@@ -133,6 +133,28 @@ none of its own, which is what stops two devices that disagree overwriting each 
 - Images are downscaled and re-encoded as JPEG before transmission.
 - `PROCESS_TEXT` and a share target are two further entry points that avoid the clipboard entirely.
 
+### 8. What the tiers carry, and why the split falls where it does
+
+Everything rides the same encrypted payload with a one-byte content type in front, so a new
+feature inherits authentication rather than arranging its own.
+The rule for which tier carries what is not preference, it is arithmetic: at roughly 6.7 KB/s
+Bluetooth carries anything small and nothing large.
+
+| | Size | Tier |
+|---|---|---|
+| Text, addresses, ring requests, notifications | Bytes to a kilobyte | Either. Works with no network at all |
+| Images | Tens to hundreds of KB | Wi-Fi, raised on demand with the wake frame |
+| Files | Unbounded | Wi-Fi only, streamed in 1 MB chunks |
+
+A file is the one thing that is not a single payload. It is an offer, a decision, and a stream
+written straight to disk as it arrives, with the SHA-256 in the offer so the receiver knows what
+it is checking for before the first byte - which is what makes a truncated transfer a failure
+rather than a file that looks complete.
+
+**Ringing is a content type rather than a two-byte control frame, deliberately.**
+Control frames ride outside the encrypted path, so anything that knew the service UUID could have
+made a phone shriek from across the street.
+
 ## Current Status
 
 - **Phase 1 (Foundation)**: COMPLETED.
@@ -143,7 +165,15 @@ none of its own, which is what stops two devices that disagree overwriting each 
   Bluetooth cannot carry and Wi-Fi following the screen.
 - **Phase 4d (Identity and mesh)**: COMPLETED. Real pairing crypto, a peer registry, symmetric
   roles on both tiers, a session per peer, a foreground service, address handover and a named mesh.
-- **Phase 5 (Password Vault)**: PENDING. Next step is SQLite storage and CRDT merging.
+- **Security prerequisites**: COMPLETED. Forward secrecy on both tiers, the identity key wrapped
+  by DPAPI and the Android Keystore, and a fingerprint comparison before a device is let in.
+- **Open source**: COMPLETED. GPL-3.0, `dev.meshsync.app`, CI on all three projects, a threat
+  model in SECURITY.md.
+- **File transfer, find my device, notification mirroring**: COMPLETED.
+- **Per-peer connection state**: PENDING. Both apps still know whether *anything* is reachable
+  rather than which peers are.
+- **Password vault**: PENDING and gated. It does not start unless Android autofill and a desktop
+  browser extension are also being built, because without those it is not a password manager.
 
 ### Known gaps
 
@@ -160,7 +190,16 @@ none of its own, which is what stops two devices that disagree overwriting each 
 - **Bluetooth caps the mesh at a handful of peers.** A GATT central holds around seven on Android.
   Wi-Fi has no such limit.
 - **Connection state is per app, not per peer.** Both apps know whether *anything* is reachable
-  rather than which peers are, so a device list can only mark one device connected.
+  rather than which peers are, so a device list can only mark one device connected - and it
+  currently guesses which by comparing names, which breaks outright with two devices called the
+  same thing.
+- **Nothing since the identity work has run on hardware.** Forward secrecy, the wrapped key on
+  Android, pairing confirmation, file transfer, ringing and notification mirroring have been
+  built and tested over loopback and against their own protocols, but no phone has been attached
+  since. The Windows DPAPI migration is the one exception - that was verified end to end on a
+  real key file.
+- **A file transfer does not resume.** A failure restarts it. Worth saying out loud so it does
+  not get half-built.
 
 ## Risks & Conflict Resolution
 
@@ -187,6 +226,16 @@ none of its own, which is what stops two devices that disagree overwriting each 
   the exception, because the liveness handshake runs before the identity exchange.
 - Both transports carry the same encrypted payload, so crypto, echo suppression and the activity
   log stay transport-agnostic. Keep it that way.
+- **A new content type goes in `SyncContent` and nowhere else**, and both apps must dispatch on
+  it. `SyncContentTests` fails until it is declared there, which is the reminder to go and handle
+  it in both - a collision would route a file chunk into the clipboard and look like nothing more
+  than an odd log line.
+- **Nothing that arrives from a peer decides where bytes land without being parsed.** An address
+  is checked as an IP; a filename is stripped of every path part on arrival as well as on the way
+  out. Both arrive inside authenticated payloads from paired devices, and both are still parsed
+  rather than believed.
+- **Mirrored notifications are never written down.** Not to the activity log, not to a cache, and
+  not into a log line carrying their contents. They are the most private thing this app touches.
 - **A data chunk's message id must never be zero** - use `BleProtocol.NextMessageId`. Zero marks an
   extended control frame, and the whole identity exchange rests on it.
 - **Both devices listen and dial**, so any change to connection handling must stay correct when two

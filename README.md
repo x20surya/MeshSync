@@ -40,6 +40,18 @@ Two tiers, both device to device.
 A device that copies something Bluetooth cannot carry sends a wake frame over the link that is
 already open, and its peer raises Wi-Fi in response.
 
+## What it does
+
+| | |
+|---|---|
+| **Clipboard** | Copy text or an image anywhere, paste it anywhere else |
+| **Files** | Send a file from the share sheet, the tray, or by dropping it on the window |
+| **Find my device** | Make a device sound an alarm, through silent mode, with no network |
+| **Notifications** | Mirror the apps you choose from your phone, and dismiss them from either end |
+
+Everything except files works with no network at all.
+Files need Wi-Fi, and asking for one raises it automatically.
+
 Pairing is one QR scan, then one comparison.
 The code carries an address, a public key and the mesh name.
 The device being joined then shows the four-group fingerprint of the device asking, and you check
@@ -105,10 +117,14 @@ it does not.
 
 ## Status
 
-Clipboard sync is complete and works on both tiers in both directions.
-Windows and Android are the platforms today; macOS and Linux are planned behind a shared desktop
-shell, and an iOS companion is planned as receive-mostly, because iOS does not let any app watch
-the clipboard in the background.
+Clipboard, files, find-my-device and notification mirroring are built and covered by tests.
+The clipboard tier has been exercised on real hardware; the rest has not been near a phone since
+it was written, which [HANDOFF.md](HANDOFF.md) sets out honestly.
+
+Windows and Android are the platforms today.
+macOS and Linux are planned behind a shared desktop shell; an iOS companion is planned as
+receive-mostly, because iOS does not let any app watch the clipboard in the background and a
+backgrounded iPhone cannot be found over Bluetooth by anything that is not another Apple device.
 
 See [AGENTS.md](AGENTS.md) for the architecture and the rules, and [HANDOFF.md](HANDOFF.md) for the
 findings behind the current design - most of them are not guessable from the code and cost real
