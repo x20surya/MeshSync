@@ -15,6 +15,13 @@ namespace CoreLib
         public const int Overhead = NonceSize + TagSize;
 
         /// <summary>
+        /// Overhead added by <see cref="EncryptTagged"/> - the nonce and tag plus the content
+        /// type byte. Exposed so a caller can size a payload before it knows which key it will
+        /// be encrypted with, which matters now that the key depends on the peer.
+        /// </summary>
+        public const int TaggedOverheadBytes = Overhead + 1;
+
+        /// <summary>
         /// Derives a 256-bit encryption key from a master password using Argon2id.
         /// This is deliberately expensive (~64 MB, ~200 ms) - never call it on a UI thread.
         /// </summary>
