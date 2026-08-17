@@ -2,8 +2,8 @@
 
 Please refer to [AGENTS.md](AGENTS.md) for the project overview, architecture rules, and strict
 guidelines for AI assistants.
-Read [HANDOFF.md](HANDOFF.md) before touching the transports: it records the findings behind the
-current design, most of which are not guessable from the documentation.
+Read [HANDOFF.md](HANDOFF.md) before touching the transports or pairing: it records the findings
+behind the current design, most of which are not guessable from the documentation.
 
 ## Useful Commands
 
@@ -20,7 +20,8 @@ dotnet run --project src/WinDaemon/WinDaemon.csproj
 ### Build & Deploy Android App (Manually)
 
 Because of .NET 10 MAUI device deployment bugs, we compile and push manually.
-Use `install -r`, which preserves app data and the accessibility grant.
+Use `install -r`, which preserves app data, the accessibility grant, the device identity and the
+paired devices.
 Never use `pm clear`: it revokes the grant, and only the user can restore it by hand.
 
 ```powershell
@@ -40,6 +41,9 @@ adb shell settings get secure enabled_accessibility_services
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
+138 tests. Both apps hold a zero-warning bar, and an incremental build will not re-report
+warnings, so use `-t:Rebuild` when you need to be sure.
+
 `src/CryptoTest` and `src/TransportTest` are console demos kept from early development.
 They print to the screen and assert nothing; the real coverage is in `tests/CoreLib.Tests`.
 
@@ -53,15 +57,33 @@ Get-Content "$env:LOCALAPPDATA\MeshSync\daemon.log" -Wait -Tail 20   # Windows
 adb logcat -s MeshSync                                               # Android
 ```
 
+### Identity & Pairing State
+
+Deleting either file forces a re-pair, which is the fastest way to test the pairing flow from
+scratch without `pm clear`.
+
+```powershell
+# Windows
+%LOCALAPPDATA%\MeshSync\device.key     # this device's keypair
+%LOCALAPPDATA%\MeshSync\peers.json     # paired devices and the mesh name
+
+# Android (app-private)
+adb shell run-as com.companyname.androidclient ls /data/data/com.companyname.androidclient/files
+```
+
 ## Project Structure
 
 - `src/CoreLib`: cross-platform logic shared by both apps.
-  Crypto (AES-256-GCM, Argon2id), the TCP transport, BLE fragmentation, echo suppression,
-  the in-memory activity log, and the logging sink.
-- `src/WinDaemon`: WPF window with sidebar navigation, Win32 clipboard listener, TCP server,
-  BLE GATT server, and the tray icon.
-- `src/AndroidClient`: .NET MAUI setup wizard and dashboard, accessibility service for the
-  clipboard, MediaStore observer for screenshots, TCP and BLE clients, and the
-  `PROCESS_TEXT` and share targets.
+  - `Identity/`: the device keypair, the peer registry, per-pair session keys, the pairing window.
+  - `Transport/`: the TCP acceptor and framed session, the per-peer mesh link table, Bluetooth
+    fragmentation, protocol constants and role negotiation, content types.
+  - Crypto (AES-256-GCM, Argon2id for the future vault), echo suppression, the in-memory activity
+    log, and the logging sink.
+- `src/WinDaemon`: WPF window with sidebar navigation and a device list, Win32 clipboard listener,
+  TCP listener and dialler, Bluetooth GATT server and client, and the tray icon.
+- `src/AndroidClient`: .NET MAUI app with a navigation drawer (Home, Activity, Devices, Settings,
+  About) plus the setup wizard, an accessibility service for the clipboard, a MediaStore observer
+  for screenshots, a `connectedDevice` foreground service, TCP listener and dialler, Bluetooth
+  GATT client and server, and the `PROCESS_TEXT` and share targets.
 - `src/assets`: brand handoff, the source of truth for the mark, palette and illustrations.
-- `tests/CoreLib.Tests`: 57 tests, including transport tests over real loopback sockets.
+- `tests/CoreLib.Tests`: 138 tests, including transport tests over real loopback sockets.
