@@ -160,12 +160,32 @@ namespace AndroidClient
                     existing = Volatile.Read(ref _security);
                     if (existing != null) return existing;
 
-                    var created = PeerSecurity.LoadOrCreate(StorageDirectory());
+                    var created = PeerSecurity.LoadOrCreate(StorageDirectory(), KeyProtector());
                     Volatile.Write(ref _security, created);
                     Log.Write("Sync", $"Identity {created.Identity.ShortFingerprint}, {created.Peers.Count} paired device(s).");
                     return created;
                 }
             }
+        }
+
+        /// <summary>
+        /// Wraps the private key with a Keystore-held AES key before it reaches the disk.
+        ///
+        /// Best effort by design: a device whose Keystore refuses stores the key as it always
+        /// was and keeps working, rather than refusing to start over a hardening measure.
+        /// </summary>
+        private static IKeyProtector? KeyProtector()
+        {
+#if ANDROID
+            try { return new Platforms.Android.AndroidKeyProtector(); }
+            catch (Exception ex)
+            {
+                Log.Write("Identity", "The Keystore is unavailable; the identity will be stored unwrapped.", ex);
+                return null;
+            }
+#else
+            return null;
+#endif
         }
 
         private static string StorageDirectory()

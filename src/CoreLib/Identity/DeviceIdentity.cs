@@ -54,39 +54,161 @@ namespace CoreLib.Identity
         }
 
         /// <summary>
+        /// Marks a key file whose contents have been wrapped by an <see cref="IKeyProtector"/>.
+        ///
+        /// Without it, a protected blob and a legacy plaintext PKCS#8 key are told apart only by
+        /// trying to parse one as the other and seeing what happens - which works right up until
+        /// a wrapped blob happens to parse, and then the device silently adopts a garbage
+        /// identity. Four bytes removes the guess entirely.
+        /// </summary>
+        private static readonly byte[] ProtectedMagic = "MSK1"u8.ToArray();
+
+        /// <summary>
         /// Loads this device's identity, creating and persisting one on first run.
         ///
-        /// A corrupt or unreadable key file is replaced rather than thrown, because a device
-        /// that cannot load its identity can do nothing at all - and a fresh identity, which
-        /// costs a re-pair, is a better outcome than an app that will not start. The re-pair
-        /// is visible; a silent failure to sync would not be.
+        /// <para>A corrupt or unreadable key file is replaced rather than thrown, because a
+        /// device that cannot load its identity can do nothing at all - and a fresh identity,
+        /// which costs a re-pair, is a better outcome than an app that will not start. The
+        /// re-pair is visible; a silent failure to sync would not be.</para>
+        ///
+        /// <para>A key written before <paramref name="protector"/> existed is read as plaintext
+        /// and immediately rewritten wrapped, so upgrading costs nothing and does not re-pair.
+        /// </para>
         /// </summary>
-        public static DeviceIdentity LoadOrCreate(string directory)
+        public static DeviceIdentity LoadOrCreate(string directory, IKeyProtector? protector = null)
         {
             if (string.IsNullOrWhiteSpace(directory)) throw new ArgumentException("A directory is required.", nameof(directory));
 
             Directory.CreateDirectory(directory);
             string path = Path.Combine(directory, PrivateKeyFileName);
 
+            bool mayReplace = true;
+
             if (File.Exists(path))
             {
-                try
-                {
-                    var key = ECDiffieHellman.Create();
-                    key.ImportPkcs8PrivateKey(File.ReadAllBytes(path), out _);
-                    return new DeviceIdentity(key);
-                }
-                catch (Exception ex)
-                {
-                    Diagnostics.Log.Write("Identity", "The stored identity could not be read; generating a new one. Devices will need re-pairing.", ex);
-                }
+                var loaded = TryLoad(path, protector, out mayReplace);
+                if (loaded != null) return loaded;
             }
 
             var created = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
 
+            if (mayReplace)
+            {
+                Persist(path, created, protector);
+            }
+            else
+            {
+                // Deliberately not written. The stored key is intact and a later run will very
+                // likely open it, so overwriting it would destroy a working identity to fix a
+                // problem that may be transient. This run syncs with nobody, which is loud.
+                Diagnostics.Log.Write("Identity",
+                    "Running on a temporary identity and leaving the stored one alone. Paired devices will not be recognised until it can be read again.");
+            }
+
+            var identity = new DeviceIdentity(created);
+            Diagnostics.Log.Write("Identity", $"Generated a new device identity, fingerprint {identity.ShortFingerprint}.");
+            return identity;
+        }
+
+        /// <summary>
+        /// Reads the stored identity. <paramref name="mayReplace"/> is false when the file could
+        /// not be read but is worth keeping - a wrapped key and no protector to open it, which
+        /// is a downgraded build or a keystore that is briefly unavailable rather than a corrupt
+        /// file.
+        /// </summary>
+        private static DeviceIdentity? TryLoad(string path, IKeyProtector? protector, out bool mayReplace)
+        {
+            mayReplace = true;
+
             try
             {
-                File.WriteAllBytes(path, created.ExportPkcs8PrivateKey());
+                byte[] stored = File.ReadAllBytes(path);
+                bool wasProtected = stored.Length > ProtectedMagic.Length &&
+                                    stored.AsSpan(0, ProtectedMagic.Length).SequenceEqual(ProtectedMagic);
+
+                byte[]? pkcs8;
+
+                if (wasProtected)
+                {
+                    if (protector == null)
+                    {
+                        // The file was wrapped by a build that had a protector and this one does
+                        // not. Keeping it beats minting a new identity, because the key is still
+                        // there and a later run will very likely be able to open it.
+                        Diagnostics.Log.Write("Identity",
+                            "The stored identity is wrapped but nothing here can unwrap it; leaving it untouched.");
+                        mayReplace = false;
+                        return null;
+                    }
+
+                    pkcs8 = protector.TryUnprotect(stored.AsSpan(ProtectedMagic.Length).ToArray());
+                    if (pkcs8 == null)
+                    {
+                        Diagnostics.Log.Write("Identity",
+                            "The stored identity could not be unwrapped - it may have been copied from another machine or user. Generating a new one; devices will need re-pairing.");
+                        return null;
+                    }
+                }
+                else
+                {
+                    pkcs8 = stored;
+                }
+
+                try
+                {
+                    var key = ECDiffieHellman.Create();
+                    key.ImportPkcs8PrivateKey(pkcs8, out _);
+
+                    // Upgrade in place. The key is unchanged, so nothing re-pairs; it is simply
+                    // no longer sitting on disk in the clear.
+                    if (!wasProtected && protector != null)
+                    {
+                        Diagnostics.Log.Write("Identity", $"Rewriting the stored identity wrapped by {protector.Name}.");
+                        Persist(path, key, protector);
+                    }
+
+                    return new DeviceIdentity(key);
+                }
+                finally
+                {
+                    if (!ReferenceEquals(pkcs8, stored)) CryptographicOperations.ZeroMemory(pkcs8);
+                    CryptographicOperations.ZeroMemory(stored);
+                }
+            }
+            catch (Exception ex)
+            {
+                Diagnostics.Log.Write("Identity",
+                    "The stored identity could not be read; generating a new one. Devices will need re-pairing.", ex);
+                return null;
+            }
+        }
+
+        private static void Persist(string path, ECDiffieHellman key, IKeyProtector? protector)
+        {
+            byte[] pkcs8 = key.ExportPkcs8PrivateKey();
+
+            try
+            {
+                byte[] toWrite;
+
+                if (protector == null)
+                {
+                    toWrite = pkcs8;
+                }
+                else
+                {
+                    byte[] wrapped = protector.Protect(pkcs8);
+                    toWrite = new byte[ProtectedMagic.Length + wrapped.Length];
+                    ProtectedMagic.CopyTo(toWrite, 0);
+                    wrapped.CopyTo(toWrite, ProtectedMagic.Length);
+                }
+
+                // Written beside the target and moved into place, so an interrupted write cannot
+                // leave a half-file that reads as a corrupt identity and costs a re-pair.
+                string temp = path + ".tmp";
+                File.WriteAllBytes(temp, toWrite);
+                File.Move(temp, path, overwrite: true);
+
                 RestrictToOwner(path);
             }
             catch (Exception ex)
@@ -95,10 +217,10 @@ namespace CoreLib.Identity
                 // restart. Failing outright would be a worse outcome than a logged warning.
                 Diagnostics.Log.Write("Identity", "Could not persist the device identity; it will not survive a restart.", ex);
             }
-
-            var identity = new DeviceIdentity(created);
-            Diagnostics.Log.Write("Identity", $"Generated a new device identity, fingerprint {identity.ShortFingerprint}.");
-            return identity;
+            finally
+            {
+                CryptographicOperations.ZeroMemory(pkcs8);
+            }
         }
 
         /// <summary>Creates an identity that is never written to disk. For tests.</summary>

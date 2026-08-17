@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools">
-	<application android:allowBackup="true" android:icon="@mipmap/appicon" android:roundIcon="@mipmap/appicon_round" android:supportsRtl="true">
+	<!-- allowBackup is false deliberately. The app's private directory holds device.key and
+	     peers.json, and a cloud backup would carry this device's identity off the device and
+	     restore it onto another one - which is a clone, not a restore, and would let two
+	     machines answer as the same peer. dataExtractionRules says the same thing to Android 12
+	     and above, which ignores allowBackup for cloud transfers. Losing them costs a re-pair,
+	     which is visible and cheap; the alternative is not. -->
+	<application android:allowBackup="false"
+	             android:dataExtractionRules="@xml/data_extraction_rules"
+	             android:fullBackupContent="false"
+	             android:icon="@mipmap/appicon" android:roundIcon="@mipmap/appicon_round" android:supportsRtl="true">
 		<provider
 			android:name="androidx.core.content.FileProvider"
 			android:authorities="com.companyname.androidclient.fileprovider"

@@ -85,8 +85,9 @@ namespace WinDaemon
             _listener = new ClipboardListenerWindow();
 
             // Loaded before anything can connect: the identity is what every session key is
-            // derived from and what decides whether a peer is let in at all.
-            _security = PeerSecurity.LoadOrCreate(LogDirectory);
+            // derived from and what decides whether a peer is let in at all. Wrapped by DPAPI
+            // so it is not a plain key file sitting in a predictable path under LOCALAPPDATA.
+            _security = PeerSecurity.LoadOrCreate(LogDirectory, new WindowsKeyProtector());
 
             // One link per paired device, and this machine both listens and dials. Nothing here
             // is a server: which side accepts a given link is settled per connection, so a

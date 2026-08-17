@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Android 12 and above ignore allowBackup for cloud backup and for device-to-device
+     transfer, and read this instead. Both are excluded outright: the app's private directory
+     holds device.key and peers.json, and restoring them onto a second device produces a clone
+     that answers as the same peer rather than a device that has been restored.
+
+     Losing them costs a re-pair, which is visible and takes one QR scan.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

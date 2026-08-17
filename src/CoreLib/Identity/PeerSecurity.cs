@@ -48,9 +48,15 @@ namespace CoreLib.Identity
             Peers = peers ?? throw new ArgumentNullException(nameof(peers));
         }
 
-        /// <summary>Loads or creates an identity and registry under one directory.</summary>
-        public static PeerSecurity LoadOrCreate(string directory) =>
-            new(DeviceIdentity.LoadOrCreate(directory), PeerRegistry.LoadOrCreate(directory));
+        /// <summary>
+        /// Loads or creates an identity and registry under one directory.
+        ///
+        /// <paramref name="protector"/> wraps the private key before it reaches the disk. Left
+        /// null it is stored as it always was, which is what the tests use and what a platform
+        /// with nothing to offer falls back to.
+        /// </summary>
+        public static PeerSecurity LoadOrCreate(string directory, IKeyProtector? protector = null) =>
+            new(DeviceIdentity.LoadOrCreate(directory, protector), PeerRegistry.LoadOrCreate(directory));
 
         /// <summary>Nothing persisted. For tests.</summary>
         public static PeerSecurity CreateEphemeral() =>
