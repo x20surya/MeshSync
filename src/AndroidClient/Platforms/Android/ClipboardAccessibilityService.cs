@@ -17,17 +17,13 @@ namespace AndroidClient.Platforms.Android
     [MetaData("android.accessibilityservice", Resource = "@xml/accessibility_service_config")]
     public class ClipboardAccessibilityService : AccessibilityService, ClipboardManager.IOnPrimaryClipChangedListener
     {
-        /// <summary>Shared with <see cref="CloseServiceReceiver"/> so both address the same notification.</summary>
-        public const int NotificationId = 1001;
-
-        private const string ChannelId = "clipboard_sync_channel";
-
         /// <summary>Cap on a single clipboard image read, to avoid an out-of-memory kill.</summary>
         private const int MaxClipboardImageBytes = 48 * 1024 * 1024;
 
         private ClipboardManager? _clipboardManager;
         private ScreenshotObserver? _screenshotObserver;
         private NetworkWatcher? _networkWatcher;
+        private ScreenStateWatcher? _screenWatcher;
 
         protected override void OnServiceConnected()
         {
@@ -48,18 +44,16 @@ namespace AndroidClient.Platforms.Android
                 _networkWatcher = new NetworkWatcher(this);
                 _networkWatcher.Start();
 
-                SyncManager.OnConnectionStatusChanged -= SyncManager_OnConnectionStatusChanged;
-                SyncManager.OnConnectionStatusChanged += SyncManager_OnConnectionStatusChanged;
+                // Decides whether the Wi-Fi link is held open, now that Bluetooth is the
+                // standing link rather than the fallback.
+                _screenWatcher = new ScreenStateWatcher(this);
+                _screenWatcher.Start();
 
-                // Drives the live notification text from real sync traffic.
-                SyncManager.Activity.Changed -= SyncManager_ActivityChanged;
-                SyncManager.Activity.Changed += SyncManager_ActivityChanged;
-
-                CreateNotificationChannel();
-                RefreshNotification();
-
-                // Not user-initiated: a service restart must not revive a stopped sync.
-                _ = SyncManager.AutoConnectAsync(false);
+                // The links, and the notification that reports them, belong to the foreground
+                // service now. This one is back to what it is actually for - watching the
+                // clipboard - rather than doubling as the thing keeping a socket alive, which
+                // it was never able to do.
+                SyncForegroundService.Start(this);
 
                 Log.Write("Service", "Accessibility service connected.");
             }
@@ -86,116 +80,14 @@ namespace AndroidClient.Platforms.Android
             }
         }
 
-        private void SyncManager_OnConnectionStatusChanged(string status) => RefreshNotification();
-
-        private void SyncManager_ActivityChanged(object? sender, EventArgs e) => RefreshNotification();
-
-        /// <summary>
-        /// Repaints the ongoing notification from live state: who we are connected to, and
-        /// what moved most recently. This is the only Mesh Sync UI most of the time, so it
-        /// should never sit on stale text.
-        /// </summary>
-        private void RefreshNotification()
-        {
-            try
-            {
-                // Honour an explicit Stop. Without this the "Disconnected" status raised while
-                // tearing the connection down re-posted the very notification Stop removed.
-                if (SyncManager.IsPaused)
-                {
-                    var manager = (NotificationManager?)GetSystemService(NotificationService);
-                    manager?.Cancel(NotificationId);
-                    return;
-                }
-
-                string title;
-                string body;
-
-                if (SyncManager.IsConnected)
-                {
-                    title = $"Connected to {SyncManager.PeerName ?? "your computer"}";
-
-                    var latest = SyncManager.Activity.Snapshot().FirstOrDefault();
-                    body = latest == null
-                        ? "Ready - copy something to sync it"
-                        : $"{(latest.Direction == SyncDirection.Sent ? "Sent" : "Received")} · {latest.Title} · {latest.RelativeAge}";
-                }
-                else if (SyncManager.IsPaired)
-                {
-                    title = "Reconnecting…";
-                    body = $"Looking for {SyncManager.PairedAddress}";
-                }
-                else
-                {
-                    title = "Mesh Sync";
-                    body = "Not paired yet - open the app to pair";
-                }
-
-                ShowPersistentNotification(title, body);
-            }
-            catch (Exception ex)
-            {
-                Log.Write("Service", "Notification update failed", ex);
-            }
-        }
-
-        private void CreateNotificationChannel()
-        {
-            if (Build.VERSION.SdkInt < BuildVersionCodes.O) return;
-
-            var channel = new NotificationChannel(ChannelId, "Clipboard Sync", NotificationImportance.Low)
-            {
-                Description = "Persistent notification for manual clipboard syncing"
-            };
-            var notificationManager = (NotificationManager?)GetSystemService(NotificationService);
-            notificationManager?.CreateNotificationChannel(channel);
-        }
-
-        private void ShowPersistentNotification(string title, string statusText)
-        {
-            var syncIntent = new Intent(this, typeof(SyncActivity));
-            var pendingSyncIntent = PendingIntent.GetActivity(this, 0, syncIntent,
-                PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable);
-
-            var closeIntent = new Intent(this, typeof(CloseServiceReceiver));
-            var pendingCloseIntent = PendingIntent.GetBroadcast(this, 1, closeIntent,
-                PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable);
-
-            // Built with discrete calls rather than a fluent chain: each builder method is
-            // bound as returning a nullable Builder, so chaining warns on every hop.
-            var builder = new Notification.Builder(this, ChannelId);
-            builder.SetContentTitle(title);
-            builder.SetContentText(statusText);
-            builder.SetSmallIcon(global::Android.Resource.Drawable.IcMenuSend);
-            builder.SetOngoing(true);
-            // Repaints in place instead of re-alerting on every sync.
-            builder.SetOnlyAlertOnce(true);
-            builder.SetShowWhen(false);
-            // Icon-based actions; the (int, string, PendingIntent) overload has been
-            // deprecated since API 23.
-            builder.AddAction(BuildAction(global::Android.Resource.Drawable.IcMenuShare, "Sync Clipboard", pendingSyncIntent));
-            builder.AddAction(BuildAction(global::Android.Resource.Drawable.IcMenuCloseClearCancel, "Stop Service", pendingCloseIntent));
-
-            var notification = builder.Build();
-            if (notification == null) return;
-
-            var notificationManager = (NotificationManager?)GetSystemService(NotificationService);
-            notificationManager?.Notify(NotificationId, notification);
-        }
-
-        private Notification.Action BuildAction(int iconResource, string title, PendingIntent? intent)
-        {
-            var icon = global::Android.Graphics.Drawables.Icon.CreateWithResource(this, iconResource);
-            return new Notification.Action.Builder(icon, title, intent).Build()!;
-        }
-
         public void OnPrimaryClipChanged()
         {
-            // Android 14 lets users swipe away even an ongoing notification, and this is a
-            // plain accessibility service rather than a foreground service, so the system
-            // will not refuse the dismissal. Re-posting on clipboard activity brings it back
-            // the moment it is relevant again, which is when the user copies something.
-            RefreshNotification();
+            // A copy is proof the user is here, so it is also the cheapest moment to notice
+            // the foreground service is gone - killed for memory, or refused at startup - and
+            // put it back. It used to re-post a notification here for the same reason, because
+            // Android 14 lets a plain ongoing notification be swiped away. A real foreground
+            // service's notification cannot be, so this is now about the service itself.
+            if (!SyncForegroundService.IsRunning) SyncForegroundService.Start(this);
 
             // The listener fires on the main thread; hand off immediately so reading the
             // clip and encrypting it never blocks the UI.
@@ -287,9 +179,6 @@ namespace AndroidClient.Platforms.Android
         {
             try
             {
-                SyncManager.OnConnectionStatusChanged -= SyncManager_OnConnectionStatusChanged;
-                SyncManager.Activity.Changed -= SyncManager_ActivityChanged;
-
                 if (_clipboardManager != null)
                 {
                     _clipboardManager.RemovePrimaryClipChangedListener(this);
@@ -308,6 +197,13 @@ namespace AndroidClient.Platforms.Android
                     _networkWatcher.Stop();
                     _networkWatcher.Dispose();
                     _networkWatcher = null;
+                }
+
+                if (_screenWatcher != null)
+                {
+                    _screenWatcher.Stop();
+                    _screenWatcher.Dispose();
+                    _screenWatcher = null;
                 }
             }
             catch (Exception ex)

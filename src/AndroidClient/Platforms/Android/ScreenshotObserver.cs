@@ -1,4 +1,4 @@
-using Android.Content;
+﻿using Android.Content;
 using Android.Database;
 using Android.OS;
 using Android.Provider;
@@ -84,7 +84,7 @@ namespace AndroidClient.Platforms.Android
                 Log.Write("Screenshot", $"Pushing {imageBytes.Length} bytes.");
                 await SyncManager.SendClipboardImageAsync(imageBytes).ConfigureAwait(false);
 
-                if (SyncManager.IsConnected) ShowToast("Screenshot beamed to PC!");
+                if (SyncManager.IsConnected) ShowToast("Screenshot sent");
             }
             catch (Exception ex)
             {

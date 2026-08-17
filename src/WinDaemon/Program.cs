@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using CoreLib;
 using CoreLib.Diagnostics;
+using CoreLib.Identity;
 using CoreLib.Transport;
 using Microsoft.Win32;
 using Forms = System.Windows.Forms;
@@ -15,16 +16,30 @@ namespace WinDaemon
 {
     static class Program
     {
-        private const byte ContentText = 0x00;
-        private const byte ContentImage = 0x01;
+        private const byte ContentText = SyncContent.Text;
+        private const byte ContentImage = SyncContent.Image;
 
         private const string RunKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
         private const string RunValueName = "MeshSyncDaemon";
         private const string SettingsKeyPath = @"SOFTWARE\MeshSync";
         private const string SingleInstanceMutex = @"Global\MeshSyncDaemon.SingleInstance";
 
-        private static TcpTransportConnection? _transport;
+        private static MeshLinks? _mesh;
+
+        /// <summary>The Bluetooth service this machine publishes, for peers that connect to it.</summary>
         private static WindowsBleTransport? _bleTransport;
+
+        /// <summary>
+        /// The Bluetooth link this machine opens, for peers it should connect to instead.
+        ///
+        /// Which of the two applies to a given peer is decided by <see cref="BleRoleRules"/>
+        /// rather than by platform. Without it, two laptops would both advertise and neither
+        /// would ever go looking.
+        /// </summary>
+        private static WindowsBleCentral? _bleCentral;
+
+        private static CancellationTokenSource? _dialCts;
+        private static CancellationTokenSource? _bleCentralCts;
         private static ClipboardWorker? _clipboard;
         private static ClipboardListenerWindow? _listener;
         private static Forms.NotifyIcon? _trayIcon;
@@ -35,10 +50,13 @@ namespace WinDaemon
         private static readonly SyncActivityLog _activity = new(capacity: 12);
         private static readonly EchoSuppressor _echo = new(TimeSpan.FromSeconds(10));
 
-        private static byte[]? _aesKey;
+        private static PeerSecurity? _security;
         private static bool _trayHintShown;
 
         public static string LogDirectory { get; private set; } = "";
+
+        /// <summary>This device's identity and the devices it is paired with. Null before startup.</summary>
+        public static PeerSecurity? Security => _security;
 
         [STAThread]
         static void Main(string[] args)
@@ -65,13 +83,34 @@ namespace WinDaemon
 
             _clipboard = new ClipboardWorker();
             _listener = new ClipboardListenerWindow();
-            _transport = new TcpTransportConnection { LocalDeviceName = Environment.MachineName };
 
-            var trustManager = new TrustManager();
-            string pairingCode = trustManager.GetMyPublicKeyPin();
+            // Loaded before anything can connect: the identity is what every session key is
+            // derived from and what decides whether a peer is let in at all.
+            _security = PeerSecurity.LoadOrCreate(LogDirectory);
+
+            // One link per paired device, and this machine both listens and dials. Nothing here
+            // is a server: which side accepts a given link is settled per connection, so a
+            // laptop can pair with a laptop as readily as with a phone.
+            _mesh = new MeshLinks(_security) { LocalDeviceName = Environment.MachineName };
+
+            string pairingCode = _security.Identity.PublicKey;
             string localIp = NetworkUtil.GetLocalLanAddress() ?? "Unavailable";
 
-            Log.Write("Daemon", $"Starting. LAN address {localIp}, startup launch: {isStartup}");
+            Log.Write("Daemon",
+                $"Starting. LAN address {localIp}, identity {_security.Identity.ShortFingerprint}, " +
+                $"{_security.Peers.Count} paired device(s), startup launch: {isStartup}");
+
+            // Named on first run so there is something to call the set of devices from the
+            // outset. The user can change it; a device that joins later adopts whatever this
+            // one is called, because the pairing code carries it.
+            if (string.IsNullOrWhiteSpace(_security.Peers.MeshName))
+            {
+                _security.Peers.MeshName = DefaultMeshName();
+            }
+
+            // With nothing paired there is no way for a first device to be let in, so the
+            // window opens itself on a fresh install. It lapses on its own.
+            if (_security.Peers.IsEmpty) _security.Pairing.Open();
 
             WireClipboardCapture();
             WirePayloadReceive();
@@ -97,16 +136,23 @@ namespace WinDaemon
             });
             ThemeManager.Apply(_app);
 
-            _window = new MainWindow(localIp, pairingCode, _transport, _activity);
+            _window = new MainWindow(localIp, pairingCode, _activity);
             _window.ExitRequested += ExitApp;
 
             CreateTrayIcon();
 
             // Both transports report into ConnectionState; the tray and the dashboard read
             // only that, so a Bluetooth-only link shows as connected like any other.
-            _transport.ClientConnected += (_, _) => ConnectionState.SetWiFi(true, _transport.RemoteDeviceName);
-            _transport.ConnectionClosed += (_, _) => ConnectionState.SetWiFi(false);
-            _transport.PeerIdentified += (_, e) => ConnectionState.SetWiFi(true, e.DeviceName);
+            _mesh.PeerConnected += peer =>
+            {
+                ConnectionState.SetWiFi(true, peer.Name);
+
+                // Telling a peer where we are is what makes a lease change survivable; without
+                // it the address in the QR code is the only one it will ever know.
+                AnnounceAddressOverMesh(peer.Fingerprint);
+            };
+
+            _mesh.PeerDisconnected += _ => ConnectionState.SetWiFi(_mesh.IsConnectedToAny);
             ConnectionState.Changed += UpdateTrayState;
 
             if (!isStartup) _window.ShowDashboard();
@@ -116,6 +162,20 @@ namespace WinDaemon
         }
 
         // ────────────────────────────── tray
+
+        /// <summary>
+        /// "Surya's Mesh", from the signed-in user. A guess, and a better starting point than
+        /// an empty box - most people will never change it, and the ones who do would have had
+        /// to type something anyway.
+        /// </summary>
+        private static string DefaultMeshName()
+        {
+            string user = Environment.UserName;
+            if (string.IsNullOrWhiteSpace(user)) return "My Mesh";
+
+            user = char.ToUpperInvariant(user[0]) + user.Substring(1);
+            return user.EndsWith("s", StringComparison.OrdinalIgnoreCase) ? $"{user}' Mesh" : $"{user}'s Mesh";
+        }
 
         private static void CreateTrayIcon()
         {
@@ -145,11 +205,14 @@ namespace WinDaemon
                 _trayIcon.Icon = TrayIcons.Create(connected);
                 previous?.Dispose();
 
-                string peer = ConnectionState.PeerName ?? "your phone";
+                // Named after the mesh, not after whichever device answered - the tray text is
+                // the same sentence the window shows, and both are about the set rather than one
+                // member of it.
+                string mesh = _security?.Peers.MeshNameOrDefault ?? "your mesh";
                 string via = ConnectionState.ActiveLink == LinkKind.Ble ? " over Bluetooth" : "";
                 _trayIcon.Text = connected
-                    ? $"Mesh Sync - connected to {peer}{via}"
-                    : "Mesh Sync - waiting for a device";
+                    ? $"Mesh Sync - {mesh} connected{via}"
+                    : $"Mesh Sync - {mesh} unreachable";
             });
         }
 
@@ -172,12 +235,13 @@ namespace WinDaemon
         {
             try
             {
-                _aesKey = CryptoEngine.DeriveKey("MasterPassword123", System.Text.Encoding.UTF8.GetBytes("Salt"));
-                Log.Write("Daemon", "Key derivation complete.");
-
+                // No key derivation here any more. Keys are per peer and derived by agreement
+                // against the public key each one presents, so there is nothing to prepare
+                // until a peer actually turns up.
                 if (TransportSettings.AllowsWiFi)
                 {
-                    await _transport!.StartListeningAsync().ConfigureAwait(false);
+                    await _mesh!.StartListeningAsync().ConfigureAwait(false);
+                    StartDialLoop();
                 }
                 else
                 {
@@ -193,12 +257,20 @@ namespace WinDaemon
             // there is no network at all. Failure here must not affect the TCP path.
             try
             {
-                _bleTransport = new WindowsBleTransport();
+                _bleTransport = new WindowsBleTransport
+                {
+                    LocalPublicKey = _security!.Identity.PublicKey,
+                    LocalDeviceName = Environment.MachineName,
+                    LocalMeshName = _security.Peers.MeshName,
+                    AuthorisePeer = key => _security.Authorise(key)
+                };
+
                 WireBleTransport(_bleTransport);
 
                 if (TransportSettings.AllowsBle)
                 {
                     await _bleTransport.StartListeningAsync().ConfigureAwait(false);
+                    StartBleCentralLoop();
                 }
                 else
                 {
@@ -221,13 +293,30 @@ namespace WinDaemon
         {
             try
             {
-                if (TransportSettings.AllowsWiFi) await _transport!.StartListeningAsync().ConfigureAwait(false);
-                else await _transport!.DisconnectAsync().ConfigureAwait(false);
+                if (TransportSettings.AllowsWiFi)
+                {
+                    await _mesh!.StartListeningAsync().ConfigureAwait(false);
+                    StartDialLoop();
+                }
+                else
+                {
+                    _dialCts?.Cancel();
+                    _mesh!.StopListening();
+                }
 
                 if (_bleTransport != null)
                 {
-                    if (TransportSettings.AllowsBle) await _bleTransport.StartListeningAsync().ConfigureAwait(false);
-                    else await _bleTransport.DisconnectAsync().ConfigureAwait(false);
+                    if (TransportSettings.AllowsBle)
+                    {
+                        await _bleTransport.StartListeningAsync().ConfigureAwait(false);
+                        StartBleCentralLoop();
+                    }
+                    else
+                    {
+                        _bleCentralCts?.Cancel();
+                        RetireBleCentral();
+                        await _bleTransport.DisconnectAsync().ConfigureAwait(false);
+                    }
                 }
 
                 Log.Write("Daemon", $"Applied transport preference {preference}.");
@@ -248,6 +337,11 @@ namespace WinDaemon
             {
                 Log.Write("Daemon", "Phone connected over BLE.");
                 ConnectionState.SetBle(true);
+
+                // The link Bluetooth is holding is also the one that can tell the phone where
+                // to dial when it needs Wi-Fi, which is the case a lease change would otherwise
+                // break with no way to recover short of rescanning the code.
+                AnnounceAddressOverBle(ble, BluetoothPeerFingerprint());
             };
 
             ble.ConnectionClosed += (_, _) =>
@@ -256,7 +350,24 @@ namespace WinDaemon
                 ConnectionState.SetBle(false);
             };
 
-            ble.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE");
+            ble.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE", e.Fingerprint);
+
+            // Now that the tier says who it is talking to, the address can be announced to the
+            // right device rather than to whichever one happened to be the only one paired.
+            ble.PeerIdentified += (_, e) =>
+            {
+                ConnectionState.SetBle(true);
+
+                // Bluetooth carries the peer's name in its hello now, so a device paired only
+                // over Bluetooth has something to be called in the tray and the dashboard.
+                if (!string.IsNullOrWhiteSpace(e.DeviceName))
+                {
+                    _security?.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName);
+                    ConnectionState.SetBle(true, e.DeviceName);
+                }
+
+                AnnounceAddressOverBle(ble, e.Fingerprint);
+            };
         }
 
         private static void WireClipboardCapture()
@@ -285,33 +396,21 @@ namespace WinDaemon
             };
         }
 
+        /// <summary>
+        /// How long to wait for the phone to raise Wi-Fi after being asked.
+        ///
+        /// Covers the notification reaching it, the decision, and the socket coming back the
+        /// other way. Bounded because the request is not a guarantee: the phone may be out of
+        /// Wi-Fi range or have it switched off, in which case nothing will ever arrive.
+        /// </summary>
+        private static readonly TimeSpan WiFiWakeTimeout = TimeSpan.FromSeconds(15);
+
         private static void SendCapture(byte contentType, byte[] body, string? textContent)
         {
-            var key = _aesKey;
-            if (key == null) return;
+            if (_security == null) return;
 
-            // Wi-Fi first: it carries anything. BLE is the fallback for when there is no
-            // network at all, and only for text, since at BLE throughput an image would
-            // take minutes.
-            ITransportConnection? transport = null;
-            string via = "Wi-Fi";
-
-            if (_transport?.IsConnected == true)
-            {
-                transport = _transport;
-            }
-            else if (_bleTransport?.IsConnected == true && contentType == ContentText)
-            {
-                transport = _bleTransport;
-                via = "BLE";
-            }
-            else if (_bleTransport?.IsConnected == true)
-            {
-                Log.Write("Daemon", "Skipping image: only BLE is connected and it is text-only.");
-                return;
-            }
-
-            if (transport == null) return;
+            // Nothing at all is reachable, so there is no point encrypting anything.
+            if (_mesh?.IsConnectedToAny != true && _bleTransport?.IsConnected != true) return;
 
             // One gate for both "this is our own injection bouncing back" and "this is a
             // repeat WM_CLIPBOARDUPDATE for a copy we just sent". Checking them separately
@@ -324,66 +423,167 @@ namespace WinDaemon
                 return;
             }
 
-            byte[] encrypted;
+            _ = Task.Run(async () =>
+            {
+                // Fanned out rather than sent: there is one key per pair, so a copy goes to
+                // every connected device as its own ciphertext. Nobody relays, so there is no
+                // routing to get wrong and no loop to prevent.
+                int sent = _mesh != null ? await _mesh.BroadcastAsync(contentType, body).ConfigureAwait(false) : 0;
+
+                sent += await SendOverBluetoothAsync(contentType, body).ConfigureAwait(false);
+
+                if (sent == 0)
+                {
+                    Log.Write("Daemon", "Nothing was reachable, so the item was dropped.");
+                    return;
+                }
+
+                _activity.Record(SyncDirection.Sent,
+                    contentType == ContentText ? SyncItemKind.Text : SyncItemKind.Image,
+                    body.Length, textContent);
+
+                Log.Write("Daemon",
+                    $"Sent {(contentType == ContentText ? "text" : "image")} to {sent} device(s), {body.Length} bytes.");
+            });
+        }
+
+        /// <summary>
+        /// Sends over Bluetooth, but only to a device Wi-Fi did not already reach.
+        ///
+        /// Without that check a phone holding both links would receive every copy twice, which
+        /// is a real prospect now that both are held at once rather than one replacing the
+        /// other. Returns how many devices it reached, so the caller can tell whether anything
+        /// went anywhere at all.
+        /// </summary>
+        private static async Task<int> SendOverBluetoothAsync(byte contentType, byte[] body)
+        {
+            if (_security == null) return 0;
+
+            // Either role may be the live one, so the send path asks which rather than assuming
+            // this machine is the peripheral.
+            bool viaCentral = _bleCentral?.IsConnected == true;
+            ITransportConnection? ble = viaCentral ? _bleCentral : _bleTransport;
+            if (ble?.IsConnected != true) return 0;
+
+            string? fingerprint = BluetoothPeerFingerprint();
+            if (fingerprint == null) return 0;
+
+            if (_mesh?.IsConnectedTo(fingerprint) == true) return 0;
+
+            byte[]? encrypted = _security.EncryptFor(fingerprint, contentType, body);
+            if (encrypted == null) return 0;
+
+            if (encrypted.Length > BleProtocol.MaxPayloadBytes)
+            {
+                // Too big for Bluetooth, and this machine may not be able to dial the peer, so
+                // the route is to ask it to raise Wi-Fi and come to us. Before Bluetooth became
+                // the standing link this was logged and dropped, which was tolerable when
+                // Bluetooth was rarely up and would now mean losing every image copied here.
+                Log.Write("Daemon",
+                    $"{encrypted.Length} bytes is over the Bluetooth ceiling; asking the peer to raise Wi-Fi.");
+
+                bool asked = viaCentral
+                    ? await _bleCentral!.RequestWiFiAsync().ConfigureAwait(false)
+                    : await _bleTransport!.RequestWiFiAsync(fingerprint).ConfigureAwait(false);
+
+                if (!asked) return 0;
+
+                var deadline = DateTime.UtcNow + WiFiWakeTimeout;
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (_mesh?.IsConnectedTo(fingerprint) == true)
+                    {
+                        Log.Write("Daemon", "The phone raised Wi-Fi; sending over it.");
+                        return await _mesh.SendToAsync(fingerprint, contentType, body).ConfigureAwait(false) ? 1 : 0;
+                    }
+
+                    await Task.Delay(200).ConfigureAwait(false);
+                }
+
+                Log.Write("Daemon",
+                    $"The phone did not raise Wi-Fi within {WiFiWakeTimeout.TotalSeconds:F0}s; the item was dropped.");
+                return 0;
+            }
+
             try
             {
-                encrypted = CryptoEngine.EncryptTagged(contentType, body, key);
+                // Addressed rather than broadcast when we are the peripheral: notifying the
+                // characteristic reaches every subscriber, and each payload is sealed for one.
+                if (viaCentral) await _bleCentral!.SendPayloadAsync(encrypted).ConfigureAwait(false);
+                else await _bleTransport!.SendPayloadToAsync(fingerprint, encrypted).ConfigureAwait(false);
+
+                return 1;
             }
             catch (Exception ex)
             {
-                Log.Write("Daemon", "Encryption failed", ex);
-                return;
+                Log.Write("Daemon", "Send over Bluetooth failed", ex);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Which paired device the Bluetooth link belongs to.
+        ///
+        /// Bluetooth carries no identity exchange, so this can only be answered when there is
+        /// exactly one device it could possibly be. That covers the one-phone case and is
+        /// honest about not covering more: a mesh of three needs identity on that tier, which
+        /// arrives with the symmetric Bluetooth work.
+        /// </summary>
+        private static string? BluetoothPeerFingerprint()
+        {
+            // Announced over the link, since Bluetooth grew an identity exchange. That is what
+            // lifts this tier out of only working when exactly one device was paired.
+            if (_bleCentral?.IsConnected == true && !string.IsNullOrEmpty(_bleCentral.RemoteFingerprint))
+                return _bleCentral.RemoteFingerprint;
+
+            string announced = _bleTransport?.RemoteFingerprint ?? "";
+            if (!string.IsNullOrEmpty(announced)) return announced;
+
+            var peers = _security?.Peers.Peers;
+            if (peers == null || peers.Count == 0) return null;
+
+            if (peers.Count > 1)
+            {
+                // An older build on the other end, which never says who it is. With one paired
+                // device that is still inferable; with several it is a guess, so it is refused.
+                Log.Write("Daemon",
+                    $"{peers.Count} devices are paired and this Bluetooth peer has not identified itself, so it was not used.");
+                return null;
             }
 
-            int limit = via == "BLE" ? BleProtocol.MaxPayloadBytes : TcpTransportConnection.MaxPayloadBytes;
-            if (encrypted.Length > limit)
-            {
-                Log.Write("Daemon", $"Refusing to send {encrypted.Length} byte payload over {via} (limit {limit}).");
-                return;
-            }
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await transport.SendPayloadAsync(encrypted).ConfigureAwait(false);
-                    _activity.Record(SyncDirection.Sent,
-                        contentType == ContentText ? SyncItemKind.Text : SyncItemKind.Image,
-                        body.Length, textContent);
-                    Log.Write("Daemon", $"Sent {(contentType == ContentText ? "text" : "image")} payload over {via}, {encrypted.Length} bytes.");
-                }
-                catch (Exception ex)
-                {
-                    Log.Write("Daemon", $"Send over {via} failed", ex);
-                }
-            });
+            return peers[0].Fingerprint;
         }
 
         private static void WirePayloadReceive()
         {
-            _transport!.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "Wi-Fi");
+            // The mesh decrypts before it raises this, because working out which key opens a
+            // payload is also how it works out which device sent it.
+            _mesh!.PayloadReceived += (_, e) => Apply(e.Peer, e.ContentType, e.Body, "Wi-Fi");
         }
 
-        private static void HandleIncomingPayload(byte[] encrypted, string via)
+        private static void HandleIncomingPayload(byte[] encrypted, string via, string fingerprintHint)
         {
-            var key = _aesKey;
-            if (key == null)
+            var security = _security;
+            if (security == null) return;
+
+            // Which key decrypts it is also the answer to who sent it. Nothing else on the
+            // wire says so, and nothing else needs to: AES-GCM authenticates, so a payload
+            // that opens under a peer's key could only have been produced by that peer.
+            if (!security.TryDecrypt(encrypted, fingerprintHint, out var decrypted))
             {
-                Log.Write("Daemon", "Dropped payload: key derivation has not finished yet.");
+                Log.Write("Daemon",
+                    security.Peers.IsEmpty
+                        ? "Dropped a payload: no devices are paired, so there is no key to try."
+                        : "Dropped a payload: no paired device's key authenticates it.");
                 return;
             }
 
-            byte contentType;
-            byte[] body;
-            try
-            {
-                (contentType, body) = CryptoEngine.DecryptTagged(encrypted, key);
-            }
-            catch (Exception ex)
-            {
-                Log.Write("Daemon", "Decryption failed - different key or corrupt frame", ex);
-                return;
-            }
+            Apply(decrypted.Peer, decrypted.ContentType, decrypted.Body, via);
+        }
+
+        private static void Apply(PeerRecord peer, byte contentType, byte[] body, string via)
+        {
+            string from = peer.Name ?? DeviceIdentity.Shorten(peer.Fingerprint);
 
             _echo.NoteInbound(body, contentType == ContentImage ? SyncItemKind.Image : SyncItemKind.Text);
 
@@ -393,17 +593,271 @@ namespace WinDaemon
                     string text = System.Text.Encoding.UTF8.GetString(body);
                     _clipboard!.SetText(text);
                     _activity.Record(SyncDirection.Received, SyncItemKind.Text, body.Length, text);
-                    Log.Write("Daemon", $"Received text payload over {via}, {body.Length} bytes.");
+                    Log.Write("Daemon", $"Received text from {from} over {via}, {body.Length} bytes.");
                     break;
                 case ContentImage:
                     _clipboard!.SetImage(body);
                     _activity.Record(SyncDirection.Received, SyncItemKind.Image, body.Length);
-                    Log.Write("Daemon", $"Received image payload over {via}, {body.Length} bytes.");
+                    Log.Write("Daemon", $"Received image from {from} over {via}, {body.Length} bytes.");
+                    break;
+                case SyncContent.Address:
+                    NoteAnnouncedAddress(peer.Fingerprint, body, from);
                     break;
                 default:
-                    Log.Write("Daemon", $"Ignoring unknown content type {contentType}.");
+                    Log.Write("Daemon", $"Ignoring unknown content type {contentType} from {from}.");
                     break;
             }
+        }
+
+        /// <summary>
+        /// Records where a peer says it is reachable.
+        ///
+        /// Parsed rather than trusted: an address is the one field that decides where the next
+        /// connection goes, so anything that is not literally an IP address is discarded. It
+        /// arrives inside an authenticated payload, so it can only have come from a paired
+        /// device, but a paired device with a bug should not be able to poison the registry
+        /// either.
+        /// </summary>
+        private static void NoteAnnouncedAddress(string fingerprint, byte[] body, string from)
+        {
+            string address = System.Text.Encoding.UTF8.GetString(body).Trim();
+
+            if (!System.Net.IPAddress.TryParse(address, out _))
+            {
+                Log.Write("Daemon", $"Ignoring an implausible address announced by {from}.");
+                return;
+            }
+
+            _security?.Peers.NoteSeen(fingerprint, address);
+            Log.Write("Daemon", $"{from} is reachable at {address}.");
+        }
+
+        /// <summary>
+        /// Tells a peer where this device is reachable, so a DHCP lease change cannot strand it.
+        ///
+        /// Sent on every link that comes up rather than only when the address changes: this
+        /// side has no way to know what the peer last recorded, and the payload is a few dozen
+        /// bytes on a link that has just been established anyway.
+        /// </summary>
+        private static void AnnounceAddressOverMesh(string fingerprint)
+        {
+            string? address = NetworkUtil.GetLocalLanAddress();
+            if (string.IsNullOrEmpty(address) || _mesh == null) return;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _mesh.SendToAsync(fingerprint, SyncContent.Address,
+                        System.Text.Encoding.UTF8.GetBytes(address)).ConfigureAwait(false);
+                    Log.Write("Daemon", $"Announced this computer at {address}.");
+                }
+                catch (Exception ex)
+                {
+                    // Informational. A failure here costs nothing until the address changes.
+                    Log.Write("Daemon", "Could not announce this computer's address", ex);
+                }
+            });
+        }
+
+        private static void AnnounceAddressOverBle(ITransportConnection link, string? fingerprint)
+        {
+            if (fingerprint == null || _security == null) return;
+
+            string? address = NetworkUtil.GetLocalLanAddress();
+            if (string.IsNullOrEmpty(address)) return;
+
+            byte[]? payload = _security.EncryptFor(fingerprint, SyncContent.Address,
+                System.Text.Encoding.UTF8.GetBytes(address));
+            if (payload == null) return;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await link.SendPayloadAsync(payload).ConfigureAwait(false);
+                    Log.Write("Daemon", $"Announced this computer at {address} over Bluetooth.");
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Daemon", "Could not announce this computer's address over Bluetooth", ex);
+                }
+            });
+        }
+
+        /// <summary>How often to try reaching paired devices that are not currently connected.</summary>
+        private static readonly TimeSpan DialInterval = TimeSpan.FromSeconds(20);
+
+        /// <summary>How often to look for a Bluetooth peer this machine should connect to.</summary>
+        private static readonly TimeSpan BleScanInterval = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// True when this machine should be the one connecting over Bluetooth, for any peer.
+        ///
+        /// The peer's capability is assumed to be both roles, which is the optimistic reading:
+        /// a peer that can only ever be a central will simply never be found by this scan and
+        /// will find us instead, because the service stays advertised either way. Getting it
+        /// wrong therefore costs nothing, whereas not scanning at all would leave two laptops
+        /// waiting for each other.
+        /// </summary>
+        private static bool ShouldDialAnyPeerOverBluetooth()
+        {
+            var security = _security;
+            if (security == null) return false;
+
+            foreach (var peer in security.Peers.Peers)
+            {
+                var role = BleRoleRules.DecideFor(
+                    security.Identity.Fingerprint, BleCapability.Both,
+                    peer.Fingerprint, BleCapability.Both);
+
+                if (role == BleRole.Central) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Looks for a Bluetooth peer this machine should connect to, rather than wait for.
+        ///
+        /// Windows only ever advertised, which is why Bluetooth could join a phone to a
+        /// computer and nothing else - two laptops would both publish a service and neither
+        /// would go looking. Advertising continues alongside this: the two are not exclusive,
+        /// and a peer that cannot advertise depends on us still being findable.
+        /// </summary>
+        private static void StartBleCentralLoop()
+        {
+            _bleCentralCts?.Cancel();
+            _bleCentralCts = new CancellationTokenSource();
+            var token = _bleCentralCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        if (TransportSettings.AllowsBle &&
+                            _bleCentral?.IsConnected != true &&
+                            _bleTransport?.IsConnected != true &&
+                            ShouldDialAnyPeerOverBluetooth())
+                        {
+                            await TryBleCentralConnectAsync(token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch (Exception ex)
+                    {
+                        Log.Write("Daemon", "A Bluetooth scan round failed", ex);
+                    }
+
+                    try { await Task.Delay(BleScanInterval, token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
+            });
+        }
+
+        private static async Task TryBleCentralConnectAsync(CancellationToken token)
+        {
+            RetireBleCentral();
+
+            var central = new WindowsBleCentral
+            {
+                LocalPublicKey = _security!.Identity.PublicKey,
+                LocalDeviceName = Environment.MachineName,
+                LocalMeshName = _security.Peers.MeshName,
+                AuthorisePeer = key => _security.Authorise(key)
+            };
+
+            central.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE", e.Fingerprint);
+            central.ConnectionClosed += (_, _) =>
+            {
+                Log.Write("Daemon", "The outbound Bluetooth link closed.");
+                ConnectionState.SetBle(_bleTransport?.IsConnected == true);
+            };
+            central.PeerIdentified += (_, e) =>
+            {
+                ConnectionState.SetBle(true, e.DeviceName);
+
+                if (!string.IsNullOrWhiteSpace(e.DeviceName))
+                    _security?.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName);
+
+                AnnounceAddressOverBle(central, e.Fingerprint);
+            };
+            central.WiFiRequested += (_, _) =>
+            {
+                // Nothing to raise on this side - the listener is always up - so the useful
+                // response is to go to the peer rather than wait for it.
+                Log.Write("Daemon", "A peer asked for Wi-Fi; dialling it now.");
+                _ = _mesh?.ConnectToAllAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+            };
+
+            _bleCentral = central;
+
+            var address = await central.FindPeerAsync(TimeSpan.FromSeconds(12), token).ConfigureAwait(false);
+            if (address == null)
+            {
+                RetireBleCentral();
+                return;
+            }
+
+            try
+            {
+                await central.ConnectAsync(address.Value.ToString("X"), token).ConfigureAwait(false);
+                Log.Write("Daemon", "Connected to a peer over Bluetooth as the central.");
+                ConnectionState.SetBle(true);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Daemon", "Connecting over Bluetooth as the central failed", ex);
+                RetireBleCentral();
+            }
+        }
+
+        private static void RetireBleCentral()
+        {
+            var central = Interlocked.Exchange(ref _bleCentral, null);
+            if (central == null) return;
+
+            try { central.Dispose(); }
+            catch (Exception ex) { Log.Write("Daemon", "Disposing the Bluetooth central failed", ex); }
+        }
+
+        /// <summary>
+        /// Dials paired devices that are not connected.
+        ///
+        /// This side used to listen and nothing else, because the phone was hardcoded as the
+        /// client. It cannot stay that way once any device can pair with any other: two
+        /// laptops would both sit waiting for the other to call. So both ends dial, and the
+        /// collision that produces is settled in <see cref="MeshLinks"/>.
+        /// </summary>
+        private static void StartDialLoop()
+        {
+            _dialCts?.Cancel();
+            _dialCts = new CancellationTokenSource();
+            var token = _dialCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        if (_mesh != null && TransportSettings.AllowsWiFi)
+                        {
+                            await _mesh.ConnectToAllAsync(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch (Exception ex)
+                    {
+                        Log.Write("Daemon", "A dialling round failed", ex);
+                    }
+
+                    try { await Task.Delay(DialInterval, token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
+            });
         }
 
         // ────────────────────────────── lifetime
@@ -426,6 +880,9 @@ namespace WinDaemon
 
             try
             {
+                try { _bleCentralCts?.Cancel(); } catch { }
+                RetireBleCentral();
+
                 _bleTransport?.Dispose();
                 Log.Write("Daemon", "Released the Bluetooth service.");
             }
@@ -452,12 +909,12 @@ namespace WinDaemon
             }
             catch { }
             try { _listener?.Dispose(); } catch { }
-            try { _transport?.Dispose(); } catch { }
-            
+            try { _dialCts?.Cancel(); _dialCts?.Dispose(); } catch { }
+            try { _mesh?.Dispose(); } catch { }
             try { _clipboard?.Dispose(); } catch { }
 
-            var key = Interlocked.Exchange(ref _aesKey, null);
-            if (key != null) CryptographicOperations.ZeroMemory(key);
+            // Zeroes every cached per-peer key and disposes the private key with it.
+            try { Interlocked.Exchange(ref _security, null)?.Dispose(); } catch { }
 
             try { _instanceMutex?.ReleaseMutex(); } catch { }
             _instanceMutex?.Dispose();

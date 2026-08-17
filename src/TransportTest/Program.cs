@@ -44,9 +44,12 @@ namespace TransportTest
             {
                 var discovery = new TcpDiscoveryService();
                 var connection = new TcpTransportConnection();
-                
-                // Device A acts as the "Server" listening for a TCP connection
-                await connection.StartListeningAsync(token);
+
+                // Listening moved to TcpAcceptor when a session-per-peer became possible, so
+                // this demo accepts through one and hands the socket to a connection.
+                var acceptor = new TcpAcceptor();
+                acceptor.Accepted += client => connection.Adopt(client, token);
+                await acceptor.StartAsync(token);
                 Console.WriteLine("[Device A] 📡 Listening for TCP connections...");
 
                 connection.PayloadReceived += (s, e) =>

@@ -1,4 +1,4 @@
-using Android.App;
+﻿using Android.App;
 using Android.Content;
 using Android.Content.PM;
 using Android.OS;
@@ -15,7 +15,7 @@ namespace AndroidClient.Platforms.Android
     ///
     /// This complements <see cref="ProcessTextActivity"/> rather than replacing it. The
     /// selection toolbar reserves its first row for Copy / Share / Select all and appends
-    /// app actions after them, so "Send to PC" can end up behind the overflow. Share is one
+    /// app actions after them, so "Send to my devices" can end up behind the overflow. Share is one
     /// of those reserved first-row buttons, so routing through it is always two taps from a
     /// selection - and unlike the text toolbar it works from any app's share button and
     /// carries images as well as text.
@@ -23,7 +23,7 @@ namespace AndroidClient.Platforms.Android
     /// Android also learns frequently used share targets and promotes them to the top row.
     /// </summary>
     [Activity(
-        Label = "Send to PC",
+        Label = "Send to my devices",
         Theme = "@android:style/Theme.Translucent.NoTitleBar",
         Exported = true,
         ExcludeFromRecents = true,
@@ -59,7 +59,7 @@ namespace AndroidClient.Platforms.Android
 
                 if (!SyncManager.IsPaired)
                 {
-                    Notify("Pair with your computer first");
+                    Notify("Pair a device first");
                     return;
                 }
 
@@ -69,7 +69,7 @@ namespace AndroidClient.Platforms.Android
                     return;
                 }
 
-                string peer = SyncManager.PeerName ?? "your computer";
+                string peer = SyncManager.PeerName ?? "your devices";
 
                 if (await TrySendSharedImageAsync().ConfigureAwait(true))
                 {

@@ -12,8 +12,7 @@ namespace AndroidClient.Platforms.Android
             if (context == null) return;
 
             // Order matters. PauseAsync records the stop first, so the "Disconnected" status
-            // it raises on the way out is ignored by the notification code instead of
-            // immediately re-posting the notification this action just removed.
+            // it raises on the way out cannot revive anything this action just took down.
             var pending = GoAsync();
 
             _ = System.Threading.Tasks.Task.Run(async () =>
@@ -22,9 +21,10 @@ namespace AndroidClient.Platforms.Android
                 {
                     await SyncManager.PauseAsync().ConfigureAwait(false);
 
-                    var notificationManager =
-                        (NotificationManager?)context.GetSystemService(Context.NotificationService);
-                    notificationManager?.Cancel(ClipboardAccessibilityService.NotificationId);
+                    // Stopping the service is what removes the notification now. Cancelling it
+                    // directly would not: a foreground service's notification belongs to the
+                    // service, and the system re-posts it for as long as the service is up.
+                    SyncForegroundService.Stop(context);
 
                     Log.Write("Service", "User stopped Mesh Sync from the notification.");
                 }

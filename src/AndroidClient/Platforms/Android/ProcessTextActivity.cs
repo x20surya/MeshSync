@@ -1,4 +1,4 @@
-using Android.App;
+﻿using Android.App;
 using Android.Content;
 using Android.Content.PM;
 using Android.OS;
@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 namespace AndroidClient.Platforms.Android
 {
     /// <summary>
-    /// Adds "Send to PC" to the text selection toolbar that appears alongside
+    /// Adds "Send to my devices" to the text selection toolbar that appears alongside
     /// Copy / Paste / Select all, in any app.
     ///
     /// Android offers every activity with a PROCESS_TEXT filter as an item in that toolbar,
@@ -21,7 +21,7 @@ namespace AndroidClient.Platforms.Android
     /// No result is returned, so the selected text is left exactly as it was.
     /// </summary>
     [Activity(
-        Label = "Send to PC",
+        Label = "Send to my devices",
         Theme = "@android:style/Theme.Translucent.NoTitleBar",
         Exported = true,
         ExcludeFromRecents = true,
@@ -68,7 +68,7 @@ namespace AndroidClient.Platforms.Android
 
                 if (!SyncManager.IsPaired)
                 {
-                    Notify("Pair with your computer first");
+                    Notify("Pair a device first");
                     return;
                 }
 
@@ -80,7 +80,7 @@ namespace AndroidClient.Platforms.Android
 
                 await SyncManager.SendClipboardAsync(text!).ConfigureAwait(true);
 
-                string peer = SyncManager.PeerName ?? "your computer";
+                string peer = SyncManager.PeerName ?? "your devices";
                 Notify($"Sent to {peer}");
                 Log.Write("ProcessText", $"Sent {text!.Length} characters from the selection toolbar.");
             }

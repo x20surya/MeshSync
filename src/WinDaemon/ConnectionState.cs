@@ -58,15 +58,27 @@ namespace WinDaemon
             if (changed) Raise();
         }
 
-        public static void SetBle(bool connected)
+        /// <summary>
+        /// Records the Bluetooth link, and the peer's name once it has announced one.
+        ///
+        /// Bluetooth used to carry no name at all, so a device paired only over Bluetooth had
+        /// nothing to be called and every label fell back to "your devices". Its hello carries
+        /// one now, which matters most in exactly the case Bluetooth exists for: no network.
+        /// </summary>
+        public static void SetBle(bool connected, string? peerName = null)
         {
             bool changed;
             lock (Gate)
             {
                 changed = _ble != connected;
                 _ble = connected;
-                // BLE carries no hello frame, so it contributes no name of its own.
-                if (!connected && !_wifi) _peerName = null;
+
+                if (connected && !string.IsNullOrEmpty(peerName) && _peerName != peerName)
+                {
+                    _peerName = peerName;
+                    changed = true;
+                }
+                else if (!connected && !_wifi) _peerName = null;
             }
 
             if (changed) Raise();

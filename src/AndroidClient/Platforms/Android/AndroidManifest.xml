@@ -33,4 +33,12 @@
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 	<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 	<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+	<!-- The links are held by a real foreground service now. Before this there was an ongoing
+	     notification and no startForeground behind it, so Android would not keep a socket open
+	     in that context and Doze eventually killed it. connectedDevice is the type that
+	     describes what is actually being held; on Android 14+ it is granted on the strength of
+	     BLUETOOTH_CONNECT above. -->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 </manifest>

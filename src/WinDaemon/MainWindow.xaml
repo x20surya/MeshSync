@@ -1,4 +1,4 @@
-<Window x:Class="WinDaemon.MainWindow"
+﻿<Window x:Class="WinDaemon.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
@@ -214,7 +214,7 @@
                             <TextBlock x:Name="StatusDetail" Style="{StaticResource T.Muted}" FontSize="13.5"
                                        HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
                                        Margin="0,7,0,0"
-                                       Text="Open Mesh Sync on your phone and scan the pairing code." />
+                                       Text="Open Mesh Sync on another device and scan the pairing code." />
 
                             <Button x:Name="BtnPrimary" Style="{StaticResource S.BtnPrimary}"
                                     Content="Pair a device" HorizontalAlignment="Center"
@@ -229,13 +229,13 @@
                             <ComboBox x:Name="TransportMode" Style="{StaticResource S.Combo}"
                                       SelectionChanged="TransportMode_Changed">
                                 <ComboBoxItem Content="Wi-Fi and Bluetooth" Tag="Both" />
-                                <ComboBoxItem Content="Wi-Fi only (fastest, carries images)" Tag="WiFi" />
-                                <ComboBoxItem Content="Bluetooth only (no network needed)" Tag="Ble" />
+                                <ComboBoxItem Content="Wi-Fi only (carries images, needs a network)" Tag="WiFi" />
+                                <ComboBoxItem Content="Bluetooth only (text, no network needed)" Tag="Ble" />
                             </ComboBox>
                             <TextBlock x:Name="TransportHint" Style="{StaticResource T.Base}" FontSize="11.5"
                                        Foreground="{DynamicResource B.TextFaint}" TextWrapping="Wrap"
                                        Margin="2,8,0,0"
-                                       Text="Wi-Fi carries text and images. Bluetooth carries text with no network at all." />
+                                       Text="Bluetooth stays connected and carries text with no network at all. Wi-Fi is brought up when there is an image to send." />
 
                             <Border Style="{StaticResource S.Card}" Padding="0" Margin="0,22,0,0">
                                 <Grid Height="70">
@@ -315,11 +315,73 @@
 
                         <!-- ─────────── DEVICES ─────────── -->
                         <StackPanel x:Name="PageDevices" Visibility="Collapsed" MaxWidth="480">
-                            <TextBlock Text="Pair a device" Style="{StaticResource T.Base}" FontSize="19"
+                            <TextBlock Text="Your mesh" Style="{StaticResource T.Base}" FontSize="19"
                                        FontWeight="SemiBold" FontFamily="{DynamicResource F.Display}"
                                        Margin="0,22,0,4" />
                             <TextBlock Style="{StaticResource T.Muted}" FontSize="12.5" TextWrapping="Wrap"
-                                       Text="Open Mesh Sync on your phone and scan this code with its camera." />
+                                       Text="What to call this set of devices. A device that scans the code below joins under this name." />
+
+                            <TextBox x:Name="MeshNameBox" Margin="0,10,0,0" Padding="10,7"
+                                     MaxLength="40"
+                                     FontSize="13.5"
+                                     Background="{DynamicResource B.Surface}"
+                                     Foreground="{DynamicResource B.Text}"
+                                     BorderBrush="{DynamicResource B.Border}" BorderThickness="1"
+                                     LostFocus="MeshNameBox_LostFocus" KeyDown="MeshNameBox_KeyDown" />
+
+                            <TextBlock x:Name="DevicesHeading" Text="Devices" Style="{StaticResource T.Base}"
+                                       FontSize="19" FontWeight="SemiBold"
+                                       FontFamily="{DynamicResource F.Display}" Margin="0,26,0,4" />
+                            <TextBlock x:Name="DevicesSub" Style="{StaticResource T.Muted}" FontSize="12.5"
+                                       TextWrapping="Wrap" Text="Everything paired into this mesh." />
+
+                            <Border Style="{StaticResource S.Card}" Margin="0,12,0,0" Padding="6">
+                                <StackPanel>
+                                    <ItemsControl x:Name="DeviceList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="12,11">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <Ellipse Grid.Column="0" Width="9" Height="9"
+                                                             VerticalAlignment="Center" Margin="2,0,12,0"
+                                                             Fill="{Binding Dot}" />
+
+                                                    <StackPanel Grid.Column="1">
+                                                        <TextBlock Text="{Binding Name}" Style="{StaticResource T.Base}"
+                                                                   FontSize="13.5" FontWeight="SemiBold"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding Detail}" Style="{StaticResource T.Muted}"
+                                                                   FontSize="11.5" Margin="0,2,0,0"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+
+                                                    <Button Grid.Column="2" Style="{StaticResource S.BtnQuiet}"
+                                                            Content="Forget" Padding="12,5" FontSize="11.5"
+                                                            VerticalAlignment="Center"
+                                                            Tag="{Binding Fingerprint}"
+                                                            Click="BtnForgetDevice_Click" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <TextBlock x:Name="DevicesEmpty"
+                                               Text="No devices yet. Add one with the code below."
+                                               Style="{StaticResource T.Muted}" FontSize="12.5"
+                                               HorizontalAlignment="Center" Margin="0,22,0,24" />
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="Add a device" Style="{StaticResource T.Base}" FontSize="19"
+                                       FontWeight="SemiBold" FontFamily="{DynamicResource F.Display}"
+                                       Margin="0,26,0,4" />
+                            <TextBlock Style="{StaticResource T.Muted}" FontSize="12.5" TextWrapping="Wrap"
+                                       Text="Open Mesh Sync on another device and scan this code with its camera." />
 
                             <Border Style="{StaticResource S.Card}" Margin="0,16,0,0" Padding="20">
                                 <StackPanel>
@@ -352,7 +414,7 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Code" Style="{StaticResource T.Muted}"
+                                        <TextBlock Grid.Column="0" Text="Key" Style="{StaticResource T.Muted}"
                                                    FontSize="12.5" VerticalAlignment="Center" Width="74" />
                                         <TextBlock Grid.Column="1" x:Name="CodeText" Style="{StaticResource T.Mono}"
                                                    Foreground="{DynamicResource B.TextMuted}"
@@ -477,10 +539,10 @@
                             <Border Style="{StaticResource S.Card}" Margin="0,26,0,0">
                                 <StackPanel>
                                     <TextBlock Style="{StaticResource T.Base}" TextWrapping="Wrap" FontSize="13"
-                                               Text="Your clipboard, shared between this computer and your phone, over your own network or directly over Bluetooth." />
+                                               Text="Your clipboard, shared between your own devices. Over your network, or directly over Bluetooth when there is no network at all." />
                                     <Rectangle Height="1" Fill="{DynamicResource B.Border}" Margin="0,14" />
                                     <TextBlock Style="{StaticResource T.Muted}" FontSize="12.5" TextWrapping="Wrap"
-                                               Text="Nothing is uploaded, and there is no account. Copied items are encrypted, sent straight to your paired device, and never written to disk." />
+                                               Text="Nothing is uploaded and there is no account. Each pair of devices has its own key, so a copy is encrypted for the device it is going to and never written to disk." />
                                 </StackPanel>
                             </Border>
                             <Border Height="28" Background="Transparent" />
@@ -499,7 +561,7 @@
                                    Style="{StaticResource T.Base}" FontSize="11"
                                    Foreground="{DynamicResource B.TextFaint}"
                                    VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"
-                                   Text="Everything stays on your local network" />
+                                   Text="Nothing ever leaves your own devices" />
                         <Button Grid.Column="1" Style="{StaticResource S.BtnQuiet}" Content="Hide to tray"
                                 Padding="16,7" Click="BtnHide_Click" />
                     </Grid>

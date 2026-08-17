@@ -1,6 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Linq;
 using System.IO;
 using System.Reflection;
 using System.Windows;
@@ -21,7 +22,6 @@ namespace WinDaemon
         private const double SidebarWide = 196;
         private const double SidebarNarrow = 62;
 
-        private readonly TcpTransportConnection _transport;
         private readonly SyncActivityLog _activity;
         private readonly string _ipAddress;
         private readonly string _pairingCode;
@@ -34,20 +34,23 @@ namespace WinDaemon
 
         public event Action? ExitRequested;
 
-        public MainWindow(string ipAddress, string pairingCode,
-                          TcpTransportConnection transport, SyncActivityLog activity)
+        // The transport used to be passed in and never touched. It went when the single
+        // connection became a link per peer: the window reads ConnectionState, which is the
+        // one place that knows whether anything is reachable and over which tier.
+        public MainWindow(string ipAddress, string pairingCode, SyncActivityLog activity)
         {
             InitializeComponent();
 
             _ipAddress = ipAddress;
             _pairingCode = pairingCode;
-            _transport = transport;
             _activity = activity;
 
             ActivityList.ItemsSource = _rows;
+            DeviceList.ItemsSource = _devices;
 
             IpText.Text = ipAddress;
             CodeText.Text = Shorten(pairingCode);
+            MeshNameBox.Text = Program.Security?.Peers.MeshName ?? "";
             RenderQrCode();
 
             StartupSwitch.IsChecked = Program.IsStartupEnabled();
@@ -72,12 +75,26 @@ namespace WinDaemon
             ConnectionState.Changed += ConnectionState_Changed;
             _activity.Changed += Activity_Changed;
 
+            // The list has to follow pairing as well as connectivity: a device added from
+            // another window, or forgotten, changes it without any link going up or down.
+            if (Program.Security != null) Program.Security.Peers.Changed += Peers_Changed;
+
             // Relative timestamps go stale silently otherwise.
             _ageTimer = new DispatcherTimer(DispatcherPriority.Background)
             {
                 Interval = TimeSpan.FromSeconds(10)
             };
-            _ageTimer.Tick += (_, _) => RefreshActivity();
+            _ageTimer.Tick += (_, _) =>
+            {
+                RefreshActivity();
+
+                // Held open for as long as the code is actually on screen. Opening it once on
+                // navigation is not enough: the window lapses after a few minutes, so anyone
+                // who left the QR up while installing the phone app would find pairing quietly
+                // refused with the code still in front of them.
+                if (PageDevices?.Visibility == Visibility.Visible) Program.Security?.Pairing.Open();
+            };
+
             _ageTimer.Start();
 
             Loaded += (_, _) =>
@@ -85,6 +102,7 @@ namespace WinDaemon
                 StartSpinner();
                 RefreshStatus();
                 RefreshActivity();
+                RefreshDevices();
             };
         }
 
@@ -104,6 +122,133 @@ namespace WinDaemon
             PageAbout.Visibility = section == "About" ? Visibility.Visible : Visibility.Collapsed;
 
             if (section == "Activity") RefreshActivity();
+
+            // Showing the pairing code is what tells this device a new peer has been invited.
+            // The listener has no other way to know the stranger now knocking is the one the
+            // user just pointed a camera at, so the window follows the page exactly: open
+            // while the code is on screen, shut the moment it is not.
+            if (section == "Devices") Program.Security?.Pairing.Open();
+            else Program.Security?.Pairing.Close();
+        }
+
+        // ────────────────────────────── devices
+
+        private readonly ObservableCollection<DeviceRow> _devices = new();
+
+        /// <summary>
+        /// Redraws the device list from the registry and the live link state.
+        ///
+        /// Only one device can be reported as connected, because <see cref="ConnectionState"/>
+        /// tracks whether anything is reachable rather than which peers are. That is honest
+        /// enough while the mesh is small and is the next thing to grow when it is not.
+        /// </summary>
+        private void RefreshDevices()
+        {
+            var peers = Program.Security?.Peers;
+            _devices.Clear();
+
+            if (peers != null)
+            {
+                string? connectedName = ConnectionState.IsConnected ? ConnectionState.PeerName : null;
+                var accent = (System.Windows.Media.Brush)FindResource("B.Accent");
+                var faint = (System.Windows.Media.Brush)FindResource("B.TextFaint");
+
+                foreach (var peer in peers.Peers.OrderBy(p => p.Name ?? p.Fingerprint))
+                {
+                    bool live = connectedName != null &&
+                                string.Equals(connectedName, peer.Name, StringComparison.OrdinalIgnoreCase);
+
+                    string via = ConnectionState.ActiveLink == LinkKind.Ble ? "Bluetooth" : "Wi-Fi";
+
+                    _devices.Add(new DeviceRow
+                    {
+                        Name = string.IsNullOrWhiteSpace(peer.Name)
+                            ? CoreLib.Identity.DeviceIdentity.Shorten(peer.Fingerprint)
+                            : peer.Name!,
+                        Detail = live
+                            ? $"Connected over {via} · {CoreLib.Identity.DeviceIdentity.Shorten(peer.Fingerprint)}"
+                            : $"Last seen {Relative(peer.LastSeenUtc.UtcDateTime)} · {CoreLib.Identity.DeviceIdentity.Shorten(peer.Fingerprint)}",
+                        // The desktop row is wide enough for the full short form; the phone's
+                        // is not, which is why it trims further.
+                        Fingerprint = peer.Fingerprint,
+                        Dot = live ? accent : faint
+                    });
+                }
+            }
+
+            DevicesEmpty.Visibility = _devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            DevicesSub.Text = _devices.Count switch
+            {
+                0 => "Nothing paired yet.",
+                1 => "One device paired into this mesh.",
+                _ => $"{_devices.Count} devices paired into this mesh."
+            };
+        }
+
+        /// <summary>
+        /// Forgets a device, which revokes its key rather than merely hiding it from a list.
+        /// Confirmed first, because the only way back is to pair it again.
+        /// </summary>
+        private void BtnForgetDevice_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not string fingerprint) return;
+
+            var peers = Program.Security?.Peers;
+            var peer = peers?.Find(fingerprint);
+            if (peers == null || peer == null) return;
+
+            string name = string.IsNullOrWhiteSpace(peer.Name)
+                ? CoreLib.Identity.DeviceIdentity.Shorten(fingerprint)
+                : peer.Name!;
+
+            // Fully qualified: WinForms is referenced for the tray icon, so MessageBox is
+            // ambiguous between it and WPF.
+            var answer = System.Windows.MessageBox.Show(
+                $"Forget {name}?\n\nIt will stop syncing immediately, and pairing it again means scanning a new code.",
+                "Mesh Sync", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (answer != MessageBoxResult.Yes) return;
+
+            peers.Forget(fingerprint);
+            RefreshDevices();
+            RefreshStatus();
+        }
+
+        // ────────────────────────────── mesh name
+
+        /// <summary>
+        /// Saves the mesh name, and redraws the QR because the code carries it.
+        ///
+        /// Committed on losing focus rather than on every keystroke: the registry writes to disk
+        /// on each change, and a name is typed a character at a time.
+        /// </summary>
+        private void MeshNameBox_LostFocus(object sender, RoutedEventArgs e) => CommitMeshName();
+
+        private void MeshNameBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key != System.Windows.Input.Key.Enter) return;
+
+            CommitMeshName();
+            System.Windows.Input.Keyboard.ClearFocus();
+        }
+
+        private void CommitMeshName()
+        {
+            var peers = Program.Security?.Peers;
+            if (peers == null) return;
+
+            string typed = MeshNameBox.Text.Trim();
+            if (typed == peers.MeshName) return;
+
+            peers.MeshName = typed;
+
+            // Reflect whatever was actually stored - it is trimmed and length-capped there.
+            MeshNameBox.Text = peers.MeshName;
+
+            // The pairing code embeds the name, so a device scanning it now joins under the
+            // new one rather than the name it happened to have when the page was opened.
+            RenderQrCode();
+            RefreshStatus();
         }
 
         private void BtnCollapse_Click(object sender, RoutedEventArgs e)
@@ -137,7 +282,10 @@ namespace WinDaemon
 
         // ────────────────────────────── status
 
-        private void ConnectionState_Changed() => Dispatcher.BeginInvoke(RefreshStatus);
+        private void ConnectionState_Changed() =>
+            Dispatcher.BeginInvoke(() => { RefreshStatus(); RefreshDevices(); });
+
+        private void Peers_Changed() => Dispatcher.BeginInvoke(() => { RefreshDevices(); RefreshStatus(); });
 
         private void Activity_Changed(object? sender, EventArgs e) =>
             Dispatcher.BeginInvoke(() => { RefreshActivity(); RefreshStatus(); });
@@ -157,32 +305,51 @@ namespace WinDaemon
             StatusHeadline.SetResourceReference(ForegroundProperty, accent);
             SidebarDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, accent);
 
-            string peer = ConnectionState.PeerName ?? "your phone";
+            // The mesh, not whichever device happened to answer. With more than two devices the
+            // peer name is arbitrary - it names one of several - and it reads as though the app
+            // pairs with a single machine, which is exactly the model this stopped being.
+            var peers = Program.Security?.Peers;
+            string mesh = peers?.MeshNameOrDefault ?? "your mesh";
+            int paired = peers?.Count ?? 0;
 
             if (connected)
             {
                 StatusHeadline.Text = overBle ? "Connected over Bluetooth" : "Connected";
-                StatusDetail.Text = overBle
-                    ? $"{peer}. No Wi-Fi needed - text syncs directly over Bluetooth."
-                    : $"{peer}. Copy on either device and it appears on the other.";
+                StatusDetail.Text = mesh;
 
                 var last = _activity.LastActivityUtc;
-                StatusSub.Text = last.HasValue ? $"Last sync {Relative(last.Value)}" : "Ready - copy something to sync it";
+                StatusSub.Text = last.HasValue
+                    ? $"Last sync {Relative(last.Value)}"
+                    : overBle
+                        ? "No network needed - text syncs straight over Bluetooth"
+                        : "Ready - copy something to sync it";
 
-                BtnPrimary.Content = "Pair another device";
+                BtnPrimary.Content = "Add another device";
                 SidebarStatus.Text = overBle ? "Bluetooth" : "Connected";
                 FooterHint.Text = overBle
                     ? "Text only over Bluetooth. Images need Wi-Fi."
-                    : "Everything stays on your local network";
+                    : "Nothing ever leaves your own devices";
+            }
+            else if (paired > 0)
+            {
+                StatusHeadline.Text = "Reconnecting";
+                StatusDetail.Text = mesh;
+                StatusSub.Text = paired == 1
+                    ? "Waiting for the other device to come back"
+                    : $"Waiting for any of {paired} devices to come back";
+
+                BtnPrimary.Content = "Add another device";
+                SidebarStatus.Text = "Waiting";
+                FooterHint.Text = "Same Wi-Fi, or within Bluetooth range";
             }
             else
             {
-                StatusHeadline.Text = "Waiting for a device";
-                StatusDetail.Text = "Open Mesh Sync on your phone and scan the pairing code.";
-                StatusSub.Text = "";
-                BtnPrimary.Content = "Pair a device";
+                StatusHeadline.Text = "No devices yet";
+                StatusDetail.Text = mesh;
+                StatusSub.Text = "Open Mesh Sync on another device and scan the pairing code";
+                BtnPrimary.Content = "Add a device";
                 SidebarStatus.Text = "Waiting";
-                FooterHint.Text = "Both devices must be on the same Wi-Fi, or in Bluetooth range";
+                FooterHint.Text = "Nothing ever leaves your own devices";
             }
 
             SentCount.Text = _activity.SentCount.ToString();
@@ -278,7 +445,13 @@ namespace WinDaemon
         {
             try
             {
-                string payload = $"meshsync://pair?ip={Uri.EscapeDataString(_ipAddress)}&key={Uri.EscapeDataString(_pairingCode)}";
+                // The mesh name rides along, so a device that scans this joins something with
+                // a name rather than pairing with an anonymous address.
+                string mesh = Program.Security?.Peers.MeshName ?? "";
+                string payload =
+                    $"meshsync://pair?ip={Uri.EscapeDataString(_ipAddress)}" +
+                    $"&key={Uri.EscapeDataString(_pairingCode)}" +
+                    (mesh.Length > 0 ? $"&mesh={Uri.EscapeDataString(mesh)}" : "");
                 using var generator = new QRCodeGenerator();
                 var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.Q);
                 using var qr = new QRCode(data);
@@ -404,6 +577,7 @@ namespace WinDaemon
         {
             ConnectionState.Changed -= ConnectionState_Changed;
             _activity.Changed -= Activity_Changed;
+            if (Program.Security != null) Program.Security.Peers.Changed -= Peers_Changed;
             _ageTimer.Stop();
             _spinner?.Stop(this);
         }
@@ -414,6 +588,17 @@ namespace WinDaemon
             public string Title { get; init; } = "";
             public string Sub { get; init; } = "";
             public string Age { get; init; } = "";
+        }
+
+        /// <summary>One paired device, as the Devices page shows it.</summary>
+        private sealed class DeviceRow
+        {
+            public string Name { get; init; } = "";
+            public string Detail { get; init; } = "";
+            public string Fingerprint { get; init; } = "";
+            // Fully qualified: WinForms is referenced for the tray icon, so a bare Brush is
+            // ambiguous between System.Drawing and System.Windows.Media.
+            public System.Windows.Media.Brush Dot { get; init; } = System.Windows.Media.Brushes.Gray;
         }
     }
 }

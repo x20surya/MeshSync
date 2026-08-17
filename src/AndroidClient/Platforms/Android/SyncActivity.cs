@@ -1,4 +1,4 @@
-using Android.App;
+﻿using Android.App;
 using Android.Content;
 using Android.OS;
 using Android.Widget;
@@ -56,7 +56,7 @@ namespace AndroidClient.Platforms.Android
                 }
                 else if (await TrySendImageAsync(clip).ConfigureAwait(true))
                 {
-                    message = "Image pushed to laptop!";
+                    message = "Image sent";
                 }
                 else
                 {
@@ -64,7 +64,7 @@ namespace AndroidClient.Platforms.Android
                     if (!string.IsNullOrEmpty(text))
                     {
                         await SyncManager.SendClipboardAsync(text).ConfigureAwait(true);
-                        message = "Text pushed to laptop!";
+                        message = "Text sent";
                     }
                     else
                     {

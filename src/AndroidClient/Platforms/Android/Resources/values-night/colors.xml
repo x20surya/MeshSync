@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<resources>
+    <!-- The dark page background, so the status bar reads as part of the page. -->
+    <color name="colorPrimary">#17181A</color>
+    <color name="colorPrimaryDark">#17181A</color>
+    <color name="colorAccent">#4FA894</color>
+</resources>
