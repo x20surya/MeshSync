@@ -59,7 +59,9 @@ public class SyncContentTests
             nameof(SyncContent.FileOffer),
             nameof(SyncContent.FileAck),
             nameof(SyncContent.FileChunk),
-            nameof(SyncContent.Ring)
+            nameof(SyncContent.Ring),
+            nameof(SyncContent.Notification),
+            nameof(SyncContent.NotificationDismiss)
         };
 
         Assert.Equal(expected.OrderBy(n => n), AllContentTypes().Keys.OrderBy(n => n));

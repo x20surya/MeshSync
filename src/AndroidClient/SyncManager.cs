@@ -964,6 +964,8 @@ namespace AndroidClient
                 else if (contentType == ContentImage) ApplyImage(body);
                 else if (contentType == SyncContent.Address) NoteAnnouncedAddress(peer, body);
                 else if (contentType == SyncContent.Ring) ApplyRing(peer, body);
+                else if (contentType == SyncContent.NotificationDismiss) ApplyNotificationDismiss(body);
+                else if (contentType == SyncContent.Notification) { /* the phone is the source, not a display */ }
                 else Log.Write("Sync", $"Ignoring unknown content type {contentType}.");
             }
             catch (Exception ex)
@@ -1024,6 +1026,55 @@ namespace AndroidClient
             _ = peer;
             _ = body;
 #endif
+        }
+
+        /// <summary>
+        /// Clears a notification here because the other device cleared it there.
+        ///
+        /// The half that makes mirroring feel finished. Without it the desktop is a second inbox
+        /// that has to be emptied separately, which is worse than not mirroring at all.
+        /// </summary>
+        private static void ApplyNotificationDismiss(byte[] body)
+        {
+#if ANDROID
+            if (!NotificationProtocol.TryParseDismiss(body, out string key)) return;
+
+            Log.Write("Sync", "A peer dismissed a notification; clearing it here too.");
+            Platforms.Android.NotificationMirrorService.DismissByKey(key);
+#else
+            _ = body;
+#endif
+        }
+
+        /// <summary>
+        /// Mirrors one notification to every connected device.
+        ///
+        /// <para>Small enough for Bluetooth, which is the point: notifications keep arriving when
+        /// there is no network at all. Nothing is recorded in the activity log - clipboard
+        /// traffic is ephemeral by rule and this is more private still.</para>
+        ///
+        /// <para>Quietly does nothing when nothing is connected. A notification is not worth
+        /// raising Wi-Fi for, and it will be stale by the time the link comes up.</para>
+        /// </summary>
+        public static async Task SendNotificationAsync(MirroredNotification notification)
+        {
+            if (!IsConnected) return;
+
+            byte[] body = NotificationProtocol.Build(notification);
+
+            if (WiFiConnected) await Mesh.BroadcastAsync(SyncContent.Notification, body).ConfigureAwait(false);
+            else await SendOverBluetoothAsync(SyncContent.Notification, body).ConfigureAwait(false);
+        }
+
+        /// <summary>Tells the mesh a notification has gone, so it goes there too.</summary>
+        public static async Task SendNotificationDismissAsync(string key)
+        {
+            if (!IsConnected) return;
+
+            byte[] body = NotificationProtocol.BuildDismiss(key);
+
+            if (WiFiConnected) await Mesh.BroadcastAsync(SyncContent.NotificationDismiss, body).ConfigureAwait(false);
+            else await SendOverBluetoothAsync(SyncContent.NotificationDismiss, body).ConfigureAwait(false);
         }
 
         /// <summary>

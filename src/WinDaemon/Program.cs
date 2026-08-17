@@ -128,6 +128,12 @@ namespace WinDaemon
             WirePayloadReceive();
             WireFileTransfer();
 
+            // Dismissing here dismisses there, which is what makes mirroring feel finished
+            // rather than like a second inbox to empty separately.
+            MirroredNotifications.DismissOnPeer = (fingerprint, key) =>
+                _mesh?.SendToAsync(fingerprint, SyncContent.NotificationDismiss,
+                                   NotificationProtocol.BuildDismiss(key)) ?? Task.CompletedTask;
+
             _ = Task.Run(InitialiseNetworkAsync);
 
             // A GATT service registration outlives a process that dies without releasing it,
@@ -165,7 +171,15 @@ namespace WinDaemon
                 AnnounceAddressOverMesh(peer.Fingerprint);
             };
 
-            _mesh.PeerDisconnected += _ => ConnectionState.SetWiFi(_mesh.IsConnectedToAny);
+            _mesh.PeerDisconnected += fingerprint =>
+            {
+                ConnectionState.SetWiFi(_mesh.IsConnectedToAny);
+
+                // A device that has gone is no longer showing what it was showing, and a stale
+                // mirror is worse than none - it invites you to act on something already dealt
+                // with, and dismissing it would reach nobody.
+                MirroredNotifications.ClearFrom(fingerprint);
+            };
             ConnectionState.Changed += UpdateTrayState;
 
             if (!isStartup) _window.ShowDashboard();
@@ -801,6 +815,18 @@ namespace WinDaemon
                     break;
                 case SyncContent.Address:
                     NoteAnnouncedAddress(peer.Fingerprint, body, from);
+                    break;
+                case SyncContent.Notification:
+                    if (NotificationProtocol.TryParse(body, out var mirrored) && mirrored != null)
+                    {
+                        MirroredNotifications.Add(peer.Fingerprint, from, mirrored);
+                    }
+                    break;
+                case SyncContent.NotificationDismiss:
+                    if (NotificationProtocol.TryParseDismiss(body, out string dismissedKey))
+                    {
+                        MirroredNotifications.Remove(dismissedKey, tellThePeer: false);
+                    }
                     break;
                 case SyncContent.Ring:
                     // Authenticated by having arrived at all: it opened under this connection's

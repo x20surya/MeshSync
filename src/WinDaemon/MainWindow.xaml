@@ -107,6 +107,15 @@
                             </StackPanel>
                         </RadioButton>
 
+                        <RadioButton x:Name="NavNotifications" Style="{StaticResource S.NavItem}" GroupName="Nav"
+                                     Checked="Nav_Checked" Tag="Notifications">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource S.NavIcon}"
+                                      Data="M 9,2 C 6,2 4,4 4,7 L 4,11 L 2,14 L 16,14 L 14,11 L 14,7 C 14,4 12,2 9,2 Z M 7,15 C 7,16.5 8,17 9,17 C 10,17 11,16.5 11,15" />
+                                <TextBlock x:Name="NavNotificationsLabel" Text="Notifications" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </RadioButton>
+
                         <RadioButton x:Name="NavDevices" Style="{StaticResource S.NavItem}" GroupName="Nav"
                                      Checked="Nav_Checked" Tag="Devices">
                             <StackPanel Orientation="Horizontal">
@@ -307,6 +316,66 @@
                             </Border>
 
                             <Border Height="28" Background="Transparent" />
+                        </StackPanel>
+
+                        <!-- ─────────── NOTIFICATIONS ─────────── -->
+                        <StackPanel x:Name="PageNotifications" Visibility="Collapsed" MaxWidth="620">
+                            <Grid Margin="0,22,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="From your phone" Style="{StaticResource T.Base}"
+                                           FontSize="19" FontWeight="SemiBold"
+                                           FontFamily="{DynamicResource F.Display}" />
+                                <Button Grid.Column="1" x:Name="BtnClearNotifications"
+                                        Style="{StaticResource S.BtnQuiet}" Content="Clear all"
+                                        Padding="14,5" FontSize="11.5" VerticalAlignment="Center"
+                                        Click="BtnClearNotifications_Click" />
+                            </Grid>
+                            <TextBlock Style="{StaticResource T.Muted}" FontSize="12.5" TextWrapping="Wrap"
+                                       Text="Held in memory only and never written to disk. Dismissing one here dismisses it on the phone too." />
+
+                            <Border Style="{StaticResource S.Card}" Padding="6,4" Margin="0,16,0,0">
+                                <StackPanel>
+                                    <ItemsControl x:Name="NotificationList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="10,10">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Heading}" FontSize="13"
+                                                                   FontWeight="SemiBold"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding Body}" Style="{StaticResource T.Muted}"
+                                                                   FontSize="12" Margin="0,2,0,0"
+                                                                   TextWrapping="Wrap" MaxHeight="42" />
+                                                        <TextBlock Text="{Binding Source}" Style="{StaticResource T.Base}"
+                                                                   Foreground="{DynamicResource B.TextFaint}"
+                                                                   FontSize="11" Margin="0,3,0,0"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+
+                                                    <Button Grid.Column="1" Style="{StaticResource S.BtnQuiet}"
+                                                            Content="Dismiss" Padding="12,5" FontSize="11.5"
+                                                            VerticalAlignment="Center" Margin="10,0,0,0"
+                                                            Tag="{Binding Key}"
+                                                            Click="BtnDismissNotification_Click" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <TextBlock x:Name="NotificationsEmpty"
+                                               Text="Nothing here. Turn on notification mirroring in the phone's settings and choose which apps to include."
+                                               Style="{StaticResource T.Muted}" FontSize="12.5" TextWrapping="Wrap"
+                                               Margin="10,16,10,18" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
 
                         <!-- ─────────── ACTIVITY ─────────── -->

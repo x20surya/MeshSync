@@ -48,6 +48,7 @@ namespace WinDaemon
             ActivityList.ItemsSource = _rows;
             DeviceList.ItemsSource = _devices;
             PendingList.ItemsSource = _pending;
+            NotificationList.ItemsSource = _notifications;
 
             IpText.Text = ipAddress;
             CodeText.Text = Shorten(pairingCode);
@@ -77,6 +78,7 @@ namespace WinDaemon
             ConnectionState.Changed += ConnectionState_Changed;
             _activity.Changed += Activity_Changed;
             Ringer.Changed += Ringer_Changed;
+            MirroredNotifications.Changed += Notifications_Changed;
 
             // The list has to follow pairing as well as connectivity: a device added from
             // another window, or forgotten, changes it without any link going up or down.
@@ -113,6 +115,7 @@ namespace WinDaemon
                 RefreshDevices();
                 RefreshPending();
                 RefreshRinging();
+                RefreshNotifications();
             };
         }
 
@@ -127,11 +130,13 @@ namespace WinDaemon
 
             PageHome.Visibility = section == "Home" ? Visibility.Visible : Visibility.Collapsed;
             PageActivity.Visibility = section == "Activity" ? Visibility.Visible : Visibility.Collapsed;
+            PageNotifications.Visibility = section == "Notifications" ? Visibility.Visible : Visibility.Collapsed;
             PageDevices.Visibility = section == "Devices" ? Visibility.Visible : Visibility.Collapsed;
             PageSettings.Visibility = section == "Settings" ? Visibility.Visible : Visibility.Collapsed;
             PageAbout.Visibility = section == "About" ? Visibility.Visible : Visibility.Collapsed;
 
             if (section == "Activity") RefreshActivity();
+            if (section == "Notifications") RefreshNotifications();
 
             // Showing the pairing code is what tells this device a new peer has been invited.
             // The listener has no other way to know the stranger now knocking is the one the
@@ -572,6 +577,51 @@ namespace WinDaemon
             NavDevices.IsChecked = true;
         }
 
+        // ────────────────────────────── mirrored notifications
+
+        private readonly ObservableCollection<NotificationRow> _notifications = new();
+
+        private void Notifications_Changed() => Dispatcher.BeginInvoke(RefreshNotifications);
+
+        private void RefreshNotifications()
+        {
+            var snapshot = MirroredNotifications.Snapshot();
+
+            _notifications.Clear();
+            foreach (var entry in snapshot)
+            {
+                var n = entry.Notification;
+
+                _notifications.Add(new NotificationRow
+                {
+                    Heading = n.Title.Length > 0 ? n.Title : n.AppName,
+                    Body = n.Text,
+                    Source = n.Title.Length > 0
+                        ? $"{n.AppName} · {entry.PeerName} · {entry.RelativeAge}"
+                        : $"{entry.PeerName} · {entry.RelativeAge}",
+                    Key = n.Key
+                });
+            }
+
+            NotificationsEmpty.Visibility = _notifications.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            BtnClearNotifications.Visibility = _notifications.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+            // A count in the sidebar, because the page is otherwise the only way to find out
+            // something arrived and nobody navigates speculatively.
+            NavNotificationsLabel.Text = _notifications.Count == 0
+                ? "Notifications"
+                : $"Notifications ({_notifications.Count})";
+        }
+
+        private void BtnDismissNotification_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not string key) return;
+            MirroredNotifications.Remove(key);
+        }
+
+        private void BtnClearNotifications_Click(object sender, RoutedEventArgs e) =>
+            MirroredNotifications.Clear();
+
         // ────────────────────────────── finding a device
 
         private void Ringer_Changed() => Dispatcher.BeginInvoke(RefreshRinging);
@@ -737,6 +787,7 @@ namespace WinDaemon
             ConnectionState.Changed -= ConnectionState_Changed;
             _activity.Changed -= Activity_Changed;
             Ringer.Changed -= Ringer_Changed;
+            MirroredNotifications.Changed -= Notifications_Changed;
 
             if (Program.Security != null)
             {
@@ -755,6 +806,15 @@ namespace WinDaemon
             public string Title { get; init; } = "";
             public string Sub { get; init; } = "";
             public string Age { get; init; } = "";
+        }
+
+        /// <summary>One mirrored notification, as the Notifications page shows it.</summary>
+        private sealed class NotificationRow
+        {
+            public string Heading { get; init; } = "";
+            public string Body { get; init; } = "";
+            public string Source { get; init; } = "";
+            public string Key { get; init; } = "";
         }
 
         /// <summary>One device waiting to be allowed in.</summary>

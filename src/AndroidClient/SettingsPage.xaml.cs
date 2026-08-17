@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CoreLib.Diagnostics;
 using CoreLib.Identity;
 
@@ -57,6 +58,123 @@ public partial class SettingsPage : ContentPage
 
         DeviceName.Text = SyncManager.LocalDeviceName;
         DeviceFingerprint.Text = security.Identity.ShortFingerprint;
+
+        RenderNotifications();
+    }
+
+    // ──────────────────────────────────── notification mirroring
+
+    private readonly ObservableCollection<NotificationAppRow> _notificationApps = new();
+
+    /// <summary>
+    /// Two separate things, shown as two: whether Android will tell us about notifications at
+    /// all, and which apps we pass on. The grant is Android's to give and the allowlist is the
+    /// user's to choose, and conflating them is how an app ends up mirroring everything because
+    /// someone tapped Allow once.
+    /// </summary>
+    private void RenderNotifications()
+    {
+#if ANDROID
+        bool granted = Platforms.Android.NotificationMirrorService.IsGranted();
+        bool enabled = Platforms.Android.NotificationMirrorSettings.IsEnabled;
+
+        _suppressToggle = true;
+        NotificationsSwitch.IsToggled = enabled && granted;
+        _suppressToggle = false;
+
+        NotificationsState.Text = !granted
+            ? "Needs notification access before it can mirror anything"
+            : enabled
+                ? "On - the apps below appear on your other devices"
+                : "Off - nothing is being mirrored";
+
+        NotificationsGrantButton.IsVisible = !granted;
+        NotificationsAppsSection.IsVisible = granted && enabled;
+
+        if (NotificationAppList.ItemsSource == null) NotificationAppList.ItemsSource = _notificationApps;
+
+        _notificationApps.Clear();
+
+        if (granted && enabled)
+        {
+            var allowed = Platforms.Android.NotificationMirrorSettings.Allowed();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            // Everything currently notifying, plus anything already allowed, so a choice never
+            // vanishes from the list merely because that app happens to be quiet right now.
+            foreach (var (package, name) in Platforms.Android.NotificationMirrorService.RecentApps())
+            {
+                if (!seen.Add(package)) continue;
+                _notificationApps.Add(new NotificationAppRow
+                {
+                    Package = package,
+                    Name = name,
+                    Allowed = allowed.Contains(package, StringComparer.Ordinal)
+                });
+            }
+
+            foreach (string package in allowed)
+            {
+                if (!seen.Add(package)) continue;
+                _notificationApps.Add(new NotificationAppRow { Package = package, Name = package, Allowed = true });
+            }
+        }
+
+        NotificationsAppsEmpty.IsVisible = _notificationApps.Count == 0;
+#else
+        NotificationsState.Text = "Only available on Android";
+        NotificationsSwitch.IsEnabled = false;
+        NotificationsGrantButton.IsVisible = false;
+        NotificationsAppsSection.IsVisible = false;
+#endif
+    }
+
+    private void OnNotificationsToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_suppressToggle) return;
+
+#if ANDROID
+        if (e.Value && !Platforms.Android.NotificationMirrorService.IsGranted())
+        {
+            // Cannot be switched on without the grant, so ask for it rather than leaving a
+            // switch that says on while nothing happens.
+            _suppressToggle = true;
+            NotificationsSwitch.IsToggled = false;
+            _suppressToggle = false;
+
+            Platforms.Android.NotificationMirrorService.RequestGrant();
+            return;
+        }
+
+        Platforms.Android.NotificationMirrorSettings.IsEnabled = e.Value;
+        Render();
+#endif
+    }
+
+    private void OnNotificationsGrantClicked(object? sender, EventArgs e)
+    {
+#if ANDROID
+        Platforms.Android.NotificationMirrorService.RequestGrant();
+#endif
+    }
+
+    private void OnNotificationAppToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_suppressToggle) return;
+        if ((sender as Switch)?.ClassId is not string package || package.Length == 0) return;
+
+#if ANDROID
+        Platforms.Android.NotificationMirrorSettings.SetAllowed(package, e.Value);
+        Log.Write("Notify", e.Value ? "An app was added to notification mirroring." : "An app was removed from notification mirroring.");
+#endif
+    }
+
+    /// <summary>One app in the mirroring allowlist.</summary>
+    private sealed class NotificationAppRow
+    {
+        public string Package { get; init; } = "";
+        public string Name { get; init; } = "";
+        public bool Allowed { get; init; }
     }
 
     // ──────────────────────────────────── actions

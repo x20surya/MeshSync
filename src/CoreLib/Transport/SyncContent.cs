@@ -63,5 +63,25 @@ namespace CoreLib.Transport
         /// most want to find a device is the moment it is not on any network.</para>
         /// </summary>
         public const byte Ring = 0x06;
+
+        /// <summary>
+        /// A notification from the sending device, mirrored so it can be read elsewhere.
+        ///
+        /// <para>A few hundred bytes, so Bluetooth carries it - which is the differentiator
+        /// again: notifications keep mirroring when there is no network at all.</para>
+        ///
+        /// <para>This is the most private thing the app carries. It is opt-in, allowed per
+        /// application rather than wholesale, and never written to the activity log or anywhere
+        /// else. Clipboard traffic is ephemeral by rule; this is more so.</para>
+        /// </summary>
+        public const byte Notification = 0x07;
+
+        /// <summary>
+        /// "That notification is gone." Carries the key alone.
+        ///
+        /// Dismissal in both directions is what makes mirroring feel finished rather than like a
+        /// second inbox to clear. Clearing it on the desktop clears it on the phone.
+        /// </summary>
+        public const byte NotificationDismiss = 0x08;
     }
 }
