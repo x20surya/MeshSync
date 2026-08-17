@@ -31,13 +31,6 @@ namespace CoreLib.Identity
     {
         private const string PrivateKeyFileName = "device.key";
 
-        /// <summary>
-        /// Bound into every derived key so a secret agreed for this app cannot be replayed
-        /// into some other protocol that happens to use the same curve and the same keys.
-        /// </summary>
-        private static readonly byte[] KeyDerivationContext =
-            System.Text.Encoding.UTF8.GetBytes("MeshSync/session-key/v1");
-
         private readonly ECDiffieHellman _key;
         private bool _disposed;
 
@@ -113,20 +106,19 @@ namespace CoreLib.Identity
             new(ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256));
 
         /// <summary>
-        /// Derives the AES-256 key shared with one peer.
+        /// The raw ECDH secret between this device's long-lived key and a peer's.
         ///
-        /// Both devices compute the same value from their own private key and the other's
-        /// public key, so no key material ever crosses the wire. The fingerprints are sorted
-        /// before being mixed in, which is what makes the two sides agree without either
-        /// having to know which of them is calling.
+        /// <para>Deliberately not a usable key on its own, and deliberately not public.
+        /// <see cref="SessionKeys"/> mixes it with an ephemeral secret before anything is
+        /// encrypted, because on its own it is exactly the static-static agreement that had no
+        /// forward secrecy: the same pair of devices would derive the same key for ever, so
+        /// recovering one private key would open every session that pair had ever had.</para>
         ///
-        /// <para>This is a static agreement: the same pair of devices always derives the same
-        /// key. It authenticates - only a device whose public key you hold can produce traffic
-        /// you will decrypt - but it offers no forward secrecy, since recovering one private
-        /// key would expose every past session with that peer. Ephemeral keys would fix that
-        /// and need a handshake round trip to exchange them.</para>
+        /// <para>What it still provides is authentication. Only a device whose public key this
+        /// one holds can compute the matching value, which is what stops an attacker
+        /// substituting an ephemeral key of their own.</para>
         /// </summary>
-        public byte[] DeriveSharedKey(string peerPublicKey)
+        internal byte[] RawSecretWith(string peerPublicKey)
         {
             ThrowIfDisposed();
             if (string.IsNullOrWhiteSpace(peerPublicKey)) throw new ArgumentException("A peer public key is required.", nameof(peerPublicKey));
@@ -134,20 +126,7 @@ namespace CoreLib.Identity
             using var peer = ECDiffieHellman.Create();
             peer.ImportSubjectPublicKeyInfo(Convert.FromBase64String(peerPublicKey), out _);
 
-            string peerFingerprint = FingerprintOf(peerPublicKey);
-
-            // Sorted, so both ends mix the same bytes in the same order regardless of which
-            // of them initiated. Unsorted, the two devices would derive different keys and
-            // every payload would fail to decrypt.
-            var (first, second) = string.CompareOrdinal(Fingerprint, peerFingerprint) <= 0
-                ? (Fingerprint, peerFingerprint)
-                : (peerFingerprint, Fingerprint);
-
-            byte[] salt = System.Text.Encoding.UTF8.GetBytes(first + second);
-
-            // SHA-256 of (salt || shared secret || context), which is a 32-byte key: exactly
-            // what AES-256-GCM takes, with no truncation or stretching in between.
-            return _key.DeriveKeyFromHash(peer.PublicKey, HashAlgorithmName.SHA256, salt, KeyDerivationContext);
+            return _key.DeriveRawSecretAgreement(peer.PublicKey);
         }
 
         /// <summary>SHA-256 of a base64 public key, lowercase hex. Throws if it is not a key.</summary>

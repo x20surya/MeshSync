@@ -67,11 +67,30 @@ namespace WinDaemon
         public string? RemoteDeviceName { get; private set; }
 
         /// <summary>
-        /// Decides whether a peer may use this link, given the public key it announced.
-        /// Returning false drops what it sent; leaving it null accepts anyone, which is what
+        /// Authorises a peer and agrees the key this link is encrypted with. Returning null
+        /// drops what it sent; leaving it null accepts anyone and agrees nothing, which is what
         /// this tier used to do unconditionally.
         /// </summary>
-        public Func<string, bool>? AuthorisePeer { get; set; }
+        public Func<string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
+
+        /// <summary>
+        /// This connection's ephemeral keypair. Rolled whenever a central subscribes, so
+        /// successive connections to this long-lived server do not share one - a peripheral
+        /// outlives the links it serves, unlike a central, which is built per attempt.
+        /// </summary>
+        private EphemeralKeyPair _ephemeral = EphemeralKeyPair.Create();
+
+        private PeerSession? _peer;
+
+        /// <summary>The agreed key for the live link, or null before the peer's hello arrives.</summary>
+        public PeerSession? Peer => Volatile.Read(ref _peer);
+
+        private void RollEphemeral()
+        {
+            var fresh = EphemeralKeyPair.Create();
+            Interlocked.Exchange(ref _ephemeral, fresh)?.Dispose();
+            Interlocked.Exchange(ref _peer, null)?.Dispose();
+        }
 
         /// <summary>Public key the phone announced, or null if it has not yet.</summary>
         public string? RemotePublicKey { get; private set; }
@@ -158,6 +177,10 @@ namespace WinDaemon
 
             if (_hasSubscriber && !had)
             {
+                // A fresh link means a fresh ephemeral, or every central this server ever
+                // serves would share one and the forward secrecy would only be per process.
+                RollEphemeral();
+
                 Log.Write("BleServer", $"Phone subscribed. Notification size {MaxNotificationSize()} bytes.");
                 ClientConnected?.Invoke(this, EventArgs.Empty);
             }
@@ -394,7 +417,8 @@ namespace WinDaemon
                 return;
             }
 
-            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName, out string peerMesh) ||
+            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName,
+                                                  out string peerMesh, out string peerEphemeral) ||
                 !DeviceIdentity.IsValidPublicKey(publicKey))
             {
                 Log.Write("BleServer", "The peer announced something that is not a public key.");
@@ -403,13 +427,21 @@ namespace WinDaemon
 
             if (peerName.Length > 0) RemoteDeviceName = peerName;
 
-            var authorise = AuthorisePeer;
-            if (authorise != null && !authorise(publicKey))
+            var open = OpenSession;
+            if (open != null)
             {
-                Log.Write("BleServer", "Refusing a Bluetooth peer this device has not paired with.");
-                RemotePublicKey = null;
-                RemoteFingerprint = string.Empty;
-                return;
+                var agreed = open(publicKey, peerEphemeral, _ephemeral);
+                if (agreed == null)
+                {
+                    Log.Write("BleServer", peerEphemeral.Length == 0
+                        ? "Refusing a Bluetooth peer that offered no ephemeral key; it is running an older build."
+                        : "Refusing a Bluetooth peer this device has not paired with.");
+                    RemotePublicKey = null;
+                    RemoteFingerprint = string.Empty;
+                    return;
+                }
+
+                Interlocked.Exchange(ref _peer, agreed)?.Dispose();
             }
 
             RemotePublicKey = publicKey;
@@ -438,18 +470,29 @@ namespace WinDaemon
             await SendHelloAsync(ClientFor(deviceId)).ConfigureAwait(false);
         }
 
-        /// <summary>Announces this device's public key over the link.</summary>
+        /// <summary>Announces this device's identity and this link's ephemeral key.</summary>
         private async Task SendHelloAsync(GattSubscribedClient? target = null)
         {
             string? key = LocalPublicKey;
             if (string.IsNullOrWhiteSpace(key) || _outbox == null) return;
 
+            var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey));
+
+            // A hello is written whole rather than fragmented, because an extended control
+            // frame is told apart by a leading zero and a fragment starts with its message id.
+            // At a negotiated MTU there is ample room; saying so beats a frame that vanishes.
+            int room = MaxNotificationSize();
+            if (frame.Length > room)
+            {
+                Log.Write("BleServer",
+                    $"The hello is {frame.Length} bytes and only {room} will fit - the peer will not learn this device's identity.");
+                return;
+            }
+
             try
             {
-                await NotifyAsync(
-                    BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
-                        BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName)),
-                    target).ConfigureAwait(false);
+                await NotifyAsync(frame, target).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -615,6 +658,9 @@ namespace WinDaemon
             _serviceProvider = null;
             _inbox = null;
             _outbox = null;
+
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
+            try { _ephemeral.Dispose(); } catch { }
 
             PayloadReceived = null;
             ConnectionClosed = null;

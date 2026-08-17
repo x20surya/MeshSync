@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using CoreLib.Diagnostics;
+using CoreLib.Identity;
 
 namespace CoreLib.Transport
 {
@@ -26,11 +27,20 @@ namespace CoreLib.Transport
         private const ushort Magic = 0x4D53;
 
         /// <summary>
-        /// Bumped to 2 when the hello frame grew a public key. An older build reading the new
-        /// shape would take the length prefixes for the start of a device name, so the version
-        /// byte is what turns that into "update both devices" instead of a mystery.
+        /// Bumped to 2 when the hello frame grew a public key, and to 3 when it grew an
+        /// ephemeral one for forward secrecy. An older build reading the new shape would take
+        /// the length prefixes for the start of a device name, so the version byte is what
+        /// turns that into "update both devices" instead of a mystery.
+        ///
+        /// <para>There is no mixed-version mesh at 3: a peer that cannot offer an ephemeral key
+        /// cannot agree a session key at all, so there is nothing to negotiate down to.</para>
+        ///
+        /// <para>Internal rather than private so the tests that hand-build frames read it from
+        /// here. A copy of this number in a test file goes stale the moment it is bumped, and a
+        /// version mismatch drops a connection in exactly the way most of those tests are trying
+        /// to provoke - so they carry on passing for entirely the wrong reason.</para>
         /// </summary>
-        private const byte ProtocolVersion = 2;
+        internal const byte ProtocolVersion = 3;
 
         private const int HeaderSize = 8;
 
@@ -125,27 +135,47 @@ namespace CoreLib.Transport
         public string? LocalMeshName { get; set; }
 
         /// <summary>
-        /// Decides whether a peer may stay connected, given the public key it announced.
+        /// Authorises a peer and agrees the key this connection is encrypted with, given the
+        /// static and ephemeral public keys it announced and this connection's own ephemeral.
         ///
-        /// Returning false closes the session. Leaving this null accepts anyone, which is what
-        /// the listener used to do unconditionally - only appropriate for tests and for a
-        /// transport that has no registry behind it.
+        /// <para>Returning null closes the session, which covers both "not a paired device" and
+        /// "the key agreement failed". Leaving it null accepts anyone and agrees nothing, which
+        /// is what the listener used to do unconditionally - only appropriate for tests and for
+        /// a transport with no registry behind it.</para>
         /// </summary>
-        public Func<string, bool>? AuthorisePeer { get; set; }
+        public Func<string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
+
+        /// <summary>
+        /// The agreed key for the live connection, or null before the peer's hello arrives.
+        ///
+        /// Owned by the session and destroyed with it, which is what makes the traffic
+        /// unrecoverable once the connection is gone.
+        /// </summary>
+        public PeerSession? Peer => Volatile.Read(ref _session)?.Peer;
 
         public TcpTransportConnection(int port = DefaultPort) => _port = port;
 
         /// <summary>
-        /// True only while a session is live and the peer has been heard from recently.
-        /// Deliberately does not use <see cref="TcpClient.Connected"/>, which merely reports
-        /// the result of the last I/O and stays true on a half-open socket.
+        /// True only while a session is live, the peer has been heard from recently, and - when
+        /// there is a registry behind this transport - a key has actually been agreed.
+        ///
+        /// <para>That last clause is the "key ready" gate. A socket used to be usable the moment
+        /// it opened, because the key was derived from the peer's identity alone and was known
+        /// before the connection existed. An ephemeral agreement is not complete until both
+        /// hellos have crossed, so reporting the link as connected any earlier would let a
+        /// caller hand it a payload there is no key to seal.</para>
+        ///
+        /// <para>Deliberately does not use <see cref="TcpClient.Connected"/>, which merely
+        /// reports the result of the last I/O and stays true on a half-open socket.</para>
         /// </summary>
         public bool IsConnected
         {
             get
             {
                 var s = Volatile.Read(ref _session);
-                return s != null && !s.Closed;
+                if (s == null || s.Closed) return false;
+
+                return OpenSession == null || s.Peer != null;
             }
         }
 
@@ -220,20 +250,24 @@ namespace CoreLib.Transport
             // Only when there is something to authorise against. Without a registry behind it
             // there is no such thing as an unidentified peer, and a test harness that never
             // sends a hello would be torn down ten seconds in.
-            if (AuthorisePeer != null) _ = Task.Run(() => EnforceHelloAsync(session));
+            if (OpenSession != null) _ = Task.Run(() => EnforceHelloAsync(session));
         }
 
         /// <summary>
-        /// Announces who we are: a friendly name for the peer's dashboard, and the public key
-        /// it will authorise us by. No longer purely informational - the peer drops the
-        /// connection if this never arrives or names a device it has not paired with.
+        /// Announces who we are: a friendly name for the peer's dashboard, the public key it
+        /// will authorise us by, and this connection's ephemeral key.
+        ///
+        /// <para>Sent unprompted by both ends the moment a socket exists, so the two ephemeral
+        /// keys are in flight immediately and neither side has to ask. That is what keeps the
+        /// agreement to zero extra round trips.</para>
         /// </summary>
         private async Task SendHelloAsync(Session session)
         {
             try
             {
                 await SendFrameAsync(session, KindHello,
-                    BuildHello(LocalDeviceName, LocalPublicKey ?? "", LocalMeshName ?? ""), session.Token)
+                    BuildHello(LocalDeviceName, LocalPublicKey ?? "", LocalMeshName ?? "",
+                               session.Ephemeral.PublicKey), session.Token)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -422,7 +456,7 @@ namespace CoreLib.Transport
 
         private void HandleHello(Session session, byte[] payload)
         {
-            if (!TryParseHello(payload, out string name, out string publicKey, out string meshName))
+            if (!TryParseHello(payload, out string name, out string publicKey, out string meshName, out string ephemeralKey))
             {
                 Log.Write("Transport", "Malformed hello - dropping the connection.");
                 CloseSession(session);
@@ -442,16 +476,30 @@ namespace CoreLib.Transport
             }
 
             // The listener used to accept anything that could reach the port, because every
-            // install shared one key and there was nothing to check against. Now a peer has
-            // to be one this device has paired with, and a stranger is dropped here rather
-            // than left to fail every decryption for the life of the socket.
-            var authorise = AuthorisePeer;
-            if (authorise != null && !authorise(publicKey))
+            // install shared one key and there was nothing to check against. Now a peer has to
+            // be one this device has paired with, and agreeing a key is part of the same step -
+            // a stranger is dropped here rather than left to fail every decryption for the life
+            // of the socket.
+            var open = OpenSession;
+            if (open != null)
             {
-                Log.Write("Transport",
-                    $"Refusing \"{name}\": {(publicKey.Length == 0 ? "it announced no identity" : $"{Identity.DeviceIdentity.Shorten(fingerprint)} is not a paired device")}.");
-                CloseSession(session);
-                return;
+                var agreed = open(publicKey, ephemeralKey, session.Ephemeral);
+                if (agreed == null)
+                {
+                    Log.Write("Transport",
+                        $"Refusing \"{name}\": {(publicKey.Length == 0 ? "it announced no identity" : $"no session could be agreed with {Identity.DeviceIdentity.Shorten(fingerprint)}")}.");
+                    CloseSession(session);
+                    return;
+                }
+
+                // A second hello on one connection would otherwise leak the first key. There is
+                // no legitimate reason for one, so the replacement is logged rather than silent.
+                var previous = Interlocked.Exchange(ref session.PeerRef, agreed);
+                if (previous != null)
+                {
+                    Log.Write("Transport", "A second hello arrived on one connection; the earlier session key was discarded.");
+                    previous.Dispose();
+                }
             }
 
             session.PeerFingerprint = fingerprint;
@@ -478,13 +526,14 @@ namespace CoreLib.Transport
         }
 
         /// <summary>
-        /// Hello payload: <c>[nameLen u8][name utf8][keyLen u16][public key utf8]</c>.
+        /// Hello payload:
+        /// <c>[nameLen u8][name][keyLen u16][static key][meshLen u8][mesh][ephLen u16][ephemeral key]</c>.
         ///
-        /// It used to be the raw name and nothing else. The length prefixes are what let a
-        /// second field be added at all, and the protocol version above is what stops an older
+        /// It used to be the raw name and nothing else. The length prefixes are what let each
+        /// later field be added at all, and the protocol version above is what stops an older
         /// build reading the new shape as a very strangely spelled device name.
         /// </summary>
-        private static byte[] BuildHello(string name, string publicKey, string meshName)
+        private static byte[] BuildHello(string name, string publicKey, string meshName, string ephemeralKey)
         {
             byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(name ?? "");
             if (nameBytes.Length > MaxDeviceNameBytes) nameBytes = nameBytes.AsSpan(0, MaxDeviceNameBytes).ToArray();
@@ -495,7 +544,10 @@ namespace CoreLib.Transport
             byte[] meshBytes = System.Text.Encoding.UTF8.GetBytes(meshName ?? "");
             if (meshBytes.Length > MaxDeviceNameBytes) meshBytes = meshBytes.AsSpan(0, MaxDeviceNameBytes).ToArray();
 
-            var payload = new byte[1 + nameBytes.Length + 2 + keyBytes.Length + 1 + meshBytes.Length];
+            byte[] ephBytes = System.Text.Encoding.UTF8.GetBytes(ephemeralKey ?? "");
+            if (ephBytes.Length > MaxPublicKeyBytes) ephBytes = Array.Empty<byte>();
+
+            var payload = new byte[1 + nameBytes.Length + 2 + keyBytes.Length + 1 + meshBytes.Length + 2 + ephBytes.Length];
 
             payload[0] = (byte)nameBytes.Length;
             Buffer.BlockCopy(nameBytes, 0, payload, 1, nameBytes.Length);
@@ -508,22 +560,30 @@ namespace CoreLib.Transport
             payload[meshOffset] = (byte)meshBytes.Length;
             Buffer.BlockCopy(meshBytes, 0, payload, meshOffset + 1, meshBytes.Length);
 
+            int ephOffset = meshOffset + 1 + meshBytes.Length;
+            BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(ephOffset, 2), (ushort)ephBytes.Length);
+            Buffer.BlockCopy(ephBytes, 0, payload, ephOffset + 2, ephBytes.Length);
+
             return payload;
         }
 
         /// <summary>
-        /// Reads a hello. The mesh name is optional, so a peer that predates it still parses.
+        /// Reads a hello. The trailing fields are optional so a shorter one still parses, which
+        /// matters for the tests that hand-build frames rather than for the wire - the version
+        /// byte already refuses a peer old enough to omit them.
         ///
-        /// It is carried here as well as in the pairing code because the code only reaches a
-        /// device at the moment it joins. Devices paired before the mesh had a name would
-        /// otherwise never learn one, which is exactly what happened the first time this
+        /// The mesh name is carried here as well as in the pairing code because the code only
+        /// reaches a device at the moment it joins. Devices paired before the mesh had a name
+        /// would otherwise never learn one, which is exactly what happened the first time this
         /// shipped - the phone sat there calling it "your mesh" for ever.
         /// </summary>
-        internal static bool TryParseHello(byte[] payload, out string name, out string publicKey, out string meshName)
+        internal static bool TryParseHello(byte[] payload, out string name, out string publicKey,
+                                           out string meshName, out string ephemeralKey)
         {
             name = "";
             publicKey = "";
             meshName = "";
+            ephemeralKey = "";
 
             if (payload.Length < 1) return false;
 
@@ -545,13 +605,26 @@ namespace CoreLib.Transport
             }
 
             int meshOffset = keyOffset + 2 + keyLength;
-            if (payload.Length <= meshOffset) return true; // An older peer, which sent no mesh name.
+            if (payload.Length <= meshOffset) return true;
 
             int meshLength = payload[meshOffset];
             if (payload.Length < meshOffset + 1 + meshLength) return true;
 
             try { meshName = System.Text.Encoding.UTF8.GetString(payload, meshOffset + 1, meshLength).Trim(); }
             catch { meshName = ""; }
+
+            int ephOffset = meshOffset + 1 + meshLength;
+            if (payload.Length < ephOffset + 2) return true;
+
+            int ephLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(ephOffset, 2));
+            if (ephLength > MaxPublicKeyBytes) return false;
+            if (payload.Length < ephOffset + 2 + ephLength) return true;
+
+            if (ephLength > 0)
+            {
+                try { ephemeralKey = System.Text.Encoding.UTF8.GetString(payload, ephOffset + 2, ephLength).Trim(); }
+                catch { ephemeralKey = ""; }
+            }
 
             return true;
         }
@@ -674,6 +747,21 @@ namespace CoreLib.Transport
             public string RemoteDescription { get; }
 
             /// <summary>
+            /// This connection's ephemeral keypair, minted with the session and destroyed with
+            /// it. Announced in the hello; never persisted anywhere.
+            /// </summary>
+            public EphemeralKeyPair Ephemeral { get; } = EphemeralKeyPair.Create();
+
+            /// <summary>
+            /// The agreed key, once the peer's hello has arrived. Exposed as a field so the
+            /// handshake can install it with an interlocked exchange - two hellos on one
+            /// connection would otherwise leak the first key rather than disposing it.
+            /// </summary>
+            public PeerSession? PeerRef;
+
+            public PeerSession? Peer => Volatile.Read(ref PeerRef);
+
+            /// <summary>
             /// Set once the peer has introduced itself and been authorised. Null means it has
             /// not yet, which is what the hello deadline watches for.
             /// </summary>
@@ -733,6 +821,12 @@ namespace CoreLib.Transport
                 try { Stream.Dispose(); } catch { }
                 try { Client.Dispose(); } catch { }
                 try { _cts.Dispose(); } catch { }
+
+                // The whole point of the ephemeral agreement: once these two are gone, the key
+                // this connection used cannot be recomputed by anyone, including us.
+                try { Interlocked.Exchange(ref PeerRef, null)?.Dispose(); } catch { }
+                try { Ephemeral.Dispose(); } catch { }
+
                 // SendLock is deliberately not disposed: a concurrent sender may still be
                 // parked in WaitAsync, and disposing underneath it throws. SemaphoreSlim only
                 // holds an unmanaged handle once AvailableWaitHandle is touched, which we never do.

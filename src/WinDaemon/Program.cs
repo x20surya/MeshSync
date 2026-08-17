@@ -262,7 +262,7 @@ namespace WinDaemon
                     LocalPublicKey = _security!.Identity.PublicKey,
                     LocalDeviceName = Environment.MachineName,
                     LocalMeshName = _security.Peers.MeshName,
-                    AuthorisePeer = key => _security.Authorise(key)
+                    OpenSession = OpenBleSession
                 };
 
                 WireBleTransport(_bleTransport);
@@ -331,17 +331,29 @@ namespace WinDaemon
         /// BLE shares the clipboard pipeline with TCP. Payloads are identical on both, so
         /// crypto, echo suppression and the activity log need no transport-specific paths.
         /// </summary>
+        /// <summary>
+        /// Authorises a Bluetooth peer and agrees this link's key in one step.
+        ///
+        /// Both halves of the tier use it, and both get the same answer: a device this computer
+        /// has not paired with never reaches the point of having a session to encrypt with.
+        /// </summary>
+        private static PeerSession? OpenBleSession(string peerPublicKey, string peerEphemeral,
+                                                   EphemeralKeyPair localEphemeral)
+        {
+            var security = _security;
+            if (security == null) return null;
+
+            return security.Authorise(peerPublicKey)
+                ? security.OpenSession(peerPublicKey, localEphemeral, peerEphemeral)
+                : null;
+        }
+
         private static void WireBleTransport(WindowsBleTransport ble)
         {
             ble.ClientConnected += (_, _) =>
             {
                 Log.Write("Daemon", "Phone connected over BLE.");
                 ConnectionState.SetBle(true);
-
-                // The link Bluetooth is holding is also the one that can tell the phone where
-                // to dial when it needs Wi-Fi, which is the case a lease change would otherwise
-                // break with no way to recover short of rescanning the code.
-                AnnounceAddressOverBle(ble, BluetoothPeerFingerprint());
             };
 
             ble.ConnectionClosed += (_, _) =>
@@ -350,7 +362,7 @@ namespace WinDaemon
                 ConnectionState.SetBle(false);
             };
 
-            ble.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE", e.Fingerprint);
+            ble.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE", ble.Peer);
 
             // Now that the tier says who it is talking to, the address can be announced to the
             // right device rather than to whichever one happened to be the only one paired.
@@ -366,7 +378,11 @@ namespace WinDaemon
                     ConnectionState.SetBle(true, e.DeviceName);
                 }
 
-                AnnounceAddressOverBle(ble, e.Fingerprint);
+                // Announced here rather than on connect, because there is no key to seal it
+                // with until the hello has crossed. The link Bluetooth is holding is also the
+                // one that tells the phone where to dial when it needs Wi-Fi, which is the case
+                // a lease change would otherwise break with no way back short of a rescan.
+                AnnounceAddressOverBle(ble, ble.Peer);
             };
         }
 
@@ -465,12 +481,15 @@ namespace WinDaemon
             ITransportConnection? ble = viaCentral ? _bleCentral : _bleTransport;
             if (ble?.IsConnected != true) return 0;
 
-            string? fingerprint = BluetoothPeerFingerprint();
-            if (fingerprint == null) return 0;
+            // Sealed with the key this link agreed, so there is no longer any inferring of who
+            // the peer is: a link with no session has not finished its handshake and is skipped.
+            var session = viaCentral ? _bleCentral!.Peer : _bleTransport?.Peer;
+            if (session == null) return 0;
 
+            string fingerprint = session.Fingerprint;
             if (_mesh?.IsConnectedTo(fingerprint) == true) return 0;
 
-            byte[]? encrypted = _security.EncryptFor(fingerprint, contentType, body);
+            byte[]? encrypted = session.Encrypt(contentType, body);
             if (encrypted == null) return 0;
 
             if (encrypted.Length > BleProtocol.MaxPayloadBytes)
@@ -521,60 +540,33 @@ namespace WinDaemon
             }
         }
 
-        /// <summary>
-        /// Which paired device the Bluetooth link belongs to.
-        ///
-        /// Bluetooth carries no identity exchange, so this can only be answered when there is
-        /// exactly one device it could possibly be. That covers the one-phone case and is
-        /// honest about not covering more: a mesh of three needs identity on that tier, which
-        /// arrives with the symmetric Bluetooth work.
-        /// </summary>
-        private static string? BluetoothPeerFingerprint()
-        {
-            // Announced over the link, since Bluetooth grew an identity exchange. That is what
-            // lifts this tier out of only working when exactly one device was paired.
-            if (_bleCentral?.IsConnected == true && !string.IsNullOrEmpty(_bleCentral.RemoteFingerprint))
-                return _bleCentral.RemoteFingerprint;
-
-            string announced = _bleTransport?.RemoteFingerprint ?? "";
-            if (!string.IsNullOrEmpty(announced)) return announced;
-
-            var peers = _security?.Peers.Peers;
-            if (peers == null || peers.Count == 0) return null;
-
-            if (peers.Count > 1)
-            {
-                // An older build on the other end, which never says who it is. With one paired
-                // device that is still inferable; with several it is a guess, so it is refused.
-                Log.Write("Daemon",
-                    $"{peers.Count} devices are paired and this Bluetooth peer has not identified itself, so it was not used.");
-                return null;
-            }
-
-            return peers[0].Fingerprint;
-        }
-
         private static void WirePayloadReceive()
         {
-            // The mesh decrypts before it raises this, because working out which key opens a
-            // payload is also how it works out which device sent it.
+            // The mesh decrypts before it raises this, because the session a payload arrived on
+            // is also the answer to which device sent it.
             _mesh!.PayloadReceived += (_, e) => Apply(e.Peer, e.ContentType, e.Body, "Wi-Fi");
         }
 
-        private static void HandleIncomingPayload(byte[] encrypted, string via, string fingerprintHint)
+        /// <summary>
+        /// Opens a payload that arrived over Bluetooth.
+        ///
+        /// <paramref name="session"/> is the link's own agreed key, so there is nothing to
+        /// search and nothing to infer. This used to try every paired device's key in turn and
+        /// fall back to "there is only one device it could be", because the key belonged to the
+        /// peer rather than to the connection. It belongs to the connection now.
+        /// </summary>
+        private static void HandleIncomingPayload(byte[] encrypted, string via, PeerSession? session)
         {
-            var security = _security;
-            if (security == null) return;
+            if (session == null)
+            {
+                Log.Write("Daemon", "Dropped a Bluetooth payload that arrived before a key was agreed.");
+                return;
+            }
 
-            // Which key decrypts it is also the answer to who sent it. Nothing else on the
-            // wire says so, and nothing else needs to: AES-GCM authenticates, so a payload
-            // that opens under a peer's key could only have been produced by that peer.
-            if (!security.TryDecrypt(encrypted, fingerprintHint, out var decrypted))
+            if (!session.TryDecrypt(encrypted, out var decrypted))
             {
                 Log.Write("Daemon",
-                    security.Peers.IsEmpty
-                        ? "Dropped a payload: no devices are paired, so there is no key to try."
-                        : "Dropped a payload: no paired device's key authenticates it.");
+                    $"Dropped a payload from {DeviceIdentity.Shorten(session.Fingerprint)}: it does not authenticate under this link's key.");
                 return;
             }
 
@@ -660,14 +652,14 @@ namespace WinDaemon
             });
         }
 
-        private static void AnnounceAddressOverBle(ITransportConnection link, string? fingerprint)
+        private static void AnnounceAddressOverBle(ITransportConnection link, PeerSession? session)
         {
-            if (fingerprint == null || _security == null) return;
+            if (session == null) return;
 
             string? address = NetworkUtil.GetLocalLanAddress();
             if (string.IsNullOrEmpty(address)) return;
 
-            byte[]? payload = _security.EncryptFor(fingerprint, SyncContent.Address,
+            byte[]? payload = session.Encrypt(SyncContent.Address,
                 System.Text.Encoding.UTF8.GetBytes(address));
             if (payload == null) return;
 
@@ -766,10 +758,10 @@ namespace WinDaemon
                 LocalPublicKey = _security!.Identity.PublicKey,
                 LocalDeviceName = Environment.MachineName,
                 LocalMeshName = _security.Peers.MeshName,
-                AuthorisePeer = key => _security.Authorise(key)
+                OpenSession = OpenBleSession
             };
 
-            central.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE", e.Fingerprint);
+            central.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE", central.Peer);
             central.ConnectionClosed += (_, _) =>
             {
                 Log.Write("Daemon", "The outbound Bluetooth link closed.");
@@ -782,7 +774,7 @@ namespace WinDaemon
                 if (!string.IsNullOrWhiteSpace(e.DeviceName))
                     _security?.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName);
 
-                AnnounceAddressOverBle(central, e.Fingerprint);
+                AnnounceAddressOverBle(central, central.Peer);
             };
             central.WiFiRequested += (_, _) =>
             {

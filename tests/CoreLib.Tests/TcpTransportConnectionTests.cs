@@ -12,11 +12,12 @@ public class TcpTransportConnectionTests
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
 
     /// <summary>
-    /// The wire version these hand-built frames claim. Must track the transport: a stale value
-    /// here makes every such test pass for the wrong reason, because a version mismatch drops
-    /// the connection exactly like the fault the test is trying to provoke.
+    /// The wire version these hand-built frames claim, read from the transport rather than
+    /// copied. A copy went stale the last two times the version moved, and a stale one makes
+    /// every such test pass for the wrong reason: a version mismatch drops the connection in
+    /// exactly the way the test is trying to provoke.
     /// </summary>
-    private const byte WireVersion = 2;
+    private const byte WireVersion = TcpTransportConnection.ProtocolVersion;
 
     private static int FreePort()
     {

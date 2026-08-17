@@ -98,8 +98,30 @@ namespace AndroidClient.Platforms.Android
         /// <summary>Name the peer announced, or null if it has not said.</summary>
         public string? RemoteDeviceName { get; private set; }
 
-        /// <summary>Decides whether a peer may use this link. Returning false drops it.</summary>
-        public Func<string, bool>? AuthorisePeer { get; set; }
+        /// <summary>
+        /// Authorises a peer and agrees the key this link is encrypted with. Returning null
+        /// drops the link.
+        /// </summary>
+        public Func<string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
+
+        /// <summary>
+        /// This connection's ephemeral keypair. Rolled whenever a central subscribes, so
+        /// successive connections to this long-lived server do not share one - a peripheral
+        /// outlives the links it serves, unlike a central, which is built per attempt.
+        /// </summary>
+        private EphemeralKeyPair _ephemeral = EphemeralKeyPair.Create();
+
+        private PeerSession? _peer;
+
+        /// <summary>The agreed key for the live link, or null before the peer's hello arrives.</summary>
+        public PeerSession? Peer => Volatile.Read(ref _peer);
+
+        private void RollEphemeral()
+        {
+            var fresh = EphemeralKeyPair.Create();
+            Interlocked.Exchange(ref _ephemeral, fresh)?.Dispose();
+            Interlocked.Exchange(ref _peer, null)?.Dispose();
+        }
 
         public string? RemotePublicKey { get; private set; }
 
@@ -260,6 +282,10 @@ namespace AndroidClient.Platforms.Android
                 _hasSubscriber = true;
                 _lastInboundUtc = DateTime.UtcNow;
 
+                // A fresh link means a fresh ephemeral, or every central this server ever
+                // serves would share one and the forward secrecy would only be per process.
+                RollEphemeral();
+
                 Log.Write("BlePeripheral", "A central subscribed.");
                 ClientConnected?.Invoke(this, EventArgs.Empty);
 
@@ -392,7 +418,8 @@ namespace AndroidClient.Platforms.Android
                 return;
             }
 
-            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName, out string peerMesh) ||
+            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName,
+                                                  out string peerMesh, out string peerEphemeral) ||
                 !DeviceIdentity.IsValidPublicKey(publicKey))
             {
                 Log.Write("BlePeripheral", "The peer announced something that is not a public key.");
@@ -401,14 +428,22 @@ namespace AndroidClient.Platforms.Android
 
             if (peerName.Length > 0) RemoteDeviceName = peerName;
 
-            var authorise = AuthorisePeer;
-            if (authorise != null && !authorise(publicKey))
+            var open = OpenSession;
+            if (open != null)
             {
-                Log.Write("BlePeripheral", "Refusing a Bluetooth peer this device has not paired with.");
-                RemotePublicKey = null;
-                RemoteFingerprint = string.Empty;
-                Drop();
-                return;
+                var agreed = open(publicKey, peerEphemeral, _ephemeral);
+                if (agreed == null)
+                {
+                    Log.Write("BlePeripheral", peerEphemeral.Length == 0
+                        ? "Refusing a Bluetooth peer that offered no ephemeral key; it is running an older build."
+                        : "Refusing a Bluetooth peer this device has not paired with.");
+                    RemotePublicKey = null;
+                    RemoteFingerprint = string.Empty;
+                    Drop();
+                    return;
+                }
+
+                Interlocked.Exchange(ref _peer, agreed)?.Dispose();
             }
 
             RemotePublicKey = publicKey;
@@ -566,12 +601,21 @@ namespace AndroidClient.Platforms.Android
             string? key = LocalPublicKey;
             if (string.IsNullOrWhiteSpace(key)) return;
 
+            var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey));
+
+            // Written whole rather than fragmented - see BuildHelloPayload for why the two
+            // shapes cannot be mixed - so an oversized one is reported rather than silently lost.
+            if (frame.Length > _usablePayload)
+            {
+                Log.Write("BlePeripheral",
+                    $"The hello is {frame.Length} bytes and only {_usablePayload} will fit - the peer will not learn this device's identity.");
+                return;
+            }
+
             try
             {
-                await NotifyAsync(
-                    BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
-                        BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName)),
-                    CancellationToken.None).ConfigureAwait(false);
+                await NotifyAsync(frame, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -636,6 +680,9 @@ namespace AndroidClient.Platforms.Android
 
             lock (_gate) _subscriber = null;
 
+            // Destroyed with the link, which is what makes what crossed it unrecoverable.
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
+
             try { ConnectionClosed?.Invoke(this, EventArgs.Empty); }
             catch (Exception ex) { Log.Write("BlePeripheral", "ConnectionClosed handler threw", ex); }
         }
@@ -691,6 +738,9 @@ namespace AndroidClient.Platforms.Android
             // the same problem here.
             try { server?.Close(); } catch (Exception ex) { Log.Write("BlePeripheral", "Closing the GATT server failed", ex); }
             try { server?.Dispose(); } catch { }
+
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
+            try { _ephemeral.Dispose(); } catch { }
 
             PayloadReceived = null;
             ConnectionClosed = null;

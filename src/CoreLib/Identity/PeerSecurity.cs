@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 
 namespace CoreLib.Identity
 {
@@ -35,7 +33,6 @@ namespace CoreLib.Identity
     /// </summary>
     public sealed class PeerSecurity : IDisposable
     {
-        private readonly ConcurrentDictionary<string, byte[]> _keys = new(StringComparer.OrdinalIgnoreCase);
         private bool _disposed;
 
         public DeviceIdentity Identity { get; }
@@ -49,9 +46,6 @@ namespace CoreLib.Identity
         {
             Identity = identity ?? throw new ArgumentNullException(nameof(identity));
             Peers = peers ?? throw new ArgumentNullException(nameof(peers));
-
-            // A forgotten device must not leave a usable key behind in the cache.
-            Peers.Changed += InvalidateStaleKeys;
         }
 
         /// <summary>Loads or creates an identity and registry under one directory.</summary>
@@ -106,106 +100,43 @@ namespace CoreLib.Identity
             return Peers.Trust(publicKey!, name, address);
         }
 
-        /// <summary>The AES-256 key shared with one peer, or null if it is not paired.</summary>
-        public byte[]? KeyFor(string? fingerprint)
-        {
-            if (string.IsNullOrWhiteSpace(fingerprint)) return null;
-
-            if (_keys.TryGetValue(fingerprint, out var cached)) return cached;
-
-            var peer = Peers.Find(fingerprint);
-            if (peer == null) return null;
-
-            try
-            {
-                var key = Identity.DeriveSharedKey(peer.PublicKey);
-                _keys[fingerprint] = key;
-                return key;
-            }
-            catch (Exception ex)
-            {
-                Diagnostics.Log.Write("Peers", $"Could not derive a key for {DeviceIdentity.Shorten(fingerprint)}", ex);
-                return null;
-            }
-        }
-
-        /// <summary>Encrypts a payload for one peer. Null when that peer is not paired.</summary>
-        public byte[]? EncryptFor(string fingerprint, byte contentType, ReadOnlySpan<byte> body)
-        {
-            var key = KeyFor(fingerprint);
-            if (key == null) return null;
-
-            try { return CryptoEngine.EncryptTagged(contentType, body, key); }
-            catch (Exception ex)
-            {
-                Diagnostics.Log.Write("Peers", "Encryption failed", ex);
-                return null;
-            }
-        }
-
         /// <summary>
-        /// Decrypts a payload, working out which peer sent it.
+        /// Agrees the key for one connection, once both ends have announced an ephemeral key.
         ///
-        /// <paramref name="hint"/> is used first when the transport knows who it is talking to,
-        /// which TCP does from the hello. Bluetooth carries no such exchange, so the remaining
-        /// peers are tried in turn. That is not a guess: AES-GCM authenticates, so a key that
-        /// is not the right one fails rather than producing plausible rubbish - succeeding
-        /// <em>is</em> the proof of who sent it.
-        ///
-        /// <para>The cost is one authentication attempt per paired device in the worst case,
-        /// which for a personal device set is not worth optimising and for a large one would
-        /// be.</para>
+        /// <para>Returns null for a device this one has not paired with, so a session cannot
+        /// exist for a peer that was never authorised. The caller owns the result and must
+        /// dispose it when the connection ends - that disposal is what makes the traffic
+        /// unrecoverable afterwards.</para>
         /// </summary>
-        public bool TryDecrypt(byte[] encrypted, string? hint, out DecryptedPayload result)
+        public PeerSession? OpenSession(string? peerPublicKey,
+                                        EphemeralKeyPair localEphemeral,
+                                        string? peerEphemeralPublicKey)
         {
-            result = default;
-            if (encrypted == null || encrypted.Length == 0) return false;
+            if (_disposed) return null;
+            if (string.IsNullOrWhiteSpace(peerPublicKey) || string.IsNullOrWhiteSpace(peerEphemeralPublicKey)) return null;
+            if (localEphemeral == null) return null;
+            if (!DeviceIdentity.IsValidPublicKey(peerPublicKey)) return null;
 
-            if (!string.IsNullOrWhiteSpace(hint) && TryDecryptFrom(hint!, encrypted, out result)) return true;
-
-            foreach (var peer in Peers.Peers)
-            {
-                if (string.Equals(peer.Fingerprint, hint, StringComparison.OrdinalIgnoreCase)) continue;
-                if (TryDecryptFrom(peer.Fingerprint, encrypted, out result)) return true;
-            }
-
-            return false;
-        }
-
-        private bool TryDecryptFrom(string fingerprint, byte[] encrypted, out DecryptedPayload result)
-        {
-            result = default;
+            string fingerprint = DeviceIdentity.FingerprintOf(peerPublicKey!);
 
             var peer = Peers.Find(fingerprint);
-            if (peer == null) return false;
-
-            var key = KeyFor(fingerprint);
-            if (key == null) return false;
+            if (peer == null)
+            {
+                Diagnostics.Log.Write("Peers",
+                    $"Refusing a session with {DeviceIdentity.Shorten(fingerprint)}: not a paired device.");
+                return null;
+            }
 
             try
             {
-                var (contentType, body) = CryptoEngine.DecryptTagged(encrypted, key);
-                result = new DecryptedPayload(peer, contentType, body);
-                return true;
+                var key = SessionKeys.Derive(Identity, peer.PublicKey, localEphemeral, peerEphemeralPublicKey!);
+                return new PeerSession(peer, key, Peers);
             }
-            catch
+            catch (Exception ex)
             {
-                // Expected whenever this is not the sender. Only the caller can tell that
-                // every peer failed, so nothing is logged here.
-                return false;
-            }
-        }
-
-        /// <summary>Drops cached keys for devices that are no longer paired.</summary>
-        private void InvalidateStaleKeys()
-        {
-            var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var peer in Peers.Peers) live.Add(peer.Fingerprint);
-
-            foreach (var fingerprint in _keys.Keys)
-            {
-                if (live.Contains(fingerprint)) continue;
-                if (_keys.TryRemove(fingerprint, out var key)) System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+                Diagnostics.Log.Write("Peers",
+                    $"Could not agree a session key with {DeviceIdentity.Shorten(fingerprint)}", ex);
+                return null;
             }
         }
 
@@ -213,11 +144,6 @@ namespace CoreLib.Identity
         {
             if (_disposed) return;
             _disposed = true;
-
-            Peers.Changed -= InvalidateStaleKeys;
-
-            foreach (var key in _keys.Values) System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
-            _keys.Clear();
 
             Identity.Dispose();
         }

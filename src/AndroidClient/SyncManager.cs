@@ -194,6 +194,41 @@ namespace AndroidClient
             _blePeripheralLink?.IsConnected == true ? _blePeripheralLink :
             null;
 
+        /// <summary>
+        /// The agreed key of whichever Bluetooth link is live.
+        ///
+        /// Null until that link's hello has crossed, because the key is now per connection
+        /// rather than derived from the peer's identity and known in advance.
+        /// </summary>
+        private static PeerSession? LiveBleSession => SessionOf(LiveBleLink);
+
+        /// <summary>The agreed key held by a Bluetooth transport, whichever half it is.</summary>
+        private static PeerSession? SessionOf(object? link)
+        {
+#if ANDROID
+            return link switch
+            {
+                Platforms.Android.AndroidBleTransport central => central.Peer,
+                Platforms.Android.AndroidBlePeripheral peripheral => peripheral.Peer,
+                _ => null
+            };
+#else
+            _ = link;
+            return null;
+#endif
+        }
+
+        /// <summary>
+        /// Authorises a Bluetooth peer and agrees this link's key in one step. Both halves of
+        /// the tier use it, so a device this phone has not paired with never reaches the point
+        /// of having a session to encrypt with.
+        /// </summary>
+        private static PeerSession? OpenBleSession(string peerPublicKey, string peerEphemeral,
+                                                   EphemeralKeyPair localEphemeral) =>
+            Security.Authorise(peerPublicKey)
+                ? Security.OpenSession(peerPublicKey, localEphemeral, peerEphemeral)
+                : null;
+
         public static bool WiFiConnected => _mesh?.IsConnectedToAny == true;
 
         public static bool IsConnected => BleConnected || WiFiConnected;
@@ -624,12 +659,14 @@ namespace AndroidClient
             var ble = LiveBleLink;
             if (ble == null) return 0;
 
-            string? fingerprint = BluetoothPeerFingerprint();
-            if (fingerprint == null) return 0;
+            // Sealed with the key this link agreed, so there is nothing left to infer about who
+            // the peer is. A link with no session has not finished its handshake and is skipped.
+            var session = SessionOf(ble);
+            if (session == null) return 0;
 
-            if (_mesh?.IsConnectedTo(fingerprint) == true) return 0;
+            if (_mesh?.IsConnectedTo(session.Fingerprint) == true) return 0;
 
-            byte[]? encrypted = Security.EncryptFor(fingerprint, contentType, payload);
+            byte[]? encrypted = session.Encrypt(contentType, payload);
             if (encrypted == null) return 0;
 
             if (encrypted.Length > BleProtocol.MaxPayloadBytes)
@@ -648,35 +685,6 @@ namespace AndroidClient
                 Log.Write("Sync", "Send over Bluetooth failed", ex);
                 return 0;
             }
-        }
-
-        /// <summary>
-        /// Which paired device the Bluetooth link belongs to.
-        ///
-        /// Taken from the identity the peer announced over the link. Falls back to inference
-        /// when it has not - which is what an older build on the other end looks like, and only
-        /// answerable at all when there is one device it could possibly be.
-        /// </summary>
-        private static string? BluetoothPeerFingerprint()
-        {
-#if ANDROID
-            if (_bleLink is Platforms.Android.AndroidBleTransport central &&
-                central.IsConnected && !string.IsNullOrEmpty(central.RemoteFingerprint))
-            {
-                return central.RemoteFingerprint;
-            }
-
-            if (_blePeripheralLink is Platforms.Android.AndroidBlePeripheral peripheral &&
-                peripheral.IsConnected && !string.IsNullOrEmpty(peripheral.RemoteFingerprint))
-            {
-                return peripheral.RemoteFingerprint;
-            }
-#endif
-
-            var peers = Security.Peers.Peers;
-            if (peers.Count != 1) return null;
-
-            return peers[0].Fingerprint;
         }
 
         /// <summary>
@@ -756,16 +764,26 @@ namespace AndroidClient
 
         // ---------------------------------------------------------------- receive path
 
-        private static void HandlePayload(byte[] encrypted, string fingerprintHint)
+        /// <summary>
+        /// Opens a payload that arrived over Bluetooth.
+        ///
+        /// <paramref name="session"/> is the link's own agreed key, so there is nothing to
+        /// search and nothing to infer. This used to try every paired device's key in turn and
+        /// fall back to "there is only one device it could be", because the key belonged to the
+        /// peer rather than to the connection. It belongs to the connection now.
+        /// </summary>
+        private static void HandlePayload(byte[] encrypted, PeerSession? session)
         {
-            // Which key opens it is also the answer to who sent it. Nothing on the wire says
-            // so and nothing needs to: AES-GCM authenticates, so a payload that opens under a
-            // peer's key could only have been produced by that peer.
-            if (!Security.TryDecrypt(encrypted, fingerprintHint, out var decrypted))
+            if (session == null)
             {
-                Log.Write("Sync", Security.Peers.IsEmpty
-                    ? "Dropped a payload: nothing is paired, so there is no key to try."
-                    : "Dropped a payload: no paired device's key authenticates it.");
+                Log.Write("Sync", "Dropped a Bluetooth payload that arrived before a key was agreed.");
+                return;
+            }
+
+            if (!session.TryDecrypt(encrypted, out var decrypted))
+            {
+                Log.Write("Sync",
+                    $"Dropped a payload from {DeviceIdentity.Shorten(session.Fingerprint)}: it does not authenticate under this link's key.");
                 return;
             }
 
@@ -1246,7 +1264,7 @@ namespace AndroidClient
                     LocalPublicKey = Security.Identity.PublicKey,
                     LocalDeviceName = LocalDeviceName,
                     LocalMeshName = Security.Peers.MeshName,
-                    AuthorisePeer = key => Security.Authorise(key)
+                    OpenSession = OpenBleSession
                 };
 
                 peripheral.PayloadReceived += Transport_PayloadReceived;
@@ -1302,7 +1320,8 @@ namespace AndroidClient
                     // Without it this tier only worked when exactly one device was paired.
                     LocalPublicKey = Security.Identity.PublicKey,
                     LocalDeviceName = LocalDeviceName,
-                    LocalMeshName = Security.Peers.MeshName
+                    LocalMeshName = Security.Peers.MeshName,
+                    OpenSession = OpenBleSession
                 };
 
                 ble.PayloadReceived += Transport_PayloadReceived;
@@ -1337,8 +1356,9 @@ namespace AndroidClient
         private static void Transport_PayloadReceived(object? sender, PayloadReceivedEventArgs e)
         {
             // Runs on the transport receive loop. Kept synchronous and total so a failure
-            // here can never take the connection down.
-            try { HandlePayload(e.EncryptedPayload, e.Fingerprint); }
+            // here can never take the connection down. The sender is the link, so it is also
+            // the answer to which key this payload should open under.
+            try { HandlePayload(e.EncryptedPayload, SessionOf(sender)); }
             catch (Exception ex) { Log.Write("Sync", "Payload handling failed", ex); }
         }
 

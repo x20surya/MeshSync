@@ -157,51 +157,82 @@ public class WireFormatTests
     /// newline that base64 can never contain.
     /// </summary>
     [Fact]
-    public void A_bluetooth_hello_round_trips_all_three_fields()
+    public void A_bluetooth_hello_round_trips_all_four_fields()
     {
         using var identity = DeviceIdentity.CreateEphemeral();
+        using var ephemeral = EphemeralKeyPair.Create();
 
-        byte[] payload = BleProtocol.BuildHelloPayload(identity.PublicKey, "S21 FE", "Surya's Mesh");
+        byte[] payload = BleProtocol.BuildHelloPayload(
+            identity.PublicKey, "S21 FE", "Surya's Mesh", ephemeral.PublicKey);
 
-        Assert.True(BleProtocol.TryParseHelloPayload(payload, out string key, out string name, out string mesh));
+        Assert.True(BleProtocol.TryParseHelloPayload(payload, out string key, out string name,
+                                                     out string mesh, out string eph));
         Assert.Equal(identity.PublicKey, key);
         Assert.Equal("S21 FE", name);
         Assert.Equal("Surya's Mesh", mesh);
+        Assert.Equal(ephemeral.PublicKey, eph);
     }
 
     /// <summary>
-    /// Both names are optional and positional, so a peer running an older build - which sends
-    /// the key alone, or the key and a device name - still parses rather than being refused.
+    /// Everything after the identity key is optional and positional, so a shorter payload still
+    /// parses rather than being refused outright. A peer that offers no ephemeral key cannot
+    /// agree a session, but that is the caller's decision to make, not the parser's.
     /// </summary>
     [Fact]
-    public void A_bluetooth_hello_from_an_older_peer_still_parses()
+    public void A_shorter_bluetooth_hello_still_parses()
     {
         using var identity = DeviceIdentity.CreateEphemeral();
 
         byte[] keyOnly = BleProtocol.BuildHelloPayload(identity.PublicKey, null);
-        Assert.True(BleProtocol.TryParseHelloPayload(keyOnly, out string k1, out string n1, out string m1));
+        Assert.True(BleProtocol.TryParseHelloPayload(keyOnly, out string k1, out string n1, out string m1, out string e1));
         Assert.Equal(identity.PublicKey, k1);
         Assert.Equal("", n1);
         Assert.Equal("", m1);
+        Assert.Equal("", e1);
 
         byte[] keyAndName = BleProtocol.BuildHelloPayload(identity.PublicKey, "S21 FE");
-        Assert.True(BleProtocol.TryParseHelloPayload(keyAndName, out string k2, out string n2, out string m2));
+        Assert.True(BleProtocol.TryParseHelloPayload(keyAndName, out string k2, out string n2, out string m2, out string e2));
         Assert.Equal(identity.PublicKey, k2);
         Assert.Equal("S21 FE", n2);
         Assert.Equal("", m2);
+        Assert.Equal("", e2);
     }
 
-    /// <summary>A name containing a newline must not be able to forge a third field.</summary>
+    /// <summary>
+    /// A hello carrying an ephemeral key but no names still lines up, because the fields are
+    /// positional - an empty middle field must not shift the ephemeral into the mesh slot.
+    /// </summary>
+    [Fact]
+    public void An_ephemeral_key_stays_in_its_own_field_when_the_names_are_empty()
+    {
+        using var identity = DeviceIdentity.CreateEphemeral();
+        using var ephemeral = EphemeralKeyPair.Create();
+
+        byte[] payload = BleProtocol.BuildHelloPayload(identity.PublicKey, null, null, ephemeral.PublicKey);
+
+        Assert.True(BleProtocol.TryParseHelloPayload(payload, out string key, out string name,
+                                                     out string mesh, out string eph));
+        Assert.Equal(identity.PublicKey, key);
+        Assert.Equal("", name);
+        Assert.Equal("", mesh);
+        Assert.Equal(ephemeral.PublicKey, eph);
+    }
+
+    /// <summary>A name containing a newline must not be able to forge a later field.</summary>
     [Fact]
     public void A_name_cannot_smuggle_a_separator()
     {
         using var identity = DeviceIdentity.CreateEphemeral();
+        using var ephemeral = EphemeralKeyPair.Create();
 
-        byte[] payload = BleProtocol.BuildHelloPayload(identity.PublicKey, "Evil\nNot my mesh", "Real Mesh");
+        byte[] payload = BleProtocol.BuildHelloPayload(
+            identity.PublicKey, "Evil\nNot my mesh", "Real Mesh", ephemeral.PublicKey);
 
-        Assert.True(BleProtocol.TryParseHelloPayload(payload, out _, out string name, out string mesh));
+        Assert.True(BleProtocol.TryParseHelloPayload(payload, out _, out string name,
+                                                     out string mesh, out string eph));
         Assert.DoesNotContain("\n", name);
         Assert.Equal("Real Mesh", mesh);
+        Assert.Equal(ephemeral.PublicKey, eph);
     }
 
     // ── TCP hello ───────────────────────────────────────────────────────────────────────
@@ -219,13 +250,33 @@ public class WireFormatTests
 
         byte[] frame = BuildHello("Surya's laptop", identity.PublicKey, "Surya's Mesh");
 
-        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out string mesh));
+        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out string mesh, out _));
         Assert.Equal("Surya's laptop", name);
         Assert.Equal(identity.PublicKey, key);
         Assert.Equal("Surya's Mesh", mesh);
     }
 
-    /// <summary>A hello from a build that predates the mesh name parses with an empty one.</summary>
+    /// <summary>
+    /// The ephemeral key is the last field, and it is what a session is agreed from - so it has
+    /// to survive the round trip intact, whole, and in its own slot.
+    /// </summary>
+    [Fact]
+    public void A_hello_carries_the_ephemeral_key()
+    {
+        using var identity = DeviceIdentity.CreateEphemeral();
+        using var ephemeral = EphemeralKeyPair.Create();
+
+        byte[] frame = BuildHello("Surya's laptop", identity.PublicKey, "Surya's Mesh", ephemeral.PublicKey);
+
+        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key,
+                                                         out string mesh, out string eph));
+        Assert.Equal("Surya's laptop", name);
+        Assert.Equal(identity.PublicKey, key);
+        Assert.Equal("Surya's Mesh", mesh);
+        Assert.Equal(ephemeral.PublicKey, eph);
+    }
+
+    /// <summary>A hello that stops before the later fields parses with them empty.</summary>
     [Fact]
     public void A_hello_without_a_mesh_name_still_parses()
     {
@@ -233,10 +284,12 @@ public class WireFormatTests
 
         byte[] frame = BuildHello("Surya's laptop", identity.PublicKey);
 
-        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out string mesh));
+        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key,
+                                                         out string mesh, out string eph));
         Assert.Equal("Surya's laptop", name);
         Assert.Equal(identity.PublicKey, key);
         Assert.Equal("", mesh);
+        Assert.Equal("", eph);
     }
 
     /// <summary>
@@ -250,7 +303,7 @@ public class WireFormatTests
 
         byte[] frame = BuildHello("Surya's laptop", identity.PublicKey);
 
-        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out _));
+        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out _, out _));
         Assert.Equal("Surya's laptop", name);
         Assert.Equal(identity.PublicKey, key);
     }
@@ -259,12 +312,14 @@ public class WireFormatTests
     public void A_hello_survives_a_name_with_characters_outside_ascii()
     {
         using var identity = DeviceIdentity.CreateEphemeral();
+        using var ephemeral = EphemeralKeyPair.Create();
 
-        byte[] frame = BuildHello("Ordinateur de Renée 🖥", identity.PublicKey);
+        byte[] frame = BuildHello("Ordinateur de Renée 🖥", identity.PublicKey, "Le maillage", ephemeral.PublicKey);
 
-        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out _));
+        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out _, out string eph));
         Assert.Equal("Ordinateur de Renée 🖥", name);
         Assert.Equal(identity.PublicKey, key);
+        Assert.Equal(ephemeral.PublicKey, eph);
     }
 
     [Fact]
@@ -272,7 +327,7 @@ public class WireFormatTests
     {
         byte[] frame = BuildHello("Anonymous", "");
 
-        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out _));
+        Assert.True(TcpTransportConnection.TryParseHello(frame, out string name, out string key, out _, out _));
         Assert.Equal("Anonymous", name);
         Assert.Equal("", key);
     }
@@ -293,7 +348,7 @@ public class WireFormatTests
 
         byte[] truncated = frame.AsSpan(0, Math.Min(keepBytes, frame.Length)).ToArray();
 
-        Assert.False(TcpTransportConnection.TryParseHello(truncated, out _, out _, out _));
+        Assert.False(TcpTransportConnection.TryParseHello(truncated, out _, out _, out _, out _));
     }
 
     [Fact]
@@ -302,7 +357,7 @@ public class WireFormatTests
         // Says the name is 200 bytes; supplies four.
         byte[] frame = new byte[] { 200, (byte)'a', (byte)'b', (byte)'c', (byte)'d' };
 
-        Assert.False(TcpTransportConnection.TryParseHello(frame, out _, out _, out _));
+        Assert.False(TcpTransportConnection.TryParseHello(frame, out _, out _, out _, out _));
     }
 
     /// <summary>
@@ -311,13 +366,17 @@ public class WireFormatTests
     /// The mesh name is omitted when null, which is what a build predating it sends - the case
     /// the optional trailing field exists to survive.
     /// </summary>
-    private static byte[] BuildHello(string name, string publicKey, string? meshName = null)
+    private static byte[] BuildHello(string name, string publicKey, string? meshName = null,
+                                     string? ephemeralKey = null)
     {
         byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(name);
         byte[] keyBytes = System.Text.Encoding.UTF8.GetBytes(publicKey);
         byte[] meshBytes = System.Text.Encoding.UTF8.GetBytes(meshName ?? "");
+        byte[] ephBytes = System.Text.Encoding.UTF8.GetBytes(ephemeralKey ?? "");
 
-        int size = 1 + nameBytes.Length + 2 + keyBytes.Length + (meshName == null ? 0 : 1 + meshBytes.Length);
+        int size = 1 + nameBytes.Length + 2 + keyBytes.Length
+                 + (meshName == null ? 0 : 1 + meshBytes.Length)
+                 + (ephemeralKey == null ? 0 : 2 + ephBytes.Length);
         var payload = new byte[size];
 
         payload[0] = (byte)nameBytes.Length;
@@ -333,6 +392,14 @@ public class WireFormatTests
             int meshOffset = keyOffset + 2 + keyBytes.Length;
             payload[meshOffset] = (byte)meshBytes.Length;
             Buffer.BlockCopy(meshBytes, 0, payload, meshOffset + 1, meshBytes.Length);
+
+            if (ephemeralKey != null)
+            {
+                int ephOffset = meshOffset + 1 + meshBytes.Length;
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(
+                    payload.AsSpan(ephOffset, 2), (ushort)ephBytes.Length);
+                Buffer.BlockCopy(ephBytes, 0, payload, ephOffset + 2, ephBytes.Length);
+            }
         }
 
         return payload;

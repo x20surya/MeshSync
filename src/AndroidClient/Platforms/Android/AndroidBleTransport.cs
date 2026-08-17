@@ -87,6 +87,23 @@ namespace AndroidClient.Platforms.Android
         /// <summary>Fingerprint of <see cref="RemotePublicKey"/>, or empty.</summary>
         public string RemoteFingerprint { get; private set; } = string.Empty;
 
+        /// <summary>
+        /// Authorises the peer and agrees the key this link is encrypted with. Returning null
+        /// drops the link.
+        /// </summary>
+        public Func<string, string, CoreLib.Identity.EphemeralKeyPair, CoreLib.Identity.PeerSession?>? OpenSession { get; set; }
+
+        /// <summary>
+        /// This link's ephemeral keypair. One per instance is correct here: the reconnect loop
+        /// builds a fresh transport for every attempt, so the object's life is the link's life.
+        /// </summary>
+        private readonly CoreLib.Identity.EphemeralKeyPair _ephemeral = CoreLib.Identity.EphemeralKeyPair.Create();
+
+        private CoreLib.Identity.PeerSession? _peer;
+
+        /// <summary>The agreed key for the live link, or null before the peer's hello arrives.</summary>
+        public CoreLib.Identity.PeerSession? Peer => Volatile.Read(ref _peer);
+
         public async Task ConnectAsync(string deviceId, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -456,7 +473,8 @@ namespace AndroidClient.Platforms.Android
                 return;
             }
 
-            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName, out string peerMesh) ||
+            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName,
+                                                  out string peerMesh, out string peerEphemeral) ||
                 !CoreLib.Identity.DeviceIdentity.IsValidPublicKey(publicKey))
             {
                 Log.Write("BleClient", "The peer announced something that is not a public key.");
@@ -464,6 +482,23 @@ namespace AndroidClient.Platforms.Android
             }
 
             if (peerName.Length > 0) RemoteDeviceName = peerName;
+
+            var open = OpenSession;
+            if (open != null)
+            {
+                var agreed = open(publicKey, peerEphemeral, _ephemeral);
+                if (agreed == null)
+                {
+                    Log.Write("BleClient", peerEphemeral.Length == 0
+                        ? "The computer offered no ephemeral key; it is running an older build."
+                        : "The computer is not a device this phone has paired with.");
+                    RemotePublicKey = null;
+                    RemoteFingerprint = string.Empty;
+                    return;
+                }
+
+                Interlocked.Exchange(ref _peer, agreed)?.Dispose();
+            }
 
             RemotePublicKey = publicKey;
             RemoteFingerprint = CoreLib.Identity.DeviceIdentity.FingerprintOf(publicKey);
@@ -494,7 +529,16 @@ namespace AndroidClient.Platforms.Android
             if (gatt == null || inbox == null) return;
 
             var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
-                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName));
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey));
+
+            // Written whole rather than fragmented - see BuildHelloPayload for why the two
+            // shapes cannot be mixed - so an oversized one is reported rather than silently lost.
+            if (frame.Length > _usablePayload)
+            {
+                Log.Write("BleClient",
+                    $"The hello is {frame.Length} bytes and only {_usablePayload} will fit - the peer will not learn this device's identity.");
+                return;
+            }
 
             await _sendLock.WaitAsync().ConfigureAwait(false);
             try
@@ -668,6 +712,10 @@ namespace AndroidClient.Platforms.Android
             // Blocking here would stall the reconnect loop for a second on every retry, and
             // the teardown does not need to be observed.
             try { DisconnectAsync().GetAwaiter().GetResult(); } catch { }
+
+            // Destroyed with the link, which is what makes what crossed it unrecoverable.
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
+            try { _ephemeral.Dispose(); } catch { }
 
             PayloadReceived = null;
             ConnectionClosed = null;

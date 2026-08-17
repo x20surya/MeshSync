@@ -70,8 +70,22 @@ namespace WinDaemon
         /// <summary>Name the peer announced, or null if it has not said.</summary>
         public string? RemoteDeviceName { get; private set; }
 
-        /// <summary>Decides whether a peer may use this link. Returning false drops it.</summary>
-        public Func<string, bool>? AuthorisePeer { get; set; }
+        /// <summary>
+        /// Authorises a peer and agrees the key this link is encrypted with. Returning null
+        /// drops the link.
+        /// </summary>
+        public Func<string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
+
+        /// <summary>
+        /// This link's ephemeral keypair. One per instance is correct here, unlike the server
+        /// half, because a central is built fresh for every connection attempt.
+        /// </summary>
+        private readonly EphemeralKeyPair _ephemeral = EphemeralKeyPair.Create();
+
+        private PeerSession? _peer;
+
+        /// <summary>The agreed key for the live link, or null before the peer's hello arrives.</summary>
+        public PeerSession? Peer => Volatile.Read(ref _peer);
 
         public string? RemotePublicKey { get; private set; }
 
@@ -331,7 +345,8 @@ namespace WinDaemon
                 return;
             }
 
-            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName, out string peerMesh) ||
+            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName,
+                                                  out string peerMesh, out string peerEphemeral) ||
                 !DeviceIdentity.IsValidPublicKey(publicKey))
             {
                 Log.Write("BleCentral", "The peer announced something that is not a public key.");
@@ -340,12 +355,20 @@ namespace WinDaemon
 
             if (peerName.Length > 0) RemoteDeviceName = peerName;
 
-            var authorise = AuthorisePeer;
-            if (authorise != null && !authorise(publicKey))
+            var open = OpenSession;
+            if (open != null)
             {
-                Log.Write("BleCentral", "The peer is not a device this one has paired with - dropping the link.");
-                Drop();
-                return;
+                var agreed = open(publicKey, peerEphemeral, _ephemeral);
+                if (agreed == null)
+                {
+                    Log.Write("BleCentral", peerEphemeral.Length == 0
+                        ? "The peer offered no ephemeral key; it is running an older build - dropping the link."
+                        : "The peer is not a device this one has paired with - dropping the link.");
+                    Drop();
+                    return;
+                }
+
+                Interlocked.Exchange(ref _peer, agreed)?.Dispose();
             }
 
             RemotePublicKey = publicKey;
@@ -451,7 +474,16 @@ namespace WinDaemon
             if (string.IsNullOrWhiteSpace(key)) return;
 
             var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
-                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName));
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey));
+
+            // Written whole rather than fragmented - see BuildHelloPayload for why the two
+            // shapes cannot be mixed - so an oversized one is reported rather than silently lost.
+            if (frame.Length > _usablePayload)
+            {
+                Log.Write("BleCentral",
+                    $"The hello is {frame.Length} bytes and only {_usablePayload} will fit - the peer will not learn this device's identity.");
+                return;
+            }
 
             await _sendLock.WaitAsync().ConfigureAwait(false);
             try { await WriteAsync(frame).ConfigureAwait(false); }
@@ -541,6 +573,9 @@ namespace WinDaemon
             _ready = false;
             _reassembler.Reset();
 
+            // Destroyed with the link, which is what makes what crossed it unrecoverable.
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
+
             try { ConnectionClosed?.Invoke(this, EventArgs.Empty); }
             catch (Exception ex) { Log.Write("BleCentral", "ConnectionClosed handler threw", ex); }
         }
@@ -606,6 +641,9 @@ namespace WinDaemon
                 }
             }
             catch { }
+
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
+            try { _ephemeral.Dispose(); } catch { }
 
             PayloadReceived = null;
             ConnectionClosed = null;

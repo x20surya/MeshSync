@@ -240,7 +240,12 @@ namespace CoreLib.Transport
         private async Task<bool> SendOneAsync(string fingerprint, TcpTransportConnection link,
                                               byte contentType, byte[] body, CancellationToken cancellationToken)
         {
-            byte[]? payload = _security.EncryptFor(fingerprint, contentType, body);
+            // Sealed with the key this connection agreed, not one derived from the peer's
+            // identity. A link that has not finished its handshake has no key and is skipped.
+            var session = link.Peer;
+            if (session == null) return false;
+
+            byte[]? payload = session.Encrypt(contentType, body);
             if (payload == null) return false;
 
             if (payload.Length > TcpTransportConnection.MaxPayloadBytes)
@@ -297,7 +302,13 @@ namespace CoreLib.Transport
                 LocalDeviceName = LocalDeviceName,
                 LocalPublicKey = _security.Identity.PublicKey,
                 LocalMeshName = _security.Peers.MeshName,
-                AuthorisePeer = key => _security.Authorise(key)
+
+                // Authorising and agreeing a key are one step: a peer this device has not
+                // paired with never reaches the point of having a session to encrypt with.
+                OpenSession = (peerKey, peerEphemeral, localEphemeral) =>
+                    _security.Authorise(peerKey)
+                        ? _security.OpenSession(peerKey, localEphemeral, peerEphemeral)
+                        : null
             };
 
             link.PayloadReceived += OnPayload;
@@ -414,9 +425,20 @@ namespace CoreLib.Transport
         {
             try
             {
-                if (!_security.TryDecrypt(e.EncryptedPayload, e.Fingerprint, out var decrypted))
+                // There is exactly one key this could have been sealed with - the one this
+                // connection agreed - so there is nothing to search. Failing to open it means
+                // the payload did not come from the device on the other end of this socket.
+                var session = (sender as TcpTransportConnection)?.Peer;
+                if (session == null)
                 {
-                    Log.Write("Mesh", "Dropped a payload: no paired device's key authenticates it.");
+                    Log.Write("Mesh", "Dropped a payload that arrived before a key was agreed.");
+                    return;
+                }
+
+                if (!session.TryDecrypt(e.EncryptedPayload, out var decrypted))
+                {
+                    Log.Write("Mesh",
+                        $"Dropped a payload from {DeviceIdentity.Shorten(session.Fingerprint)}: it does not authenticate under this session's key.");
                     return;
                 }
 

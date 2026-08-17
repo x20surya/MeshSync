@@ -172,21 +172,33 @@ namespace CoreLib.Transport
         }
 
         /// <summary>
-        /// Builds a hello payload: the sender's public key, and optionally its friendly name.
+        /// Builds a hello payload: the sender's identity key, its friendly name, the mesh name
+        /// and this link's ephemeral key, in that order.
         ///
-        /// <para>Separated by a newline, which a base64 key can never contain, so a hello that
-        /// carries only a key - which is what an earlier build sends - still parses as one.</para>
+        /// <para>Separated by newlines, which a base64 key can never contain, so the fields can
+        /// be read positionally and a shorter payload still parses.</para>
         ///
         /// <para>The name matters more here than it looks. Wi-Fi carries it in its own hello, so
         /// a device paired over Wi-Fi has a name to show. Bluetooth carried identity but no
         /// name, which left a Bluetooth-only pair with nothing to call each other and a
         /// notification reading "your devices" for ever.</para>
+        ///
+        /// <para>The ephemeral key is what gives this tier forward secrecy, and it roughly
+        /// doubles the size of the frame. A hello is written in one go rather than through
+        /// <see cref="BleFragmenter"/>, because an extended control frame is marked by a leading
+        /// zero and a fragmented chunk starts with its message id instead - so the two shapes
+        /// cannot be mixed. At a negotiated MTU there is ample room; the senders check and log
+        /// rather than letting an oversized hello vanish silently.
+        /// </para>
         /// </summary>
-        public static byte[] BuildHelloPayload(string publicKey, string? deviceName, string? meshName = null)
+        public static byte[] BuildHelloPayload(string publicKey, string? deviceName,
+                                               string? meshName = null, string? ephemeralKey = null)
         {
             string name = Clean(deviceName);
             string mesh = Clean(meshName);
+            string ephemeral = (ephemeralKey ?? "").Replace('\n', ' ').Trim();
 
+            if (ephemeral.Length > 0) return System.Text.Encoding.UTF8.GetBytes($"{publicKey}\n{name}\n{mesh}\n{ephemeral}");
             if (name.Length == 0 && mesh.Length == 0) return System.Text.Encoding.UTF8.GetBytes(publicKey);
             if (mesh.Length == 0) return System.Text.Encoding.UTF8.GetBytes($"{publicKey}\n{name}");
 
@@ -213,18 +225,22 @@ namespace CoreLib.Transport
         }
 
         /// <summary>
-        /// Splits a hello payload into its key, device name and mesh name.
+        /// Splits a hello payload into its identity key, device name, mesh name and ephemeral
+        /// key.
         ///
-        /// Both names are optional and read positionally, so a peer that predates either still
-        /// parses. A base64 key can contain no newline, which is what makes the separator
-        /// unambiguous.
+        /// Everything after the identity key is optional and read positionally, so a shorter
+        /// payload still parses. A base64 key can contain no newline, which is what makes the
+        /// separator unambiguous. An empty ephemeral key means no session can be agreed, which
+        /// the caller treats as a refusal rather than as a peer to fall back for.
         /// </summary>
         public static bool TryParseHelloPayload(byte[] payload, out string publicKey,
-                                                out string deviceName, out string meshName)
+                                                out string deviceName, out string meshName,
+                                                out string ephemeralKey)
         {
             publicKey = "";
             deviceName = "";
             meshName = "";
+            ephemeralKey = "";
 
             if (payload == null || payload.Length == 0) return false;
 
@@ -237,6 +253,7 @@ namespace CoreLib.Transport
             publicKey = parts[0].Trim();
             if (parts.Length > 1) deviceName = parts[1].Trim();
             if (parts.Length > 2) meshName = parts[2].Trim();
+            if (parts.Length > 3) ephemeralKey = parts[3].Trim();
 
             return publicKey.Length > 0;
         }
