@@ -233,6 +233,46 @@ namespace WinDaemon
         private static void ShowDashboardFromTray() =>
             _app?.Dispatcher.BeginInvoke(() => _window?.ShowDashboard());
 
+        /// <summary>
+        /// Asks a device to make a noise so it can be found.
+        ///
+        /// Goes over whichever tier is up. One byte fits comfortably in a Bluetooth frame, which
+        /// is the point: the moment you most want to find a device is the moment it is not on
+        /// any network.
+        /// </summary>
+        public static async Task<bool> RingAsync(string fingerprint, bool on)
+        {
+            var mesh = _mesh;
+            byte[] body = { on ? (byte)1 : (byte)0 };
+
+            if (mesh?.IsConnectedTo(fingerprint) == true &&
+                await mesh.SendToAsync(fingerprint, SyncContent.Ring, body).ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            // No Wi-Fi to that device, so try Bluetooth - which is the case this feature is for.
+            var session = _bleCentral?.IsConnected == true ? _bleCentral.Peer : _bleTransport?.Peer;
+            if (session == null || !string.Equals(session.Fingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            byte[]? sealed_ = session.Encrypt(SyncContent.Ring, body);
+            if (sealed_ == null) return false;
+
+            try
+            {
+                if (_bleCentral?.IsConnected == true) await _bleCentral.SendPayloadAsync(sealed_).ConfigureAwait(false);
+                else await _bleTransport!.SendPayloadToAsync(fingerprint, sealed_).ConfigureAwait(false);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Daemon", "Could not ask the device to ring", ex);
+                return false;
+            }
+        }
+
         /// <summary>Asks for a file and sends it to every connected device.</summary>
         public static void PromptForFileToSend() =>
             _app?.Dispatcher.BeginInvoke(() =>
@@ -761,6 +801,22 @@ namespace WinDaemon
                     break;
                 case SyncContent.Address:
                     NoteAnnouncedAddress(peer.Fingerprint, body, from);
+                    break;
+                case SyncContent.Ring:
+                    // Authenticated by having arrived at all: it opened under this connection's
+                    // key, so it came from a device this one is paired with.
+                    if (body.Length > 0 && body[0] != 0)
+                    {
+                        Ringer.Start(from);
+                        // Brought to the front, because the banner with the Stop on it is no use
+                        // behind whatever the person was doing while their laptop started
+                        // shrieking at them.
+                        ShowDashboardFromTray();
+                    }
+                    else
+                    {
+                        Ringer.Stop();
+                    }
                     break;
                 default:
                     Log.Write("Daemon", $"Ignoring unknown content type {contentType} from {from}.");

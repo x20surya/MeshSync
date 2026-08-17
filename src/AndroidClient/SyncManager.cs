@@ -963,6 +963,7 @@ namespace AndroidClient
                 if (contentType == ContentText) ApplyText(body);
                 else if (contentType == ContentImage) ApplyImage(body);
                 else if (contentType == SyncContent.Address) NoteAnnouncedAddress(peer, body);
+                else if (contentType == SyncContent.Ring) ApplyRing(peer, body);
                 else Log.Write("Sync", $"Ignoring unknown content type {contentType}.");
             }
             catch (Exception ex)
@@ -1001,6 +1002,68 @@ namespace AndroidClient
             // The Wi-Fi loop may be sitting in a backoff against the old address, and now has
             // a reason to try again immediately.
             SignalWiFi();
+        }
+
+        /// <summary>
+        /// Sounds an alarm, or stops one.
+        ///
+        /// Authenticated by having arrived at all: it opened under this connection's key, so it
+        /// came from a device this phone is paired with. That is the whole reason ringing is a
+        /// content type rather than a two-byte control frame - the latter rides outside the
+        /// encrypted path, and anything that knew the service UUID could have made the phone
+        /// shriek from across the street.
+        /// </summary>
+        private static void ApplyRing(PeerRecord peer, byte[] body)
+        {
+#if ANDROID
+            string from = peer.Name ?? DeviceIdentity.Shorten(peer.Fingerprint);
+
+            if (body.Length > 0 && body[0] != 0) Platforms.Android.Ringer.Start(from);
+            else Platforms.Android.Ringer.Stop();
+#else
+            _ = peer;
+            _ = body;
+#endif
+        }
+
+        /// <summary>
+        /// Asks a device to make a noise so it can be found.
+        ///
+        /// Goes over whichever tier is up. One byte fits comfortably in a Bluetooth frame, which
+        /// is the point: the moment you most want to find a device is the moment it is not on
+        /// any network.
+        /// </summary>
+        public static async Task<bool> RingAsync(string fingerprint, bool on)
+        {
+            byte[] body = { on ? (byte)1 : (byte)0 };
+
+            if (_mesh?.IsConnectedTo(fingerprint) == true &&
+                await Mesh.SendToAsync(fingerprint, SyncContent.Ring, body).ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            var ble = LiveBleLink;
+            var session = SessionOf(ble);
+            if (ble == null || session == null ||
+                !string.Equals(session.Fingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            byte[]? sealed_ = session.Encrypt(SyncContent.Ring, body);
+            if (sealed_ == null) return false;
+
+            try
+            {
+                await ble.SendPayloadAsync(sealed_).ConfigureAwait(false);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Sync", "Could not ask the device to ring", ex);
+                return false;
+            }
         }
 
         private static void ApplyText(byte[] body)

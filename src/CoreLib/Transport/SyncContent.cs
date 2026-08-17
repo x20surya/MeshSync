@@ -49,5 +49,19 @@ namespace CoreLib.Transport
 
         /// <summary>One piece of a file: the id, the offset it belongs at, and the bytes.</summary>
         public const byte FileChunk = 0x05;
+
+        /// <summary>
+        /// "Make a noise so I can find you." One byte: non-zero to start, zero to stop.
+        ///
+        /// <para><b>Why a content type and not a control frame.</b> Two bytes down the Bluetooth
+        /// control path would have been the obvious shape and is the wrong one: control frames
+        /// ride outside the encrypted payload, so anything that knew the service UUID could make
+        /// a phone shriek from across the street. Riding the normal path costs nothing and makes
+        /// the request authenticated, exactly as an address is.</para>
+        ///
+        /// <para>It is small enough for Bluetooth, which is the whole point - the moment you
+        /// most want to find a device is the moment it is not on any network.</para>
+        /// </summary>
+        public const byte Ring = 0x06;
     }
 }

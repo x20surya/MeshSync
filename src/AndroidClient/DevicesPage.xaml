@@ -68,18 +68,26 @@
                     <CollectionView x:Name="DeviceList" SelectionMode="None">
                         <CollectionView.ItemTemplate>
                             <DataTemplate>
-                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Padding="12,12">
+                                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8" Padding="12,12">
                                     <Ellipse Grid.Column="0" WidthRequest="9" HeightRequest="9"
                                              VerticalOptions="Center" Fill="{Binding Dot}" />
 
-                                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2" Margin="4,0,0,0">
                                         <Label Text="{Binding Name}" Style="{StaticResource T.Body}"
                                                FontSize="14" FontAttributes="Bold" LineBreakMode="TailTruncation" />
                                         <Label Text="{Binding Detail}" Style="{StaticResource T.Faint}"
                                                FontSize="11.5" LineBreakMode="TailTruncation" />
                                     </VerticalStackLayout>
 
-                                    <Button Grid.Column="2" Text="Forget" Style="{StaticResource S.BtnQuiet}"
+                                    <!-- Only for a device that is actually reachable. Ringing
+                                         something that cannot hear you is a button that lies. -->
+                                    <Button Grid.Column="2" Text="Ring" Style="{StaticResource S.BtnQuiet}"
+                                            FontSize="11.5" Padding="12,4" HeightRequest="32"
+                                            VerticalOptions="Center" IsVisible="{Binding CanRing}"
+                                            CommandParameter="{Binding Fingerprint}"
+                                            Clicked="OnRingClicked" />
+
+                                    <Button Grid.Column="3" Text="Forget" Style="{StaticResource S.BtnQuiet}"
                                             FontSize="11.5" Padding="12,4" HeightRequest="32"
                                             VerticalOptions="Center"
                                             CommandParameter="{Binding Fingerprint}"

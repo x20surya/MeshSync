@@ -183,6 +183,33 @@
                     </StackPanel>
                 </Grid>
 
+                <!-- Only up while this machine is the one being looked for. It sits above the
+                     content rather than inside a page, because the window may be on any of them
+                     when the alarm starts and the way to stop it must not be somewhere else. -->
+                <Border x:Name="RingBanner" Grid.Row="1" Visibility="Collapsed"
+                        Background="{DynamicResource B.WarnSoft}"
+                        BorderBrush="{DynamicResource B.Warn}" BorderThickness="0,0,0,1"
+                        Padding="28,12" Panel.ZIndex="10" VerticalAlignment="Top">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="This computer is ringing" Style="{StaticResource T.Base}"
+                                       FontSize="14" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource B.Warn}" />
+                            <TextBlock x:Name="RingBannerDetail" Style="{StaticResource T.Muted}"
+                                       FontSize="12" Margin="0,2,0,0"
+                                       Text="Another of your devices is looking for it." />
+                        </StackPanel>
+
+                        <Button Grid.Column="1" Style="{StaticResource S.BtnPrimary}" Content="Stop"
+                                Padding="20,7" VerticalAlignment="Center" Click="BtnStopRinging_Click" />
+                    </Grid>
+                </Border>
+
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled" Padding="28,4,28,0">
                     <Grid>
@@ -416,6 +443,7 @@
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
 
                                                     <Ellipse Grid.Column="0" Width="9" Height="9"
@@ -432,6 +460,14 @@
                                                     </StackPanel>
 
                                                     <Button Grid.Column="2" Style="{StaticResource S.BtnQuiet}"
+                                                            Content="Ring" Padding="12,5" FontSize="11.5"
+                                                            VerticalAlignment="Center" Margin="0,0,8,0"
+                                                            Visibility="{Binding RingVisibility}"
+                                                            ToolTip="Make this device sound an alarm so you can find it"
+                                                            Tag="{Binding Fingerprint}"
+                                                            Click="BtnRingDevice_Click" />
+
+                                                    <Button Grid.Column="3" Style="{StaticResource S.BtnQuiet}"
                                                             Content="Forget" Padding="12,5" FontSize="11.5"
                                                             VerticalAlignment="Center"
                                                             Tag="{Binding Fingerprint}"

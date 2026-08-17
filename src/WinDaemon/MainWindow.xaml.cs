@@ -76,6 +76,7 @@ namespace WinDaemon
 
             ConnectionState.Changed += ConnectionState_Changed;
             _activity.Changed += Activity_Changed;
+            Ringer.Changed += Ringer_Changed;
 
             // The list has to follow pairing as well as connectivity: a device added from
             // another window, or forgotten, changes it without any link going up or down.
@@ -111,6 +112,7 @@ namespace WinDaemon
                 RefreshActivity();
                 RefreshDevices();
                 RefreshPending();
+                RefreshRinging();
             };
         }
 
@@ -179,7 +181,10 @@ namespace WinDaemon
                         // The desktop row is wide enough for the full short form; the phone's
                         // is not, which is why it trims further.
                         Fingerprint = peer.Fingerprint,
-                        Dot = live ? accent : faint
+                        Dot = live ? accent : faint,
+                        // Only offered for a device that is actually reachable. Ringing something
+                        // that cannot hear you is a button that does nothing.
+                        RingVisibility = live ? Visibility.Visible : Visibility.Collapsed
                     });
                 }
             }
@@ -567,6 +572,45 @@ namespace WinDaemon
             NavDevices.IsChecked = true;
         }
 
+        // ────────────────────────────── finding a device
+
+        private void Ringer_Changed() => Dispatcher.BeginInvoke(RefreshRinging);
+
+        private void RefreshRinging() =>
+            RingBanner.Visibility = Ringer.IsRinging ? Visibility.Visible : Visibility.Collapsed;
+
+        private void BtnStopRinging_Click(object sender, RoutedEventArgs e) => Ringer.Stop();
+
+        private async void BtnRingDevice_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not string fingerprint) return;
+            if (sender is not System.Windows.Controls.Button button) return;
+
+            button.IsEnabled = false;
+            try
+            {
+                if (!await Program.RingAsync(fingerprint, on: true))
+                {
+                    System.Windows.MessageBox.Show(
+                        "That device could not be reached just now.",
+                        "Mesh Sync", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                // Modal on purpose. The dialog is the way to stop it, so it has to stay in front
+                // of the person who started it rather than behind whatever they clicked next.
+                System.Windows.MessageBox.Show(
+                    "That device is ringing. Close this to stop it.\n\nIt stops on its own after a minute.",
+                    "Mesh Sync", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                await Program.RingAsync(fingerprint, on: false);
+            }
+            finally
+            {
+                button.IsEnabled = true;
+            }
+        }
+
         // ────────────────────────────── sending files
 
         private void BtnSendFile_Click(object sender, RoutedEventArgs e) => Program.PromptForFileToSend();
@@ -692,6 +736,7 @@ namespace WinDaemon
         {
             ConnectionState.Changed -= ConnectionState_Changed;
             _activity.Changed -= Activity_Changed;
+            Ringer.Changed -= Ringer_Changed;
 
             if (Program.Security != null)
             {
@@ -726,6 +771,7 @@ namespace WinDaemon
             public string Name { get; init; } = "";
             public string Detail { get; init; } = "";
             public string Fingerprint { get; init; } = "";
+            public Visibility RingVisibility { get; init; } = Visibility.Collapsed;
             // Fully qualified: WinForms is referenced for the tray icon, so a bare Brush is
             // ambiguous between System.Drawing and System.Windows.Media.
             public System.Windows.Media.Brush Dot { get; init; } = System.Windows.Media.Brushes.Gray;

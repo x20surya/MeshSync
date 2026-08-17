@@ -90,7 +90,8 @@ public partial class DevicesPage : ContentPage
                     ? $"{via} · {Brief(peer.Fingerprint)}"
                     : $"Last seen {Relative(peer.LastSeenUtc)} · {Brief(peer.Fingerprint)}",
                 Fingerprint = peer.Fingerprint,
-                Dot = live ? Themed("Accent") : Themed("Faint")
+                Dot = live ? Themed("Accent") : Themed("Faint"),
+                CanRing = live
             });
         }
 
@@ -222,6 +223,28 @@ public partial class DevicesPage : ContentPage
         Render();
     }
 
+    /// <summary>
+    /// Asks a device to sound an alarm, and keeps the way to stop it in front of the person who
+    /// started it - a dialog rather than a toast, because it has to still be there in a minute
+    /// when they have found the thing.
+    /// </summary>
+    private async void OnRingClicked(object? sender, EventArgs e)
+    {
+        if ((sender as Button)?.CommandParameter is not string fingerprint) return;
+
+        if (!await SyncManager.RingAsync(fingerprint, on: true))
+        {
+            await DisplayAlertAsync("Not reachable", "That device could not be reached just now.", "OK");
+            return;
+        }
+
+        await DisplayAlertAsync("Ringing",
+            "That device is sounding an alarm. Close this to stop it.\n\nIt stops on its own after a minute.",
+            "Stop");
+
+        await SyncManager.RingAsync(fingerprint, on: false);
+    }
+
     private void OnScanClicked(object? sender, EventArgs e) => OpenCamera();
 
     private void OnManualToggled(object? sender, EventArgs e)
@@ -295,6 +318,7 @@ public partial class DevicesPage : ContentPage
         public string Detail { get; init; } = "";
         public string Fingerprint { get; init; } = "";
         public Color Dot { get; init; } = Colors.Gray;
+        public bool CanRing { get; init; }
     }
 
     /// <summary>One device waiting to be allowed in.</summary>
