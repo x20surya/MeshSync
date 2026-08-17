@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Linq;
 
 namespace CoreLib.Transport
 {
@@ -103,7 +104,155 @@ namespace CoreLib.Transport
         public const byte ControlPing = 0x01;
         public const byte ControlPong = 0x02;
 
+        /// <summary>
+        /// "Raise Wi-Fi, I have something this link cannot carry."
+        ///
+        /// Both tiers make the phone the client - it scans for the service and it opens the
+        /// socket - so the computer has no way to dial the phone when it copies an image and
+        /// only Bluetooth is up. That item used to be logged and dropped. With Bluetooth as
+        /// the standing link that is every image copied on the computer, so the request rides
+        /// the link already open and the phone brings the socket up in response.
+        ///
+        /// Two bytes like the others, so the length discrimination against a receipt (4) and
+        /// the smallest data chunk (5) is unaffected.
+        /// </summary>
+        public const byte ControlWakeWiFi = 0x03;
+
         public static byte[] BuildControl(byte kind) => new[] { ControlMarker, kind };
+
+        // ──────────────────────────── extended control
+
+        /// <summary>
+        /// Marks a control frame too long to fit in two bytes: <c>[0x00][kind][payload...]</c>.
+        ///
+        /// <para>The three original frame types are told apart by length alone, which works
+        /// only while every one of them has a fixed size. An identity exchange does not - a
+        /// public key is around 120 bytes, which lands squarely in the range reserved for data
+        /// chunks.</para>
+        ///
+        /// <para>So this borrows the one value a data chunk can never carry. A chunk's first
+        /// byte is its message id, and both sides now skip zero when allocating one, which
+        /// makes a leading zero unambiguous however long the frame is. It has to be checked
+        /// before the receipt and the reassembler, not after.</para>
+        /// </summary>
+        public const byte ExtendedMarker = 0x00;
+
+        /// <summary>Sender's base64 public key, so the peer knows which key to use and whether to allow it.</summary>
+        public const byte ExtendedHello = 0x01;
+
+        /// <summary>
+        /// Cap on the friendly name in a hello. Keeps the whole frame inside one chunk, and
+        /// stops a hostile or simply strange device name filling the link.
+        /// </summary>
+        public const int MaxDeviceNameBytes = 64;
+
+        public const int ExtendedHeaderSize = 2;
+
+        public static byte[] BuildExtended(byte kind, ReadOnlySpan<byte> payload)
+        {
+            var frame = new byte[ExtendedHeaderSize + payload.Length];
+            frame[0] = ExtendedMarker;
+            frame[1] = kind;
+            payload.CopyTo(frame.AsSpan(ExtendedHeaderSize));
+            return frame;
+        }
+
+        public static bool TryParseExtended(ReadOnlySpan<byte> data, out byte kind, out byte[] payload)
+        {
+            if (data.Length >= ExtendedHeaderSize && data[0] == ExtendedMarker)
+            {
+                kind = data[1];
+                payload = data.Slice(ExtendedHeaderSize).ToArray();
+                return true;
+            }
+
+            kind = 0;
+            payload = Array.Empty<byte>();
+            return false;
+        }
+
+        /// <summary>
+        /// Builds a hello payload: the sender's public key, and optionally its friendly name.
+        ///
+        /// <para>Separated by a newline, which a base64 key can never contain, so a hello that
+        /// carries only a key - which is what an earlier build sends - still parses as one.</para>
+        ///
+        /// <para>The name matters more here than it looks. Wi-Fi carries it in its own hello, so
+        /// a device paired over Wi-Fi has a name to show. Bluetooth carried identity but no
+        /// name, which left a Bluetooth-only pair with nothing to call each other and a
+        /// notification reading "your devices" for ever.</para>
+        /// </summary>
+        public static byte[] BuildHelloPayload(string publicKey, string? deviceName, string? meshName = null)
+        {
+            string name = Clean(deviceName);
+            string mesh = Clean(meshName);
+
+            if (name.Length == 0 && mesh.Length == 0) return System.Text.Encoding.UTF8.GetBytes(publicKey);
+            if (mesh.Length == 0) return System.Text.Encoding.UTF8.GetBytes($"{publicKey}\n{name}");
+
+            return System.Text.Encoding.UTF8.GetBytes($"{publicKey}\n{name}\n{mesh}");
+        }
+
+        /// <summary>
+        /// Trims a name to something that fits and cannot break the line separator.
+        ///
+        /// Cut on a character boundary rather than a byte one, so a multi-byte name is never
+        /// halved and delivered as mojibake.
+        /// </summary>
+        private static string Clean(string? value)
+        {
+            string name = (value ?? "").Replace('\n', ' ').Trim();
+            if (name.Length == 0) return "";
+
+            if (System.Text.Encoding.UTF8.GetByteCount(name) > MaxDeviceNameBytes)
+            {
+                name = new string(name.Take(MaxDeviceNameBytes / 4).ToArray()).Trim();
+            }
+
+            return name;
+        }
+
+        /// <summary>
+        /// Splits a hello payload into its key, device name and mesh name.
+        ///
+        /// Both names are optional and read positionally, so a peer that predates either still
+        /// parses. A base64 key can contain no newline, which is what makes the separator
+        /// unambiguous.
+        /// </summary>
+        public static bool TryParseHelloPayload(byte[] payload, out string publicKey,
+                                                out string deviceName, out string meshName)
+        {
+            publicKey = "";
+            deviceName = "";
+            meshName = "";
+
+            if (payload == null || payload.Length == 0) return false;
+
+            string text;
+            try { text = System.Text.Encoding.UTF8.GetString(payload); }
+            catch { return false; }
+
+            var parts = text.Split('\n');
+
+            publicKey = parts[0].Trim();
+            if (parts.Length > 1) deviceName = parts[1].Trim();
+            if (parts.Length > 2) meshName = parts[2].Trim();
+
+            return publicKey.Length > 0;
+        }
+
+        /// <summary>
+        /// The next message id, never zero.
+        ///
+        /// Zero is reserved for extended control frames. The counter used to wrap straight
+        /// through it after 255 messages, which would have made one clipboard item in every 256
+        /// parse as an identity exchange.
+        /// </summary>
+        public static byte NextMessageId(ref byte counter)
+        {
+            do { counter = unchecked((byte)(counter + 1)); } while (counter == ExtendedMarker);
+            return counter;
+        }
 
         public static bool TryParseControl(ReadOnlySpan<byte> data, out byte kind)
         {

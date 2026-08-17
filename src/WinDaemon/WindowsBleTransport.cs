@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Threading;
 using System.Threading.Tasks;
@@ -6,6 +6,7 @@ using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Storage.Streams;
 using CoreLib.Diagnostics;
+using CoreLib.Identity;
 using CoreLib.Transport;
 
 namespace WinDaemon
@@ -36,7 +37,58 @@ namespace WinDaemon
         public event EventHandler? ConnectionClosed;
         public event EventHandler? ClientConnected;
 
+        /// <summary>Raised once the phone has said which device it is.</summary>
+        public event EventHandler<PeerIdentifiedEventArgs>? PeerIdentified;
+
+        /// <summary>
+        /// The peer has something Bluetooth cannot carry and is asking for Wi-Fi.
+        ///
+        /// Either end can be the one holding an image now that roles are negotiated, so the
+        /// request has to be answerable in both directions rather than only sent by this side.
+        /// </summary>
+        public event EventHandler? WiFiRequested;
+
         public bool IsConnected => HasLivePeer;
+
+        /// <summary>
+        /// This device's base64 public key, announced over the link so the phone knows which
+        /// key to seal for. Bluetooth used to carry no identity at all, which is why the tier
+        /// only worked when exactly one device was paired.
+        /// </summary>
+        public string? LocalPublicKey { get; set; }
+
+        /// <summary>Friendly name announced alongside the key, so the peer has something to show.</summary>
+        public string? LocalDeviceName { get; set; }
+
+        /// <summary>What this device calls the mesh, so a peer with no name of its own can adopt it.</summary>
+        public string? LocalMeshName { get; set; }
+
+        /// <summary>Name the peer announced, or null if it has not said.</summary>
+        public string? RemoteDeviceName { get; private set; }
+
+        /// <summary>
+        /// Decides whether a peer may use this link, given the public key it announced.
+        /// Returning false drops what it sent; leaving it null accepts anyone, which is what
+        /// this tier used to do unconditionally.
+        /// </summary>
+        public Func<string, bool>? AuthorisePeer { get; set; }
+
+        /// <summary>Public key the phone announced, or null if it has not yet.</summary>
+        public string? RemotePublicKey { get; private set; }
+
+        /// <summary>Fingerprint of <see cref="RemotePublicKey"/>, or empty.</summary>
+        public string RemoteFingerprint { get; private set; } = string.Empty;
+
+        /// <summary>
+        /// Which subscribed central is which paired device, keyed by the session's device id.
+        ///
+        /// Needed because notifying the characteristic fans out to <em>every</em> subscriber,
+        /// and each payload is sealed for one peer. With a single phone that was invisible;
+        /// with two it would send each of them the other's traffic and collect a receipt from
+        /// whichever answered first.
+        /// </summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _peerByDevice =
+            new(StringComparer.OrdinalIgnoreCase);
 
         public async Task StartListeningAsync(CancellationToken cancellationToken = default)
         {
@@ -164,9 +216,40 @@ namespace WinDaemon
                 // device" while clipboard items were visibly arriving.
                 NotePeerAlive();
 
+                // Which session this came in on, so a reply goes back to the device that asked
+                // rather than to every subscriber.
+                string? deviceId = null;
+                try { deviceId = args.Session?.DeviceId?.Id; } catch { }
+
+                // Checked first, and before the receipt and the reassembler: an extended
+                // control frame is marked by a leading zero, which is the one value a data
+                // chunk's message id can never be.
+                if (BleProtocol.TryParseExtended(chunk, out byte extendedKind, out byte[] extendedPayload))
+                {
+                    await HandleExtendedAsync(extendedKind, extendedPayload, deviceId);
+                    return;
+                }
+
                 if (BleProtocol.TryParseControl(chunk, out byte controlKind))
                 {
-                    if (controlKind == BleProtocol.ControlPing) await SendControlAsync(BleProtocol.ControlPong);
+                    switch (controlKind)
+                    {
+                        case BleProtocol.ControlPing:
+                            await SendControlAsync(BleProtocol.ControlPong, ClientFor(deviceId));
+                            break;
+
+                        case BleProtocol.ControlWakeWiFi:
+                            // A central can ask this side for Wi-Fi too, now that either end
+                            // may be the one holding something Bluetooth cannot carry.
+                            Log.Write("BleServer", "The peer asked for Wi-Fi.");
+                            WiFiRequested?.Invoke(this, EventArgs.Empty);
+                            break;
+
+                        default:
+                            Log.Write("BleServer", $"Ignoring unknown control kind 0x{controlKind:X2}.");
+                            break;
+                    }
+
                     return;
                 }
 
@@ -181,7 +264,11 @@ namespace WinDaemon
                 if (payload == null) return;
 
                 Log.Write("BleServer", $"Reassembled a {payload.Length} byte payload.");
-                PayloadReceived?.Invoke(this, new PayloadReceivedEventArgs { EncryptedPayload = payload });
+                PayloadReceived?.Invoke(this, new PayloadReceivedEventArgs
+                {
+                    EncryptedPayload = payload,
+                    Fingerprint = RemoteFingerprint
+                });
             }
             catch (Exception ex)
             {
@@ -189,7 +276,19 @@ namespace WinDaemon
             }
         }
 
-        public async Task SendPayloadAsync(byte[] encryptedPayload, CancellationToken cancellationToken = default)
+        public Task SendPayloadAsync(byte[] encryptedPayload, CancellationToken cancellationToken = default) =>
+            SendPayloadToAsync(null, encryptedPayload, cancellationToken);
+
+        /// <summary>
+        /// Sends to one paired device, or to the single subscriber when there is only one.
+        ///
+        /// Addressed rather than broadcast, because each payload is sealed with a key only its
+        /// recipient holds. Notifying the characteristic reaches every subscriber, which with
+        /// two phones would hand each of them traffic it cannot read and would let either one
+        /// answer the receipt the sender is waiting on.
+        /// </summary>
+        public async Task SendPayloadToAsync(string? fingerprint, byte[] encryptedPayload,
+                                             CancellationToken cancellationToken = default)
         {
             if (encryptedPayload == null) throw new ArgumentNullException(nameof(encryptedPayload));
             // Checks the live subscriber list rather than the cached flag: after a restart
@@ -202,13 +301,17 @@ namespace WinDaemon
                     $"Payload of {encryptedPayload.Length} bytes is too large for BLE; use Wi-Fi for this.",
                     nameof(encryptedPayload));
 
+            var target = SubscriberFor(fingerprint);
+
             int chunkSize = MaxNotificationSize();
             byte messageId;
 
             await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                messageId = unchecked(++_messageId);
+                // Never zero: that value marks an extended control frame, and wrapping through
+                // it would make one clipboard item in every 256 parse as an identity exchange.
+                messageId = BleProtocol.NextMessageId(ref _messageId);
                 var chunks = BleFragmenter.Fragment(encryptedPayload, chunkSize, messageId);
 
                 for (int index = 0; index < chunks.Count; index++)
@@ -218,9 +321,7 @@ namespace WinDaemon
                     // Arm before sending, so a fast receipt cannot arrive before we wait.
                     ArmAck(messageId, index);
 
-                    using var writer = new DataWriter();
-                    writer.WriteBytes(chunks[index]);
-                    await _outbox.NotifyValueAsync(writer.DetachBuffer());
+                    await NotifyAsync(chunks[index], target).ConfigureAwait(false);
 
                     // A single chunk needs no receipt: there is nothing behind it to overwrite it.
                     if (chunks.Count == 1) break;
@@ -265,21 +366,179 @@ namespace WinDaemon
             }
         }
 
-        private async Task SendControlAsync(byte kind)
+        /// <summary>
+        /// Asks a peer to bring Wi-Fi up, for something Bluetooth cannot carry.
+        ///
+        /// It is a request, not a guarantee: the peer may be out of Wi-Fi range or have it
+        /// switched off, so the caller has to be prepared for the socket never arriving.
+        /// </summary>
+        public async Task<bool> RequestWiFiAsync(string? fingerprint = null)
         {
-            var outbox = _outbox;
-            if (outbox == null) return;
+            if (_outbox == null || _outbox.SubscribedClients.Count == 0) return false;
+
+            Log.Write("BleServer", "Asking the peer to raise Wi-Fi.");
+            return await SendControlAsync(BleProtocol.ControlWakeWiFi, SubscriberFor(fingerprint)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Handles a frame too long for the two-byte control shape.
+        ///
+        /// Only the identity exchange uses it so far. An unknown kind is ignored rather than
+        /// treated as a fault, so a newer peer can add one without breaking this one.
+        /// </summary>
+        private async Task HandleExtendedAsync(byte kind, byte[] payload, string? deviceId)
+        {
+            if (kind != BleProtocol.ExtendedHello)
+            {
+                Log.Write("BleServer", $"Ignoring unknown extended control kind 0x{kind:X2}.");
+                return;
+            }
+
+            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName, out string peerMesh) ||
+                !DeviceIdentity.IsValidPublicKey(publicKey))
+            {
+                Log.Write("BleServer", "The peer announced something that is not a public key.");
+                return;
+            }
+
+            if (peerName.Length > 0) RemoteDeviceName = peerName;
+
+            var authorise = AuthorisePeer;
+            if (authorise != null && !authorise(publicKey))
+            {
+                Log.Write("BleServer", "Refusing a Bluetooth peer this device has not paired with.");
+                RemotePublicKey = null;
+                RemoteFingerprint = string.Empty;
+                return;
+            }
+
+            RemotePublicKey = publicKey;
+            RemoteFingerprint = DeviceIdentity.FingerprintOf(publicKey);
+
+            // Remembered against the session, so later payloads go to this device and not to
+            // every subscriber.
+            if (!string.IsNullOrWhiteSpace(deviceId)) _peerByDevice[deviceId!] = RemoteFingerprint;
+
+            Log.Write("BleServer", $"Peer identified as {DeviceIdentity.Shorten(RemoteFingerprint)}.");
 
             try
             {
-                using var writer = new DataWriter();
-                writer.WriteBytes(BleProtocol.BuildControl(kind));
-                await outbox.NotifyValueAsync(writer.DetachBuffer());
+                PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs
+                {
+                    PublicKey = publicKey,
+                    Fingerprint = RemoteFingerprint,
+                    DeviceName = RemoteDeviceName ?? "",
+                    MeshName = peerMesh
+                });
+            }
+            catch (Exception ex) { Log.Write("BleServer", "PeerIdentified handler threw", ex); }
+
+            // Answered in kind, so the peer can seal for this device without having to guess
+            // from a registry of one.
+            await SendHelloAsync(ClientFor(deviceId)).ConfigureAwait(false);
+        }
+
+        /// <summary>Announces this device's public key over the link.</summary>
+        private async Task SendHelloAsync(GattSubscribedClient? target = null)
+        {
+            string? key = LocalPublicKey;
+            if (string.IsNullOrWhiteSpace(key) || _outbox == null) return;
+
+            try
+            {
+                await NotifyAsync(
+                    BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
+                        BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName)),
+                    target).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                Log.Write("BleServer", "Could not answer a ping", ex);
+                Log.Write("BleServer", "Could not announce this device's identity", ex);
             }
+        }
+
+        private async Task<bool> SendControlAsync(byte kind, GattSubscribedClient? target = null)
+        {
+            // Never behind the send lock: a ping has to be answerable while a multi-chunk
+            // payload is mid-flight, or the phone's heartbeat times out during every large
+            // transfer and drops a link that is working perfectly.
+            try
+            {
+                await NotifyAsync(BleProtocol.BuildControl(kind), target).ConfigureAwait(false);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("BleServer", $"Could not send control frame 0x{kind:X2}", ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Notifies one frame, to a specific subscriber when we know which, and to all of them
+        /// when we do not - which is the case only until a peer has introduced itself.
+        /// </summary>
+        private async Task NotifyAsync(byte[] frame, GattSubscribedClient? target)
+        {
+            var outbox = _outbox;
+            if (outbox == null) throw new InvalidOperationException("No BLE subscriber to notify.");
+
+            using var writer = new DataWriter();
+            writer.WriteBytes(frame);
+            var buffer = writer.DetachBuffer();
+
+            if (target != null) await outbox.NotifyValueAsync(buffer, target);
+            else await outbox.NotifyValueAsync(buffer);
+        }
+
+        /// <summary>The subscribed central belonging to one paired device, if it is connected.</summary>
+        private GattSubscribedClient? SubscriberFor(string? fingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(fingerprint)) return null;
+
+            try
+            {
+                var clients = _outbox?.SubscribedClients;
+                if (clients == null) return null;
+
+                foreach (var client in clients)
+                {
+                    string? deviceId = client.Session?.DeviceId?.Id;
+                    if (deviceId == null) continue;
+
+                    if (_peerByDevice.TryGetValue(deviceId, out var known) &&
+                        string.Equals(known, fingerprint, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return client;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("BleServer", "Could not resolve which subscriber to notify", ex);
+            }
+
+            return null;
+        }
+
+        private GattSubscribedClient? ClientFor(string? deviceId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceId)) return null;
+
+            try
+            {
+                var clients = _outbox?.SubscribedClients;
+                if (clients == null) return null;
+
+                foreach (var client in clients)
+                {
+                    if (string.Equals(client.Session?.DeviceId?.Id, deviceId, StringComparison.OrdinalIgnoreCase))
+                        return client;
+                }
+            }
+            catch { }
+
+            return null;
         }
 
         // ──────────────────────────────── chunk receipts
@@ -329,8 +588,9 @@ namespace WinDaemon
         }
 
         public Task ConnectAsync(string deviceId, CancellationToken cancellationToken = default) =>
-            // The computer is always the peripheral in this topology; the phone connects to it.
-            throw new NotSupportedException("The Windows BLE transport is the GATT server. The phone initiates the connection.");
+            // This is the server half. Dialling out is what WindowsBleCentral is for, and which
+            // of the two applies to a given peer is decided by BleRoleRules rather than by platform.
+            throw new NotSupportedException("The Windows BLE transport is the GATT server. Use WindowsBleCentral to dial out.");
 
         public Task DisconnectAsync()
         {
@@ -359,6 +619,7 @@ namespace WinDaemon
             PayloadReceived = null;
             ConnectionClosed = null;
             ClientConnected = null;
+            PeerIdentified = null;
         }
 
         private void ThrowIfDisposed()

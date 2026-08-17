@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Android.Bluetooth;
@@ -11,8 +11,13 @@ using Java.Util;
 namespace AndroidClient.Platforms.Android
 {
     /// <summary>
-    /// BLE GATT client. The phone is the central and connects to the computer's peripheral,
-    /// mirroring the TCP topology so the roles stay consistent across both transports.
+    /// BLE GATT client: the half where this phone scans for a peer and connects out to it.
+    ///
+    /// <para>Paired with <see cref="AndroidBlePeripheral"/>, which is the half where a peer
+    /// connects here instead. Which one applies to a given device is decided by
+    /// <see cref="BleRoleRules"/> rather than by platform - it used to be fixed, the phone
+    /// always central and the computer always peripheral, which is why Bluetooth could join a
+    /// phone to a computer and nothing else.</para>
     ///
     /// Payloads are fragmented over the negotiated MTU by <see cref="BleFragmenter"/>. The
     /// previous version wrote a whole payload in a single SetValue call, which silently
@@ -43,11 +48,44 @@ namespace AndroidClient.Platforms.Android
         public event EventHandler<PayloadReceivedEventArgs>? PayloadReceived;
         public event EventHandler? ConnectionClosed;
 
+        /// <summary>
+        /// The computer has something Bluetooth cannot carry and is asking for Wi-Fi.
+        ///
+        /// It cannot dial us - the phone is the client on both tiers - so this is the only
+        /// way an image copied on the computer reaches the phone while Bluetooth is the
+        /// standing link.
+        /// </summary>
+        public event EventHandler? WiFiRequested;
+
+        /// <summary>Raised once the computer has said which device it is.</summary>
+        public event EventHandler<PeerIdentifiedEventArgs>? PeerIdentified;
+
         /// <summary>Only true once services are discovered and notifications are live.</summary>
         public bool IsConnected => _ready;
 
-        public Task StartListeningAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException("The Android BLE transport is the GATT client. It connects to the computer.");
+        /// <summary>
+        /// This device's base64 public key, announced over the link so the computer knows
+        /// which key to seal for and whether to allow us at all.
+        ///
+        /// Bluetooth carried no identity exchange, which meant the tier only worked when
+        /// exactly one device was paired - there was no other way to know whose key to use.
+        /// </summary>
+        public string? LocalPublicKey { get; set; }
+
+        /// <summary>Friendly name announced alongside the key, so the peer has something to show.</summary>
+        public string? LocalDeviceName { get; set; }
+
+        /// <summary>What this device calls the mesh, so a peer with no name of its own can adopt it.</summary>
+        public string? LocalMeshName { get; set; }
+
+        /// <summary>Name the peer announced, or null if it has not said.</summary>
+        public string? RemoteDeviceName { get; private set; }
+
+        /// <summary>Public key the computer announced, or null if it has not yet.</summary>
+        public string? RemotePublicKey { get; private set; }
+
+        /// <summary>Fingerprint of <see cref="RemotePublicKey"/>, or empty.</summary>
+        public string RemoteFingerprint { get; private set; } = string.Empty;
 
         public async Task ConnectAsync(string deviceId, CancellationToken cancellationToken = default)
         {
@@ -90,6 +128,12 @@ namespace AndroidClient.Platforms.Android
             }
 
             Log.Write("BleClient", "Computer answered - link confirmed.");
+
+            // Sent once the link is proven, so the computer knows whose key to seal for. Not
+            // fatal if it fails: with a single paired device both ends can still infer each
+            // other, which is how this tier worked before it could say.
+            try { await SendHelloAsync().ConfigureAwait(false); }
+            catch (Exception ex) { Log.Write("BleClient", "Could not announce this device's identity", ex); }
         }
 
         // ──────────────────────────────── GATT callbacks
@@ -225,10 +269,36 @@ namespace AndroidClient.Platforms.Android
             {
                 _lastInboundUtc = DateTime.UtcNow;
 
-                // A pong, not data. Its only job is to prove the peer is still answering.
-                if (BleProtocol.TryParseControl(chunk, out _))
+                // Checked first, and before the receipt and the reassembler: an extended
+                // control frame is marked by a leading zero, which is the one value a data
+                // chunk's message id can never be.
+                if (BleProtocol.TryParseExtended(chunk, out byte extendedKind, out byte[] extendedPayload))
                 {
-                    _pong?.TrySetResult(true);
+                    HandleExtended(extendedKind, extendedPayload);
+                    return;
+                }
+
+                // Control, not data. The kind used to be discarded, which was harmless while
+                // a pong was the only thing the computer ever sent - it is not any more.
+                if (BleProtocol.TryParseControl(chunk, out byte controlKind))
+                {
+                    switch (controlKind)
+                    {
+                        case BleProtocol.ControlPong:
+                            _pong?.TrySetResult(true);
+                            break;
+
+                        case BleProtocol.ControlWakeWiFi:
+                            Log.Write("BleClient", "The computer asked for Wi-Fi.");
+                            WiFiRequested?.Invoke(this, EventArgs.Empty);
+                            break;
+
+                        default:
+                            // Tolerated, not fatal: a newer peer may send kinds we predate.
+                            Log.Write("BleClient", $"Ignoring unknown control kind 0x{controlKind:X2}.");
+                            break;
+                    }
+
                     return;
                 }
 
@@ -245,7 +315,11 @@ namespace AndroidClient.Platforms.Android
                 if (payload == null) return;
 
                 Log.Write("BleClient", $"Reassembled a {payload.Length} byte payload.");
-                PayloadReceived?.Invoke(this, new PayloadReceivedEventArgs { EncryptedPayload = payload });
+                PayloadReceived?.Invoke(this, new PayloadReceivedEventArgs
+                {
+                    EncryptedPayload = payload,
+                    Fingerprint = RemoteFingerprint
+                });
             }
             catch (Exception ex)
             {
@@ -350,7 +424,7 @@ namespace AndroidClient.Platforms.Android
                     if (DateTime.UtcNow - _lastInboundUtc > BleProtocol.PeerTimeout)
                     {
                         Log.Write("BleClient",
-                            $"No answer from the computer for {BleProtocol.PeerTimeout.TotalSeconds:F0}s - dropping the link.");
+                            $"No answer from the peer for {BleProtocol.PeerTimeout.TotalSeconds:F0}s - dropping the link.");
                         _ready = false;
                         ConnectionClosed?.Invoke(this, EventArgs.Empty);
                         return;
@@ -367,6 +441,70 @@ namespace AndroidClient.Platforms.Android
                 }
             }
             catch (System.OperationCanceledException) { /* expected on teardown */ }
+        }
+
+        /// <summary>
+        /// Handles a frame too long for the two-byte control shape. Only the identity exchange
+        /// uses it so far; an unknown kind is ignored rather than treated as a fault, so a
+        /// newer peer can add one without breaking this one.
+        /// </summary>
+        private void HandleExtended(byte kind, byte[] payload)
+        {
+            if (kind != BleProtocol.ExtendedHello)
+            {
+                Log.Write("BleClient", $"Ignoring unknown extended control kind 0x{kind:X2}.");
+                return;
+            }
+
+            if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName, out string peerMesh) ||
+                !CoreLib.Identity.DeviceIdentity.IsValidPublicKey(publicKey))
+            {
+                Log.Write("BleClient", "The peer announced something that is not a public key.");
+                return;
+            }
+
+            if (peerName.Length > 0) RemoteDeviceName = peerName;
+
+            RemotePublicKey = publicKey;
+            RemoteFingerprint = CoreLib.Identity.DeviceIdentity.FingerprintOf(publicKey);
+
+            Log.Write("BleClient", $"Computer identified as {CoreLib.Identity.DeviceIdentity.Shorten(RemoteFingerprint)}.");
+
+            try
+            {
+                PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs
+                {
+                    PublicKey = publicKey,
+                    Fingerprint = RemoteFingerprint,
+                    DeviceName = RemoteDeviceName ?? "",
+                    MeshName = peerMesh
+                });
+            }
+            catch (Exception ex) { Log.Write("BleClient", "PeerIdentified handler threw", ex); }
+        }
+
+        /// <summary>Announces this device's public key over the link.</summary>
+        private async Task SendHelloAsync()
+        {
+            string? key = LocalPublicKey;
+            if (string.IsNullOrWhiteSpace(key)) return;
+
+            var gatt = _gatt;
+            var inbox = _inbox;
+            if (gatt == null || inbox == null) return;
+
+            var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName));
+
+            await _sendLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await WriteChunkAsync(gatt, inbox, frame, CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
         }
 
         private async Task SendControlAsync(byte kind)
@@ -434,7 +572,9 @@ namespace AndroidClient.Platforms.Android
             await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                byte messageId = unchecked(++_messageId);
+                // Never zero: that value marks an extended control frame, and wrapping through
+                // it would make one clipboard item in every 256 parse as an identity exchange.
+                byte messageId = BleProtocol.NextMessageId(ref _messageId);
                 var chunks = BleFragmenter.Fragment(encryptedPayload, _usablePayload, messageId);
 
                 foreach (var chunk in chunks)
@@ -531,6 +671,7 @@ namespace AndroidClient.Platforms.Android
 
             PayloadReceived = null;
             ConnectionClosed = null;
+            WiFiRequested = null;
 
             base.Dispose();
         }
