@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
@@ -24,7 +24,14 @@ namespace CoreLib.Transport
         public const int DefaultPort = 45001;
 
         private const ushort Magic = 0x4D53;
-        private const byte ProtocolVersion = 1;
+
+        /// <summary>
+        /// Bumped to 2 when the hello frame grew a public key. An older build reading the new
+        /// shape would take the length prefixes for the start of a device name, so the version
+        /// byte is what turns that into "update both devices" instead of a mystery.
+        /// </summary>
+        private const byte ProtocolVersion = 2;
+
         private const int HeaderSize = 8;
 
         private const byte KindData = 0;
@@ -35,19 +42,56 @@ namespace CoreLib.Transport
         /// <summary>Guards against a hostile peer sending a huge name.</summary>
         private const int MaxDeviceNameBytes = 128;
 
+        /// <summary>
+        /// Generous room for a base64 P-256 SubjectPublicKeyInfo, which is about 120 bytes.
+        /// Anything beyond this is not a key, so it is refused rather than parsed.
+        /// </summary>
+        private const int MaxPublicKeyBytes = 512;
+
+        /// <summary>
+        /// How long a freshly accepted socket has to say who it is before it is dropped.
+        ///
+        /// Generous, because the hello races the peer's own startup, and dropping a device that
+        /// was merely slow would look exactly like a pairing failure.
+        /// </summary>
+        private static readonly TimeSpan HelloTimeout = TimeSpan.FromSeconds(10);
+
         /// <summary>Hard ceiling on a single frame. Guards against OOM from a corrupt or hostile length prefix.</summary>
         public const int MaxPayloadBytes = 32 * 1024 * 1024;
 
-        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(10);
-        private static readonly TimeSpan PeerTimeout = TimeSpan.FromSeconds(30);
+        /// <summary>
+        /// How often a live socket proves itself, and how long silence is tolerated.
+        ///
+        /// These were 10s and 30s, chosen for fast drop detection before anything weighed the
+        /// cost. An idle TCP socket is free, but a heartbeat is not: every one of them pulls
+        /// the Wi-Fi chip out of power save. For comparison, the push service every app on the
+        /// phone shares heartbeats about every 15 minutes, and most of that is holding a NAT
+        /// mapping open across the internet - which does not apply here, because both devices
+        /// are on the same subnet with no NAT between them.
+        ///
+        /// With Bluetooth held as the standing link it also carries presence, and it notices a
+        /// vanished peer in 24s regardless. So this only has to catch a socket that died
+        /// without a clean close, and 30s of extra latency on that is imperceptible for
+        /// clipboard sync. Do not shorten these again without a reason that survives the above.
+        /// </summary>
+        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
+
+        private static readonly TimeSpan PeerTimeout = TimeSpan.FromSeconds(90);
 
         private readonly object _gate = new();
         private readonly int _port;
 
         private Session? _session;
-        private TcpListener? _server;
-        private CancellationTokenSource? _listenerCts;
         private bool _disposed;
+
+        /// <summary>
+        /// True when this link was accepted rather than dialled.
+        ///
+        /// Both devices listen and both dial, so they can collide - each opening a socket to
+        /// the other at the same moment. This is what tells the two apart so the collision can
+        /// be settled the same way on both sides.
+        /// </summary>
+        public bool IsInbound { get; private set; }
 
         public event EventHandler<PayloadReceivedEventArgs>? PayloadReceived;
         public event EventHandler? ConnectionClosed;
@@ -64,6 +108,30 @@ namespace CoreLib.Transport
 
         /// <summary>Name the peer announced, or null if it has not said yet.</summary>
         public string? RemoteDeviceName { get; private set; }
+
+        /// <summary>Base64 public key the peer announced, or null if it has not said yet.</summary>
+        public string? RemotePublicKey { get; private set; }
+
+        /// <summary>
+        /// This device's base64 public key, announced in the hello so the peer can authorise
+        /// us. Left null only by tests and by a build that has no identity yet.
+        /// </summary>
+        public string? LocalPublicKey { get; set; }
+
+        /// <summary>
+        /// What this device calls the mesh, announced so a peer that joined before the name
+        /// existed can adopt it rather than showing a placeholder for ever.
+        /// </summary>
+        public string? LocalMeshName { get; set; }
+
+        /// <summary>
+        /// Decides whether a peer may stay connected, given the public key it announced.
+        ///
+        /// Returning false closes the session. Leaving this null accepts anyone, which is what
+        /// the listener used to do unconditionally - only appropriate for tests and for a
+        /// transport that has no registry behind it.
+        /// </summary>
+        public Func<string, bool>? AuthorisePeer { get; set; }
 
         public TcpTransportConnection(int port = DefaultPort) => _port = port;
 
@@ -84,55 +152,21 @@ namespace CoreLib.Transport
         /// <summary>Remote endpoint of the active session, or null.</summary>
         public string? RemoteEndPoint => Volatile.Read(ref _session)?.RemoteDescription;
 
-        public Task StartListeningAsync(CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Takes over a socket accepted by <see cref="TcpAcceptor"/>.
+        ///
+        /// This is the inbound half of a symmetric link. Which side accepted and which dialled
+        /// is remembered in <see cref="IsInbound"/>, because that is what settles a collision
+        /// when both devices dial each other at the same moment.
+        /// </summary>
+        public void Adopt(TcpClient client, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            if (client == null) throw new ArgumentNullException(nameof(client));
 
-            lock (_gate)
-            {
-                if (_server != null) return Task.CompletedTask;
-
-                _listenerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                _server = new TcpListener(IPAddress.Any, _port);
-                _server.Start();
-            }
-
-            _ = Task.Run(() => AcceptLoopAsync(_server!, _listenerCts!.Token));
-            Log.Write("Transport", $"Listening on 0.0.0.0:{_port}");
-            return Task.CompletedTask;
-        }
-
-        private async Task AcceptLoopAsync(TcpListener server, CancellationToken token)
-        {
-            while (!token.IsCancellationRequested)
-            {
-                TcpClient client;
-                try
-                {
-                    client = await server.AcceptTcpClientAsync(token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Log.Write("Transport", "Accept failed", ex);
-                    // Transient accept errors (e.g. a peer that vanished mid-handshake) must not
-                    // kill the listener, but do not spin hot either.
-                    try { await Task.Delay(250, token).ConfigureAwait(false); } catch { break; }
-                    continue;
-                }
-
-                AdoptSession(client, token);
-                ClientConnected?.Invoke(this, EventArgs.Empty);
-            }
-
-            Log.Write("Transport", "Accept loop stopped.");
+            IsInbound = true;
+            AdoptSession(client, cancellationToken);
+            ClientConnected?.Invoke(this, EventArgs.Empty);
         }
 
         public async Task ConnectAsync(string deviceId, CancellationToken cancellationToken = default)
@@ -150,6 +184,7 @@ namespace CoreLib.Transport
                 throw;
             }
 
+            IsInbound = false;
             AdoptSession(client, cancellationToken);
             Log.Write("Transport", $"Connected to {deviceId}:{_port}");
         }
@@ -181,22 +216,52 @@ namespace CoreLib.Transport
             _ = Task.Run(() => ReceiveLoopAsync(session));
             _ = Task.Run(() => HeartbeatLoopAsync(session));
             _ = Task.Run(() => SendHelloAsync(session));
+
+            // Only when there is something to authorise against. Without a registry behind it
+            // there is no such thing as an unidentified peer, and a test harness that never
+            // sends a hello would be torn down ten seconds in.
+            if (AuthorisePeer != null) _ = Task.Run(() => EnforceHelloAsync(session));
         }
 
-        /// <summary>Announces our friendly name so the peer's dashboard can show it.</summary>
+        /// <summary>
+        /// Announces who we are: a friendly name for the peer's dashboard, and the public key
+        /// it will authorise us by. No longer purely informational - the peer drops the
+        /// connection if this never arrives or names a device it has not paired with.
+        /// </summary>
         private async Task SendHelloAsync(Session session)
         {
             try
             {
-                byte[] name = System.Text.Encoding.UTF8.GetBytes(LocalDeviceName ?? "");
-                if (name.Length > MaxDeviceNameBytes) name = name.AsSpan(0, MaxDeviceNameBytes).ToArray();
-                await SendFrameAsync(session, KindHello, name, session.Token).ConfigureAwait(false);
+                await SendFrameAsync(session, KindHello,
+                    BuildHello(LocalDeviceName, LocalPublicKey ?? "", LocalMeshName ?? ""), session.Token)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                // Purely informational - a failed hello must never break the connection.
                 Log.Write("Transport", "Hello send failed", ex);
             }
+        }
+
+        /// <summary>
+        /// Drops a session whose peer never introduced itself.
+        ///
+        /// Without this, refusing unknown peers would be trivially bypassed by simply not
+        /// sending a hello: the socket would stay open, every payload would fail to decrypt,
+        /// and the link would sit there looking connected forever.
+        /// </summary>
+        private async Task EnforceHelloAsync(Session session)
+        {
+            try
+            {
+                await Task.Delay(HelloTimeout, session.Token).ConfigureAwait(false);
+
+                if (session.Closed || session.PeerFingerprint != null) return;
+
+                Log.Write("Transport",
+                    $"No hello within {HelloTimeout.TotalSeconds:F0}s - dropping an unidentified connection.");
+                CloseSession(session);
+            }
+            catch (OperationCanceledException) { /* expected on teardown */ }
         }
 
         private static void ConfigureKeepAlive(TcpClient client)
@@ -312,7 +377,11 @@ namespace CoreLib.Transport
                         case KindData:
                             try
                             {
-                                PayloadReceived?.Invoke(this, new PayloadReceivedEventArgs { EncryptedPayload = payload });
+                                PayloadReceived?.Invoke(this, new PayloadReceivedEventArgs
+                                {
+                                    EncryptedPayload = payload,
+                                    Fingerprint = session.PeerFingerprint ?? ""
+                                });
                             }
                             catch (Exception ex)
                             {
@@ -330,7 +399,7 @@ namespace CoreLib.Transport
                             break;
 
                         case KindHello:
-                            HandleHello(payload);
+                            HandleHello(session, payload);
                             break;
 
                         default:
@@ -351,19 +420,140 @@ namespace CoreLib.Transport
             }
         }
 
-        private void HandleHello(byte[] payload)
+        private void HandleHello(Session session, byte[] payload)
         {
-            string name;
-            try { name = System.Text.Encoding.UTF8.GetString(payload).Trim(); }
-            catch { return; }
+            if (!TryParseHello(payload, out string name, out string publicKey, out string meshName))
+            {
+                Log.Write("Transport", "Malformed hello - dropping the connection.");
+                CloseSession(session);
+                return;
+            }
 
-            if (name.Length == 0) return;
+            string fingerprint = "";
+            if (publicKey.Length > 0)
+            {
+                try { fingerprint = Identity.DeviceIdentity.FingerprintOf(publicKey); }
+                catch (Exception ex)
+                {
+                    Log.Write("Transport", "A peer announced a public key that will not parse - dropping the connection.", ex);
+                    CloseSession(session);
+                    return;
+                }
+            }
 
-            RemoteDeviceName = name;
-            Log.Write("Transport", $"Peer identified as \"{name}\".");
+            // The listener used to accept anything that could reach the port, because every
+            // install shared one key and there was nothing to check against. Now a peer has
+            // to be one this device has paired with, and a stranger is dropped here rather
+            // than left to fail every decryption for the life of the socket.
+            var authorise = AuthorisePeer;
+            if (authorise != null && !authorise(publicKey))
+            {
+                Log.Write("Transport",
+                    $"Refusing \"{name}\": {(publicKey.Length == 0 ? "it announced no identity" : $"{Identity.DeviceIdentity.Shorten(fingerprint)} is not a paired device")}.");
+                CloseSession(session);
+                return;
+            }
 
-            try { PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs { DeviceName = name }); }
+            session.PeerFingerprint = fingerprint;
+
+            if (name.Length > 0)
+            {
+                RemoteDeviceName = name;
+                RemotePublicKey = publicKey;
+                Log.Write("Transport", $"Peer identified as \"{name}\" ({Identity.DeviceIdentity.Shorten(fingerprint)}).");
+            }
+
+            try
+            {
+                PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs
+                {
+                    DeviceName = name,
+                    PublicKey = publicKey,
+                    Fingerprint = fingerprint,
+                    Address = session.RemoteAddress,
+                    MeshName = meshName
+                });
+            }
             catch (Exception ex) { Log.Write("Transport", "PeerIdentified handler threw", ex); }
+        }
+
+        /// <summary>
+        /// Hello payload: <c>[nameLen u8][name utf8][keyLen u16][public key utf8]</c>.
+        ///
+        /// It used to be the raw name and nothing else. The length prefixes are what let a
+        /// second field be added at all, and the protocol version above is what stops an older
+        /// build reading the new shape as a very strangely spelled device name.
+        /// </summary>
+        private static byte[] BuildHello(string name, string publicKey, string meshName)
+        {
+            byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(name ?? "");
+            if (nameBytes.Length > MaxDeviceNameBytes) nameBytes = nameBytes.AsSpan(0, MaxDeviceNameBytes).ToArray();
+
+            byte[] keyBytes = System.Text.Encoding.UTF8.GetBytes(publicKey ?? "");
+            if (keyBytes.Length > MaxPublicKeyBytes) keyBytes = Array.Empty<byte>();
+
+            byte[] meshBytes = System.Text.Encoding.UTF8.GetBytes(meshName ?? "");
+            if (meshBytes.Length > MaxDeviceNameBytes) meshBytes = meshBytes.AsSpan(0, MaxDeviceNameBytes).ToArray();
+
+            var payload = new byte[1 + nameBytes.Length + 2 + keyBytes.Length + 1 + meshBytes.Length];
+
+            payload[0] = (byte)nameBytes.Length;
+            Buffer.BlockCopy(nameBytes, 0, payload, 1, nameBytes.Length);
+
+            int keyOffset = 1 + nameBytes.Length;
+            BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(keyOffset, 2), (ushort)keyBytes.Length);
+            Buffer.BlockCopy(keyBytes, 0, payload, keyOffset + 2, keyBytes.Length);
+
+            int meshOffset = keyOffset + 2 + keyBytes.Length;
+            payload[meshOffset] = (byte)meshBytes.Length;
+            Buffer.BlockCopy(meshBytes, 0, payload, meshOffset + 1, meshBytes.Length);
+
+            return payload;
+        }
+
+        /// <summary>
+        /// Reads a hello. The mesh name is optional, so a peer that predates it still parses.
+        ///
+        /// It is carried here as well as in the pairing code because the code only reaches a
+        /// device at the moment it joins. Devices paired before the mesh had a name would
+        /// otherwise never learn one, which is exactly what happened the first time this
+        /// shipped - the phone sat there calling it "your mesh" for ever.
+        /// </summary>
+        internal static bool TryParseHello(byte[] payload, out string name, out string publicKey, out string meshName)
+        {
+            name = "";
+            publicKey = "";
+            meshName = "";
+
+            if (payload.Length < 1) return false;
+
+            int nameLength = payload[0];
+            if (payload.Length < 1 + nameLength + 2) return false;
+
+            try { name = System.Text.Encoding.UTF8.GetString(payload, 1, nameLength).Trim(); }
+            catch { return false; }
+
+            int keyOffset = 1 + nameLength;
+            int keyLength = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(keyOffset, 2));
+            if (keyLength > MaxPublicKeyBytes) return false;
+            if (payload.Length < keyOffset + 2 + keyLength) return false;
+
+            if (keyLength > 0)
+            {
+                try { publicKey = System.Text.Encoding.UTF8.GetString(payload, keyOffset + 2, keyLength).Trim(); }
+                catch { return false; }
+            }
+
+            int meshOffset = keyOffset + 2 + keyLength;
+            if (payload.Length <= meshOffset) return true; // An older peer, which sent no mesh name.
+
+            int meshLength = payload[meshOffset];
+            if (payload.Length < meshOffset + 1 + meshLength) return true;
+
+            try { meshName = System.Text.Encoding.UTF8.GetString(payload, meshOffset + 1, meshLength).Trim(); }
+            catch { meshName = ""; }
+
+            return true;
         }
 
         /// <summary>
@@ -444,7 +634,6 @@ namespace CoreLib.Transport
         {
             var session = Volatile.Read(ref _session);
             if (session != null) CloseSession(session);
-            // The listener is intentionally left running so peers can reconnect.
             return Task.CompletedTask;
         }
 
@@ -458,16 +647,6 @@ namespace CoreLib.Transport
 
             var session = Volatile.Read(ref _session);
             if (session != null) CloseSession(session);
-
-            try { _listenerCts?.Cancel(); } catch { }
-            try { _server?.Stop(); } catch { }
-            _listenerCts?.Dispose();
-
-            lock (_gate)
-            {
-                _server = null;
-                _listenerCts = null;
-            }
 
             PayloadReceived = null;
             ConnectionClosed = null;
@@ -493,6 +672,38 @@ namespace CoreLib.Transport
             public CancellationToken Token => _cts.Token;
             public bool Closed => Volatile.Read(ref _closed) != 0;
             public string RemoteDescription { get; }
+
+            /// <summary>
+            /// Set once the peer has introduced itself and been authorised. Null means it has
+            /// not yet, which is what the hello deadline watches for.
+            /// </summary>
+            public string? PeerFingerprint { get; set; }
+
+            /// <summary>
+            /// The peer's address without the port, for recording where it was reachable.
+            ///
+            /// Unwrapped from the IPv4-mapped IPv6 form first. The listener binds
+            /// <see cref="IPAddress.Any"/> in dual-stack mode, so a peer that connected over
+            /// IPv4 is reported as <c>::ffff:192.168.0.103</c>. That parses as an address and
+            /// looks entirely reasonable in a log, and dialling it back fails every time -
+            /// observed as a connect timeout against a device that was plainly right there.
+            /// </summary>
+            public string RemoteAddress
+            {
+                get
+                {
+                    try
+                    {
+                        if (Client.Client.RemoteEndPoint is not IPEndPoint endpoint) return RemoteDescription;
+
+                        var address = endpoint.Address;
+                        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+
+                        return address.ToString();
+                    }
+                    catch { return RemoteDescription; }
+                }
+            }
 
             public Session(TcpClient client, CancellationToken outerToken)
             {

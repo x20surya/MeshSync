@@ -11,6 +11,13 @@ public class TcpTransportConnectionTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
 
+    /// <summary>
+    /// The wire version these hand-built frames claim. Must track the transport: a stale value
+    /// here makes every such test pass for the wrong reason, because a version mismatch drops
+    /// the connection exactly like the fault the test is trying to provoke.
+    /// </summary>
+    private const byte WireVersion = 2;
+
     private static int FreePort()
     {
         var probe = new TcpListener(IPAddress.Loopback, 0);
@@ -20,18 +27,51 @@ public class TcpTransportConnectionTests
         return port;
     }
 
-    private static async Task<(TcpTransportConnection server, TcpTransportConnection client)> ConnectPairAsync(int port)
+    /// <summary>
+    /// A listener plus the single session it adopts - the shape the transport used to have in
+    /// one object, before listening moved to <see cref="TcpAcceptor"/> so a session could exist
+    /// per peer. Keeps these tests about framing rather than about link accounting, which
+    /// <see cref="MeshLinksTests"/> covers instead.
+    /// </summary>
+    private sealed class Endpoint : IDisposable
     {
-        var server = new TcpTransportConnection(port);
-        await server.StartListeningAsync();
+        private readonly TcpAcceptor _acceptor;
+
+        public TcpTransportConnection Connection { get; }
+
+        private Endpoint(int port)
+        {
+            Connection = new TcpTransportConnection(port);
+            _acceptor = new TcpAcceptor(port);
+            _acceptor.Accepted += client => Connection.Adopt(client);
+        }
+
+        public static async Task<Endpoint> ListenAsync(int port)
+        {
+            var endpoint = new Endpoint(port);
+            await endpoint._acceptor.StartAsync();
+            return endpoint;
+        }
+
+        public void Dispose()
+        {
+            _acceptor.Dispose();
+            Connection.Dispose();
+        }
+    }
+
+    private static async Task<(Endpoint listener, TcpTransportConnection server, TcpTransportConnection client)>
+        ConnectPairAsync(int port)
+    {
+        var listener = await Endpoint.ListenAsync(port);
 
         var client = new TcpTransportConnection(port);
         await client.ConnectAsync("127.0.0.1");
 
         // Let the accept side finish adopting the session.
-        for (int i = 0; i < 100 && !server.IsConnected; i++) await Task.Delay(20);
+        for (int i = 0; i < 100 && !listener.Connection.IsConnected; i++) await Task.Delay(20);
 
-        return (server, client);
+        return (listener, listener.Connection, client);
     }
 
     /// <summary>
@@ -44,7 +84,8 @@ public class TcpTransportConnectionTests
     public async Task Large_payload_arrives_intact()
     {
         int port = FreePort();
-        var (server, client) = await ConnectPairAsync(port);
+        var (listener, server, client) = await ConnectPairAsync(port);
+        using var _l = listener;
         using var _s = server;
         using var _c = client;
 
@@ -70,7 +111,8 @@ public class TcpTransportConnectionTests
     public async Task Concurrent_sends_are_not_interleaved()
     {
         int port = FreePort();
-        var (server, client) = await ConnectPairAsync(port);
+        var (listener, server, client) = await ConnectPairAsync(port);
+        using var _l = listener;
         using var _s = server;
         using var _c = client;
 
@@ -113,8 +155,8 @@ public class TcpTransportConnectionTests
     public async Task Implausible_length_prefix_closes_the_connection_without_allocating()
     {
         int port = FreePort();
-        using var server = new TcpTransportConnection(port);
-        await server.StartListeningAsync();
+        using var listener = await Endpoint.ListenAsync(port);
+        var server = listener.Connection;
 
         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         server.ConnectionClosed += (_, _) => closed.TrySetResult();
@@ -125,7 +167,7 @@ public class TcpTransportConnectionTests
 
         var header = new byte[8];
         BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(0, 2), 0x4D53); // valid magic
-        header[2] = 1;                                                          // valid version
+        header[2] = WireVersion;                                                // valid version
         header[3] = 0;                                                          // data frame
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(4, 4), int.MaxValue);
 
@@ -141,8 +183,8 @@ public class TcpTransportConnectionTests
     public async Task Garbage_frame_header_closes_the_connection()
     {
         int port = FreePort();
-        using var server = new TcpTransportConnection(port);
-        await server.StartListeningAsync();
+        using var listener = await Endpoint.ListenAsync(port);
+        var server = listener.Connection;
 
         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         server.ConnectionClosed += (_, _) => closed.TrySetResult();
@@ -163,8 +205,8 @@ public class TcpTransportConnectionTests
     public async Task Reconnecting_replaces_the_session_cleanly()
     {
         int port = FreePort();
-        using var server = new TcpTransportConnection(port);
-        await server.StartListeningAsync();
+        using var listener = await Endpoint.ListenAsync(port);
+        var server = listener.Connection;
 
         var firstClient = new TcpTransportConnection(port);
         await firstClient.ConnectAsync("127.0.0.1");
@@ -190,7 +232,8 @@ public class TcpTransportConnectionTests
     public async Task Disconnect_raises_ConnectionClosed_on_the_peer()
     {
         int port = FreePort();
-        var (server, client) = await ConnectPairAsync(port);
+        var (listener, server, client) = await ConnectPairAsync(port);
+        using var _l = listener;
         using var _s = server;
 
         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -214,7 +257,8 @@ public class TcpTransportConnectionTests
     public async Task Payload_over_the_size_limit_is_rejected_before_sending()
     {
         int port = FreePort();
-        var (server, client) = await ConnectPairAsync(port);
+        var (listener, server, client) = await ConnectPairAsync(port);
+        using var _l = listener;
         using var _s = server;
         using var _c = client;
 
@@ -227,7 +271,8 @@ public class TcpTransportConnectionTests
     public async Task Empty_payload_round_trips()
     {
         int port = FreePort();
-        var (server, client) = await ConnectPairAsync(port);
+        var (listener, server, client) = await ConnectPairAsync(port);
+        using var _l = listener;
         using var _s = server;
         using var _c = client;
 
@@ -250,8 +295,8 @@ public class TcpTransportConnectionTests
     public async Task Frame_header_split_across_segments_is_reassembled()
     {
         int port = FreePort();
-        using var server = new TcpTransportConnection(port);
-        await server.StartListeningAsync();
+        using var listener = await Endpoint.ListenAsync(port);
+        var server = listener.Connection;
 
         var received = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         server.PayloadReceived += (_, e) => received.TrySetResult(e.EncryptedPayload);
@@ -261,7 +306,7 @@ public class TcpTransportConnectionTests
 
         var header = new byte[8];
         BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(0, 2), 0x4D53);
-        header[2] = 1;
+        header[2] = WireVersion;
         header[3] = 0;
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(4, 4), body.Length);
 
@@ -297,12 +342,12 @@ public class TcpTransportConnectionTests
     {
         int port = FreePort();
 
-        var first = new TcpTransportConnection(port);
-        await first.StartListeningAsync();
+        var first = new TcpAcceptor(port);
+        await first.StartAsync();
         first.Dispose();
 
         // Binding again would throw if the listener socket had been leaked.
-        using var second = new TcpTransportConnection(port);
-        await second.StartListeningAsync();
+        using var second = new TcpAcceptor(port);
+        await second.StartAsync();
     }
 }
