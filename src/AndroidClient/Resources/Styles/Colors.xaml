@@ -58,6 +58,11 @@
     <Color x:Key="SurfaceAltLight">#F1EFEA</Color>
     <Color x:Key="SurfaceAltDark">#282B2E</Color>
 
+    <!-- The navigation drawer, matching the desktop sidebar exactly so the two apps read as
+         one product rather than two that happen to share a mark. -->
+    <Color x:Key="SidebarLight">#F1EFEA</Color>
+    <Color x:Key="SidebarDark">#141517</Color>
+
     <Color x:Key="BorderLight">#E5E1DA</Color>
     <Color x:Key="BorderDark">#2E3134</Color>
 

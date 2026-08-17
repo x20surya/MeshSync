@@ -1,7 +1,8 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:shapes="clr-namespace:Microsoft.Maui.Controls.Shapes;assembly=Microsoft.Maui.Controls"
+             xmlns:local="clr-namespace:AndroidClient"
              x:Class="AndroidClient.DashboardPage"
              Style="{StaticResource MeshPage}">
 
@@ -9,13 +10,7 @@
         <VerticalStackLayout Padding="20,26,20,32" Spacing="0">
 
             <!-- ══════════ Title row ══════════ -->
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="4,0,4,20">
-                <Image Grid.Column="0" Source="mesh_mark.png"
-                       HeightRequest="17" WidthRequest="29" Aspect="AspectFit"
-                       VerticalOptions="Center" />
-                <Label Grid.Column="1" Text="MESH SYNC" Style="{StaticResource T.Title}"
-                       FontSize="14" CharacterSpacing="2.1" VerticalOptions="Center" />
-            </Grid>
+            <local:MeshHeader x:Name="Header" Title="Home" />
 
             <!-- ══════════ Status hero ══════════ -->
             <Border Style="{StaticResource S.Card}" Padding="20,26">
@@ -46,7 +41,7 @@
 
                     <Label x:Name="StatusDetail" Style="{StaticResource T.Muted}"
                            HorizontalTextAlignment="Center" Margin="0,6,0,0"
-                           Text="Looking for your computer" />
+                           Text="Looking for your devices" />
 
                     <Label x:Name="StatusSub" Style="{StaticResource T.Faint}"
                            HorizontalTextAlignment="Center" Margin="0,4,0,0" Text="" />
@@ -139,11 +134,11 @@
             <Button x:Name="SendNowButton" Text="Send clipboard now" Style="{StaticResource S.BtnPrimary}"
                     Margin="0,20,0,0" Clicked="OnSendNowClicked" />
 
-            <Button Text="Pair with a different computer" Style="{StaticResource S.BtnQuiet}"
+            <Button Text="Pair another device" Style="{StaticResource S.BtnQuiet}"
                     Margin="0,4,0,0" Clicked="OnRepairClicked" />
 
             <Label Style="{StaticResource T.Faint}" HorizontalTextAlignment="Center" Margin="0,18,0,0"
-                   Text="Everything stays on your local network" />
+                   Text="Nothing ever leaves your own devices" />
         </VerticalStackLayout>
     </ScrollView>
 </ContentPage>

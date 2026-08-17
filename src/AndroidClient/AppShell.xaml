@@ -1,20 +1,89 @@
-<?xml version="1.0" encoding="UTF-8" ?>
+﻿<?xml version="1.0" encoding="UTF-8" ?>
 <Shell
     x:Class="AndroidClient.AppShell"
     xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
     xmlns:local="clr-namespace:AndroidClient"
-    Shell.FlyoutBehavior="Disabled"
+    xmlns:shapes="clr-namespace:Microsoft.Maui.Controls.Shapes;assembly=Microsoft.Maui.Controls"
+    Shell.FlyoutBehavior="Flyout"
     Shell.NavBarIsVisible="False"
+    Shell.BackgroundColor="{AppThemeBinding Light={StaticResource PageBgLight}, Dark={StaticResource PageBgDark}}"
+    BackgroundColor="{AppThemeBinding Light={StaticResource PageBgLight}, Dark={StaticResource PageBgDark}}"
+    FlyoutBackgroundColor="{AppThemeBinding Light={StaticResource SidebarLight}, Dark={StaticResource SidebarDark}}"
     Title="Mesh Sync">
 
-    <!-- Setup first; the shell picks the start route at runtime. -->
+    <!-- The mark and the mesh name, so the drawer says whose set of devices this is. -->
+    <Shell.FlyoutHeader>
+        <Grid Padding="22,30,22,22" ColumnDefinitions="Auto,*" ColumnSpacing="12"
+              BackgroundColor="{AppThemeBinding Light={StaticResource SidebarLight}, Dark={StaticResource SidebarDark}}">
+
+            <Grid WidthRequest="40" HeightRequest="24" VerticalOptions="Center">
+                <shapes:Ellipse WidthRequest="21" HeightRequest="21" HorizontalOptions="Start"
+                                Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                StrokeThickness="2.6" Fill="Transparent" />
+                <shapes:Ellipse WidthRequest="21" HeightRequest="21" HorizontalOptions="End"
+                                Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                StrokeThickness="2.6" Fill="Transparent" />
+            </Grid>
+
+            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
+                <Label x:Name="FlyoutMeshName" Text="Mesh Sync" Style="{StaticResource T.Title}" FontSize="16" />
+                <Label x:Name="FlyoutMeshSub" Style="{StaticResource T.Faint}" FontSize="11.5"
+                       Text="Your clipboard, everywhere" />
+            </VerticalStackLayout>
+        </Grid>
+    </Shell.FlyoutHeader>
+
+    <!-- Reachable by route but never listed: it is the first-run flow, not a place to go back to. -->
     <ShellContent
         Route="setup"
+        FlyoutItemIsVisible="False"
         ContentTemplate="{DataTemplate local:SetupPage}" />
 
-    <ShellContent
-        Route="dashboard"
-        ContentTemplate="{DataTemplate local:DashboardPage}" />
+    <FlyoutItem Title="Home" Route="dashboard">
+        <ShellContent ContentTemplate="{DataTemplate local:DashboardPage}" />
+    </FlyoutItem>
+
+    <FlyoutItem Title="Activity" Route="activity">
+        <ShellContent ContentTemplate="{DataTemplate local:ActivityPage}" />
+    </FlyoutItem>
+
+    <FlyoutItem Title="Devices" Route="devices">
+        <ShellContent ContentTemplate="{DataTemplate local:DevicesPage}" />
+    </FlyoutItem>
+
+    <FlyoutItem Title="Settings" Route="settings">
+        <ShellContent ContentTemplate="{DataTemplate local:SettingsPage}" />
+    </FlyoutItem>
+
+    <FlyoutItem Title="About" Route="about">
+        <ShellContent ContentTemplate="{DataTemplate local:AboutPage}" />
+    </FlyoutItem>
+
+    <!-- Mirrors the desktop rail: a teal bar and accent text on the selected row. -->
+    <Shell.ItemTemplate>
+        <DataTemplate>
+            <Grid ColumnDefinitions="3,*" HeightRequest="50">
+                <BoxView x:Name="SelectionBar" Color="Transparent" />
+                <Label Grid.Column="1" Text="{Binding Title}" VerticalOptions="Center"
+                       Margin="19,0,0,0" FontSize="14.5"
+                       TextColor="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
+
+                <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroupList>
+                        <VisualStateGroup x:Name="CommonStates">
+                            <VisualState x:Name="Normal" />
+                            <VisualState x:Name="Selected">
+                                <VisualState.Setters>
+                                    <Setter TargetName="SelectionBar" Property="BoxView.Color"
+                                            Value="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
+                                </VisualState.Setters>
+                            </VisualState>
+                        </VisualStateGroup>
+                    </VisualStateGroupList>
+                </VisualStateManager.VisualStateGroups>
+            </Grid>
+        </DataTemplate>
+    </Shell.ItemTemplate>
 
 </Shell>

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="AndroidClient.SetupPage"
@@ -41,13 +41,13 @@
                            HeightRequest="180" WidthRequest="180" Aspect="AspectFit" />
                 </Grid>
 
-                <Label x:Name="StepTitle" Text="Pair with your computer"
+                <Label x:Name="StepTitle" Text="Pair with another device"
                        Style="{StaticResource T.Display}" FontSize="23"
                        HorizontalTextAlignment="Center" />
 
                 <Label x:Name="StepBody" Style="{StaticResource T.Muted}"
                        HorizontalTextAlignment="Center" Margin="6,12,6,0"
-                       Text="Open Mesh Sync on your computer and point your camera at the code it shows." />
+                       Text="Open Mesh Sync on the other device and point your camera at the code it shows." />
 
                 <!-- Reassurance -->
                 <Border Style="{StaticResource S.Card}" Margin="0,22,0,0" Padding="14"
@@ -55,22 +55,22 @@
                         Stroke="Transparent">
                     <Label x:Name="StepNote" Style="{StaticResource T.Faint}"
                            HorizontalTextAlignment="Center"
-                           Text="Nothing leaves your local network. There is no cloud account." />
+                           Text="Nothing ever leaves your own devices. There is no cloud account." />
                 </Border>
 
                 <!-- Manual pairing (step 1 only) -->
                 <VerticalStackLayout x:Name="ManualPanel" IsVisible="False" Spacing="10" Margin="0,18,0,0">
                     <Border Style="{StaticResource S.Card}" Padding="14">
                         <VerticalStackLayout Spacing="10">
-                            <Label Text="Computer's address" Style="{StaticResource T.Faint}" />
+                            <Label Text="Its address" Style="{StaticResource T.Faint}" />
                             <Entry x:Name="IpEntry" Style="{StaticResource S.Entry}"
                                    Placeholder="192.168.1.100" Keyboard="Url"
                                    ClearButtonVisibility="WhileEditing" />
                             <BoxView HeightRequest="1"
                                      Color="{AppThemeBinding Light={StaticResource BorderLight}, Dark={StaticResource BorderDark}}" />
-                            <Label Text="Pairing code" Style="{StaticResource T.Faint}" />
+                            <Label Text="Pairing key" Style="{StaticResource T.Faint}" />
                             <Entry x:Name="CodeEntry" Style="{StaticResource S.Entry}"
-                                   Placeholder="Paste the code from your computer"
+                                   Placeholder="Paste the key from the other device"
                                    ClearButtonVisibility="WhileEditing" />
                             <Button Text="Pair" Style="{StaticResource S.BtnOutline}"
                                     Clicked="OnManualPairClicked" Margin="0,4,0,0" />

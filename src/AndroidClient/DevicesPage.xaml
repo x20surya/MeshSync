@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:AndroidClient"
+             xmlns:shapes="clr-namespace:Microsoft.Maui.Controls.Shapes;assembly=Microsoft.Maui.Controls"
+             x:Class="AndroidClient.DevicesPage"
+             Style="{StaticResource MeshPage}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20,26,20,32" Spacing="0">
+
+            <local:MeshHeader x:Name="Header" Title="Devices" />
+
+            <!-- ══════════ Paired devices ══════════ -->
+            <Label x:Name="DevicesSub" Style="{StaticResource T.Muted}" FontSize="12.5"
+                   Margin="4,0,4,10" Text="Everything paired into this mesh." />
+
+            <Border Style="{StaticResource S.Card}" Padding="4">
+                <VerticalStackLayout>
+                    <CollectionView x:Name="DeviceList" SelectionMode="None">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Padding="12,12">
+                                    <Ellipse Grid.Column="0" WidthRequest="9" HeightRequest="9"
+                                             VerticalOptions="Center" Fill="{Binding Dot}" />
+
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                                        <Label Text="{Binding Name}" Style="{StaticResource T.Body}"
+                                               FontSize="14" FontAttributes="Bold" LineBreakMode="TailTruncation" />
+                                        <Label Text="{Binding Detail}" Style="{StaticResource T.Faint}"
+                                               FontSize="11.5" LineBreakMode="TailTruncation" />
+                                    </VerticalStackLayout>
+
+                                    <Button Grid.Column="2" Text="Forget" Style="{StaticResource S.BtnQuiet}"
+                                            FontSize="11.5" Padding="12,4" HeightRequest="32"
+                                            VerticalOptions="Center"
+                                            CommandParameter="{Binding Fingerprint}"
+                                            Clicked="OnForgetClicked" />
+                                </Grid>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+
+                    <Label x:Name="DevicesEmpty" Style="{StaticResource T.Muted}" FontSize="12.5"
+                           HorizontalOptions="Center" Margin="0,24,0,26"
+                           Text="No devices yet.&#10;Add one to start syncing." HorizontalTextAlignment="Center" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ══════════ Add another ══════════ -->
+            <Label Text="Add a device" Style="{StaticResource T.Title}" FontSize="17"
+                   Margin="4,26,4,4" />
+            <Label Style="{StaticResource T.Muted}" FontSize="12.5" Margin="4,0,4,12"
+                   Text="Open Mesh Sync on the other device, show its pairing code, and scan it." />
+
+            <Button x:Name="ScanButton" Text="Scan a pairing code" Style="{StaticResource S.BtnPrimary}"
+                    Clicked="OnScanClicked" />
+
+            <Button x:Name="ManualButton" Text="Enter details instead" Style="{StaticResource S.BtnQuiet}"
+                    Margin="0,10,0,0" Clicked="OnManualToggled" />
+
+            <Border x:Name="ManualCard" IsVisible="False" Style="{StaticResource S.Card}" Margin="0,12,0,0">
+                <VerticalStackLayout Padding="16" Spacing="10">
+                    <Label Text="Its address" Style="{StaticResource T.Muted}" FontSize="12" />
+                    <Entry x:Name="AddressEntry" Style="{StaticResource S.Entry}"
+                           Placeholder="192.168.0.10" Keyboard="Url" />
+
+                    <Label Text="Pairing key" Style="{StaticResource T.Muted}" FontSize="12" Margin="0,4,0,0" />
+                    <Entry x:Name="KeyEntry" Style="{StaticResource S.Entry}"
+                           Placeholder="Paste the key from the other device" />
+
+                    <Button Text="Add device" Style="{StaticResource S.BtnPrimary}" Margin="0,6,0,0"
+                            Clicked="OnManualAddClicked" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ══════════ This device ══════════ -->
+            <Label Text="This device" Style="{StaticResource T.Title}" FontSize="17" Margin="4,28,4,4" />
+            <Label Style="{StaticResource T.Muted}" FontSize="12.5" Margin="4,0,4,12"
+                   Text="Its own identity, for another device to add it." />
+
+            <Border Style="{StaticResource S.Card}">
+                <VerticalStackLayout Padding="16" Spacing="12">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Name" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="66" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="SelfName" Style="{StaticResource T.Body}"
+                               FontSize="13.5" VerticalOptions="Center" LineBreakMode="TailTruncation" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Address" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="66" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="SelfAddress" Style="{StaticResource T.Mono}"
+                               FontSize="12.5" VerticalOptions="Center" LineBreakMode="TailTruncation" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Key" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="66" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="SelfKey" Style="{StaticResource T.Mono}"
+                               FontSize="12.5" VerticalOptions="Center" LineBreakMode="TailTruncation" />
+                        <Button Grid.Column="2" Text="Copy" Style="{StaticResource S.BtnQuiet}"
+                                FontSize="11.5" Padding="12,4" HeightRequest="32"
+                                Clicked="OnCopyKeyClicked" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

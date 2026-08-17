@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:shapes="clr-namespace:Microsoft.Maui.Controls.Shapes;assembly=Microsoft.Maui.Controls"
+             x:Class="AndroidClient.MeshHeader">
+
+    <!--
+        The title row every page shares: a hamburger, the page name, and the mesh name under it.
+
+        The nav bar stays hidden across the app because the pages carry their own headings, so
+        the drawer needs a way in that does not depend on one. A swipe alone would be invisible.
+    -->
+    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14" Margin="4,0,4,18">
+
+        <Border Grid.Column="0" WidthRequest="38" HeightRequest="38" Padding="0"
+                StrokeThickness="0" BackgroundColor="Transparent" VerticalOptions="Start">
+            <Border.StrokeShape>
+                <shapes:RoundRectangle CornerRadius="10" />
+            </Border.StrokeShape>
+
+            <Grid>
+                <VerticalStackLayout Spacing="4.5" VerticalOptions="Center" HorizontalOptions="Center">
+                    <BoxView HeightRequest="2" WidthRequest="17" CornerRadius="1"
+                             Color="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
+                    <BoxView HeightRequest="2" WidthRequest="17" CornerRadius="1"
+                             Color="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
+                    <BoxView HeightRequest="2" WidthRequest="11" CornerRadius="1"
+                             Color="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
+                </VerticalStackLayout>
+
+                <!-- Over the whole square, so the tap target is a comfortable 38px rather than
+                     the width of three thin bars. -->
+                <BoxView Color="Transparent">
+                    <BoxView.GestureRecognizers>
+                        <TapGestureRecognizer Tapped="OnMenuTapped" />
+                    </BoxView.GestureRecognizers>
+                </BoxView>
+            </Grid>
+        </Border>
+
+        <VerticalStackLayout Grid.Column="1" Spacing="1" VerticalOptions="Center">
+            <Label x:Name="TitleLabel" Style="{StaticResource T.Display}" FontSize="20" Text="Home" />
+            <Label x:Name="SubLabel" Style="{StaticResource T.Faint}" FontSize="11.5" Text="" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentView>

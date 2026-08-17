@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using CoreLib;
 using CoreLib.Diagnostics;
 
@@ -29,6 +29,7 @@ public partial class DashboardPage : ContentPage
 
         RenderStatus();
         RenderActivity();
+        Header.RefreshSubtitle();
 
         // Keeps relative timestamps and the permission warning honest without user input.
         _refresh = Dispatcher.CreateTimer();
@@ -87,7 +88,7 @@ public partial class DashboardPage : ContentPage
         if (connected)
         {
             StatusHeadline.Text = "CONNECTED";
-            StatusDetail.Text = SyncManager.PeerName ?? SyncManager.PairedAddress;
+            StatusDetail.Text = SyncManager.MeshName;
 
             var last = SyncManager.Activity.LastActivityUtc;
             StatusSub.Text = last.HasValue ? $"Last sync {Relative(last.Value)}" : "Ready when you copy something";
@@ -95,13 +96,16 @@ public partial class DashboardPage : ContentPage
         else if (paired)
         {
             StatusHeadline.Text = "RECONNECTING";
-            StatusDetail.Text = $"Looking for {SyncManager.PairedAddress}";
-            StatusSub.Text = "Make sure both devices are on the same Wi-Fi";
+            // Named rather than addressed. The address is a hint that changes with the
+            // lease; the device is the thing that stays the same.
+            StatusDetail.Text = SyncManager.MeshName;
+            StatusSub.Text = "Bluetooth needs no network - Wi-Fi is used when there is one";
         }
         else
         {
             StatusHeadline.Text = "NOT PAIRED";
-            StatusDetail.Text = "No computer paired yet";
+            StatusDetail.Text = "No devices paired yet";
+            StatusSub.Text = "Scan the code on another device to start a mesh";
             StatusSub.Text = "";
         }
 
@@ -207,7 +211,7 @@ public partial class DashboardPage : ContentPage
             {
                 Glyph = entry.Kind == SyncItemKind.Image ? "▣" : "⧉",
                 Title = string.IsNullOrWhiteSpace(entry.Title) ? "(empty)" : entry.Title,
-                Sub = $"{(entry.Direction == SyncDirection.Sent ? "Sent to computer" : "From computer")} · {entry.SizeLabel}",
+                Sub = $"{(entry.Direction == SyncDirection.Sent ? "Sent" : "Received")} · {entry.SizeLabel}",
                 Age = entry.RelativeAge
             });
         }
@@ -261,6 +265,15 @@ public partial class DashboardPage : ContentPage
         if (SyncManager.IsPaused)
         {
             await SyncManager.ResumeAsync();
+
+#if ANDROID
+            // Stopping took the foreground service down with it, so resuming has to put it
+            // back - otherwise sync would restart with nothing holding it open. Started from
+            // here rather than inside ResumeAsync because this is a tap, which is the one
+            // context Android reliably permits a foreground service to start from.
+            Platforms.Android.SyncForegroundService.Start(global::Android.App.Application.Context);
+#endif
+
             RenderStatus();
             return;
         }

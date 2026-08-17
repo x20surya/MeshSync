@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:AndroidClient"
+             x:Class="AndroidClient.ActivityPage"
+             Style="{StaticResource MeshPage}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20,26,20,32" Spacing="0">
+
+            <local:MeshHeader x:Name="Header" Title="Activity" />
+
+            <Grid ColumnDefinitions="*,1,*" HeightRequest="76" Margin="0,0,0,16">
+                <VerticalStackLayout VerticalOptions="Center" HorizontalOptions="Center">
+                    <Label x:Name="SentCount" Text="0" FontSize="22" FontAttributes="Bold"
+                           HorizontalOptions="Center" Style="{StaticResource T.Body}" />
+                    <Label Text="sent" Style="{StaticResource T.Faint}" FontSize="11.5"
+                           HorizontalOptions="Center" />
+                </VerticalStackLayout>
+
+                <BoxView Grid.Column="1" WidthRequest="1" Margin="0,14"
+                         Color="{AppThemeBinding Light={StaticResource BorderLight}, Dark={StaticResource BorderDark}}" />
+
+                <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" HorizontalOptions="Center">
+                    <Label x:Name="ReceivedCount" Text="0" FontSize="22" FontAttributes="Bold"
+                           HorizontalOptions="Center" Style="{StaticResource T.Body}" />
+                    <Label Text="received" Style="{StaticResource T.Faint}" FontSize="11.5"
+                           HorizontalOptions="Center" />
+                </VerticalStackLayout>
+            </Grid>
+
+            <Border Style="{StaticResource S.Card}" Padding="4">
+                <VerticalStackLayout>
+                    <CollectionView x:Name="ActivityList" SelectionMode="None">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Padding="12,11">
+                                    <Label Grid.Column="0" Text="{Binding Glyph}" FontSize="15"
+                                           VerticalOptions="Center" Style="{StaticResource T.Muted}" />
+
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                                        <Label Text="{Binding Title}" Style="{StaticResource T.Body}"
+                                               FontSize="13.5" LineBreakMode="TailTruncation" />
+                                        <Label Text="{Binding Sub}" Style="{StaticResource T.Faint}"
+                                               FontSize="11.5" />
+                                    </VerticalStackLayout>
+
+                                    <Label Grid.Column="2" Text="{Binding Age}" Style="{StaticResource T.Faint}"
+                                           FontSize="11" VerticalOptions="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+
+                    <Label x:Name="ActivityEmpty" Style="{StaticResource T.Muted}" FontSize="12.5"
+                           HorizontalOptions="Center" HorizontalTextAlignment="Center" Margin="0,24,0,26"
+                           Text="Nothing synced yet.&#10;Copy something to try it." />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Style="{StaticResource T.Faint}" FontSize="11.5" Margin="4,14,4,0"
+                   HorizontalTextAlignment="Center"
+                   Text="Held in memory only and cleared when the app closes. Clipboard contents are never written to disk." />
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

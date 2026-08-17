@@ -1,4 +1,4 @@
-using CoreLib.Diagnostics;
+﻿using CoreLib.Diagnostics;
 
 namespace AndroidClient;
 
@@ -128,11 +128,11 @@ public partial class SetupPage : ContentPage
         switch (_step)
         {
             case StepPair:
-                StepTitle.Text = IsPaired ? "Paired" : "Pair with your computer";
+                StepTitle.Text = IsPaired ? "Paired" : "Pair with another device";
                 StepBody.Text = IsPaired
-                    ? $"Connected to {SyncManager.PairedAddress}. You can change this later in Settings."
-                    : "Open Mesh Sync on your computer and point your camera at the code it shows.";
-                StepNote.Text = "Nothing leaves your local network. There is no cloud account.";
+                    ? $"Joined {SyncManager.MeshName}. You can pair more devices later."
+                    : "Open Mesh Sync on the other device and point your camera at the code it shows.";
+                StepNote.Text = "Nothing ever leaves your own devices. There is no cloud account.";
                 PrimaryButton.Text = IsPaired ? "Continue" : "Open camera";
                 SecondaryButton.Text = _manualVisible ? "Hide manual entry" : "Enter details manually";
                 SecondaryButton.IsVisible = !IsPaired;
@@ -144,7 +144,7 @@ public partial class SetupPage : ContentPage
                 StepBody.Text = on
                     ? "Mesh Sync will now notice whenever you copy something."
                     : "Android needs you to switch on the Mesh Sync accessibility service so the app can tell when you copy something.";
-                StepNote.Text = "Copied items are encrypted and sent straight to your computer. Nothing is stored.";
+                StepNote.Text = "Each pair of devices has its own key, so a copy is encrypted for the device it is going to. Nothing is stored.";
                 PrimaryButton.Text = on ? "Continue" : "Open Android settings";
                 SecondaryButton.Text = "Skip for now";
                 SecondaryButton.IsVisible = !on;
@@ -152,7 +152,7 @@ public partial class SetupPage : ContentPage
 
             case StepScreenshots:
                 StepTitle.Text = "Send screenshots too";
-                StepBody.Text = "Allow access to your photos and every screenshot you take will appear on your computer's clipboard automatically.";
+                StepBody.Text = "Allow access to your photos and every screenshot you take will appear on your other devices automatically.";
                 StepNote.Text = "Only screenshots are read, and only to send them to your own computer.";
                 PrimaryButton.Text = "Allow photo access";
                 SecondaryButton.Text = "Not now";
@@ -223,7 +223,7 @@ public partial class SetupPage : ContentPage
         if (string.IsNullOrEmpty(ip) || string.IsNullOrEmpty(code))
         {
             await DisplayAlertAsync("Missing details",
-                "Enter both the address and the pairing code shown on your computer.", "OK");
+                "Enter both the address and the pairing key shown on the other device.", "OK");
             return;
         }
 

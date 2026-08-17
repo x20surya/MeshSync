@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:AndroidClient"
+             x:Class="AndroidClient.SettingsPage"
+             Style="{StaticResource MeshPage}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20,26,20,32" Spacing="0">
+
+            <local:MeshHeader x:Name="Header" Title="Settings" />
+
+            <!-- ══════════ Mesh name ══════════ -->
+            <Label Text="Mesh name" Style="{StaticResource T.SectionLabel}" Margin="4,0,4,8" />
+            <Border Style="{StaticResource S.Card}">
+                <VerticalStackLayout Padding="16" Spacing="8">
+                    <Label Style="{StaticResource T.Muted}" FontSize="12.5"
+                           Text="What this set of devices is called. Changing it here affects this device only." />
+                    <Entry x:Name="MeshNameEntry" Style="{StaticResource S.Entry}"
+                           MaxLength="40" Placeholder="Surya's Mesh"
+                           Completed="OnMeshNameCommitted" Unfocused="OnMeshNameCommitted" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ══════════ Syncing ══════════ -->
+            <Label Text="Syncing" Style="{StaticResource T.SectionLabel}" Margin="4,24,4,8" />
+            <Border Style="{StaticResource S.Card}">
+                <VerticalStackLayout Padding="16" Spacing="14">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2">
+                            <Label Text="Sync clipboard" Style="{StaticResource T.Body}" FontSize="14" />
+                            <Label x:Name="PausedSub" Style="{StaticResource T.Faint}" FontSize="11.5"
+                                   Text="Copy on any device and it appears on the others" />
+                        </VerticalStackLayout>
+                        <!-- Coloured explicitly: the default is the platform grey, which is the
+                             one control on the page that did not look like this app. -->
+                        <Switch Grid.Column="1" x:Name="PausedSwitch" VerticalOptions="Center"
+                                OnColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                ThumbColor="{AppThemeBinding Light={StaticResource SurfaceLight}, Dark={StaticResource SurfaceDark}}"
+                                Toggled="OnPausedToggled" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ══════════ Permissions ══════════ -->
+            <Label Text="Permissions" Style="{StaticResource T.SectionLabel}" Margin="4,24,4,8" />
+            <Border Style="{StaticResource S.Card}">
+                <VerticalStackLayout Padding="16" Spacing="16">
+
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2">
+                            <Label Text="Clipboard access" Style="{StaticResource T.Body}" FontSize="14" />
+                            <Label x:Name="ClipboardState" Style="{StaticResource T.Faint}" FontSize="11.5"
+                                   Text="Needed to notice when you copy something" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1" x:Name="ClipboardButton" Text="Open" HeightRequest="34"
+                                Style="{StaticResource S.BtnQuiet}" FontSize="12" Padding="14,4"
+                                VerticalOptions="Center" Clicked="OnClipboardClicked" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2">
+                            <Label Text="Bluetooth" Style="{StaticResource T.Body}" FontSize="14" />
+                            <Label x:Name="BluetoothState" Style="{StaticResource T.Faint}" FontSize="11.5"
+                                   Text="Lets this phone be found without any network" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1" x:Name="BluetoothButton" Text="Open" HeightRequest="34"
+                                Style="{StaticResource S.BtnQuiet}" FontSize="12" Padding="14,4"
+                                VerticalOptions="Center" Clicked="OnAppSettingsClicked" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2">
+                            <Label Text="Screenshots" Style="{StaticResource T.Body}" FontSize="14" />
+                            <Label x:Name="PhotosState" Style="{StaticResource T.Faint}" FontSize="11.5"
+                                   Text="Sends every screenshot you take, automatically" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1" x:Name="PhotosButton" Text="Open" HeightRequest="34"
+                                Style="{StaticResource S.BtnQuiet}" FontSize="12" Padding="14,4"
+                                VerticalOptions="Center" Clicked="OnAppSettingsClicked" />
+                    </Grid>
+
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- ══════════ This device ══════════ -->
+            <Label Text="This device" Style="{StaticResource T.SectionLabel}" Margin="4,24,4,8" />
+            <Border Style="{StaticResource S.Card}">
+                <VerticalStackLayout Padding="16" Spacing="12">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Name" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="80" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="DeviceName" Style="{StaticResource T.Body}"
+                               FontSize="13.5" VerticalOptions="Center" LineBreakMode="TailTruncation" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Identity" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="80" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="DeviceFingerprint" Style="{StaticResource T.Mono}"
+                               FontSize="12.5" VerticalOptions="Center" LineBreakMode="TailTruncation" />
+                    </Grid>
+
+                    <Label Style="{StaticResource T.Faint}" FontSize="11.5"
+                           Text="Its keypair never leaves this phone. Every pair of devices agrees its own key from it." />
+                </VerticalStackLayout>
+            </Border>
+
+            <Button Text="Open Android app settings" Style="{StaticResource S.BtnQuiet}"
+                    Margin="0,20,0,0" Clicked="OnAppSettingsClicked" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

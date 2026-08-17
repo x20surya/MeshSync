@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:AndroidClient"
+             xmlns:shapes="clr-namespace:Microsoft.Maui.Controls.Shapes;assembly=Microsoft.Maui.Controls"
+             x:Class="AndroidClient.AboutPage"
+             Style="{StaticResource MeshPage}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20,26,20,32" Spacing="0">
+
+            <local:MeshHeader x:Name="Header" Title="About" />
+
+            <Border Style="{StaticResource S.Card}">
+                <VerticalStackLayout Padding="20" Spacing="14">
+
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                        <Grid WidthRequest="46" HeightRequest="28" VerticalOptions="Center">
+                            <shapes:Ellipse WidthRequest="26" HeightRequest="26" HorizontalOptions="Start"
+                                            Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                            StrokeThickness="3" Fill="Transparent" />
+                            <shapes:Ellipse WidthRequest="26" HeightRequest="26" HorizontalOptions="End"
+                                            Stroke="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                            StrokeThickness="3" Fill="Transparent" />
+                        </Grid>
+
+                        <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
+                            <Label Text="MESH SYNC" Style="{StaticResource T.Title}" FontSize="15"
+                                   CharacterSpacing="2.2" />
+                            <Label x:Name="VersionLabel" Style="{StaticResource T.Faint}" FontSize="11.5"
+                                   Text="Version" />
+                        </VerticalStackLayout>
+                    </Grid>
+
+                    <Label Style="{StaticResource T.Muted}" FontSize="13" LineHeight="1.35"
+                           Text="Your clipboard, shared between your own devices. Over your network, or directly over Bluetooth when there is no network at all." />
+
+                    <Label Style="{StaticResource T.Muted}" FontSize="13" LineHeight="1.35"
+                           Text="Nothing is uploaded and there is no account. Each pair of devices has its own key, so a copy is encrypted for the device it is going to and never written to disk." />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Text="This mesh" Style="{StaticResource T.SectionLabel}" Margin="4,24,4,8" />
+            <Border Style="{StaticResource S.Card}">
+                <VerticalStackLayout Padding="16" Spacing="12">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Name" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="80" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="MeshLabel" Style="{StaticResource T.Body}"
+                               FontSize="13.5" VerticalOptions="Center" LineBreakMode="TailTruncation" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Devices" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="80" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="DeviceCount" Style="{StaticResource T.Body}"
+                               FontSize="13.5" VerticalOptions="Center" />
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Links" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="80" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="LinkState" Style="{StaticResource T.Body}"
+                               FontSize="13.5" VerticalOptions="Center" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Style="{StaticResource T.Faint}" FontSize="11.5" Margin="4,20,4,0"
+                   HorizontalTextAlignment="Center"
+                   Text="Nothing ever leaves your own devices" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>
