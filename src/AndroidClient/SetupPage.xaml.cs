@@ -227,7 +227,15 @@ public partial class SetupPage : ContentPage
             return;
         }
 
-        await SyncManager.ConnectAsync(ip, code);
+        if (!await SyncManager.ConnectAsync(ip, code))
+        {
+            // Not a failure so much as a step that has not happened yet: the other device
+            // refuses the first attempt and asks someone to compare fingerprints.
+            await DisplayAlertAsync("Waiting to be allowed in",
+                $"Look for a prompt on the other device and check the code it shows is {SyncManager.Security.Identity.ShortFingerprint}.\n\nIf there was no prompt, check the address and key.",
+                "OK");
+        }
+
         Render();
     }
 

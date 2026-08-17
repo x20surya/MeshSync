@@ -20,14 +20,28 @@ Its identity is the SHA-256 fingerprint of that key, and that identity decides t
 things: whether a peer is allowed to connect, which key traffic is sealed with, and which role
 each device takes on a link.
 
-**There is one key per pair of devices**, agreed by ECDH with both fingerprints sorted into the
-derivation so the two ends compute the same value without exchanging it.
-A single mesh-wide key would let any paired device read traffic meant for another pair.
-That distinction is invisible with two devices and matters immediately with three.
+**There is one key per connection**, not per pair and certainly not per mesh.
+Each end mints an ephemeral P-256 keypair, announces it in the hello, and the session key mixes
+two ECDH secrets through HKDF: the ephemeral one gives forward secrecy, the static one gives
+authentication.
+An attacker can complete the first with anybody, because it is unauthenticated by construction,
+but not the second without a private key this device has paired with - so the two ends never
+agree and AES-GCM refuses the payload.
+This is the shape of Noise's `KK` handshake, deliberately, so it can be read against a known
+pattern rather than assessed as an invention.
+
+Both fingerprints are sorted into the salt so the two ends mix the same bytes in the same order.
+Unsorted, they derive different keys and every payload fails to decrypt with nothing on the wire
+to say why.
+
+The key therefore belongs to the connection, which is what `PeerSession` is.
+Disposing it is what makes the traffic unrecoverable, so a link that closes takes its key with
+it.
 
 A listener refuses any peer it has not paired with.
-A stranger is accepted only while the pairing window is open, which is exactly while the pairing
-code is on screen: that is the only signal the receiving side gets that a stranger was invited.
+A stranger gets no further than a queue: showing the pairing code says somebody was invited, and
+comparing the four-group fingerprint on both screens says it is the *right* somebody.
+That second step is what closes the race an attacker on the same network could otherwise win.
 
 ### 2. Two transport tiers, neither of them a fallback
 
@@ -133,9 +147,12 @@ none of its own, which is what stops two devices that disagree overwriting each 
 
 ### Known gaps
 
-- **No forward secrecy.** The ECDH is static-static, so the same pair always derives the same key.
-  Recovering one private key would expose past sessions with that peer.
-- **The key file is not hardware-backed.** `device.key` is protected by filesystem permissions.
+- **The identity key is wrapped, not hardware-generated.** DPAPI on Windows and a Keystore-held
+  AES key on Android both keep the private key off the disk in the clear, but it still exists in
+  process memory, so code already running as this user can read it while the app is up. Fixing
+  that means generating the key inside the Keystore and doing ECDH through `KeyAgreement`, which
+  forks the key agreement between platforms - not worth it for a clipboard, and worth it for a
+  vault.
 - **Renaming the mesh is local.** It propagates on joining but not afterwards, because every simple
   rule for which of two names wins either ping-pongs or lets a stale device overwrite the rest.
 - **Introduction is designed but not surfaced.** `PeerRegistry.PeersToIntroduceTo` exists so a new
@@ -157,8 +174,17 @@ none of its own, which is what stops two devices that disagree overwriting each 
 ## Rules for Agents
 
 - Do not introduce cloud dependencies or external third-party servers.
-- **Never reintroduce a key that is not derived per pair.** A single shared key is what made every
-  install of this app interchangeable.
+- **Never reintroduce a key that is not agreed per connection.** A single shared key is what made
+  every install of this app interchangeable, and a per-pair one that never changes is what made
+  every past session recoverable from one stolen private key.
+- **Do not cache a session key against a peer.** It belongs to the connection; caching it against
+  the device is exactly the thing that removed forward secrecy the first time, and it also
+  quietly breaks revocation, because a forgotten device keeps working until its link drops.
+- **Trust-on-first-use is not enough on its own.** A stranger inside the pairing window is queued
+  for a human to compare fingerprints, never trusted outright. Do not add a path that skips it.
+- **Bluetooth control frames are not encrypted.** Anything that acts on one must first check the
+  peer has identified itself, or it is reachable by anybody who knows the service UUID. Ping is
+  the exception, because the liveness handshake runs before the identity exchange.
 - Both transports carry the same encrypted payload, so crypto, echo suppression and the activity
   log stay transport-agnostic. Keep it that way.
 - **A data chunk's message id must never be zero** - use `BleProtocol.NextMessageId`. Zero marks an

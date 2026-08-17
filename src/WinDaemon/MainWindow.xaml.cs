@@ -47,9 +47,11 @@ namespace WinDaemon
 
             ActivityList.ItemsSource = _rows;
             DeviceList.ItemsSource = _devices;
+            PendingList.ItemsSource = _pending;
 
             IpText.Text = ipAddress;
             CodeText.Text = Shorten(pairingCode);
+            SelfFingerprint.Text = Program.Security?.Identity.ShortFingerprint ?? "unavailable";
             MeshNameBox.Text = Program.Security?.Peers.MeshName ?? "";
             RenderQrCode();
 
@@ -77,7 +79,12 @@ namespace WinDaemon
 
             // The list has to follow pairing as well as connectivity: a device added from
             // another window, or forgotten, changes it without any link going up or down.
-            if (Program.Security != null) Program.Security.Peers.Changed += Peers_Changed;
+            if (Program.Security != null)
+            {
+                Program.Security.Peers.Changed += Peers_Changed;
+                Program.Security.PairingRequested += Pairing_Requested;
+                Program.Security.Pairing.Changed += Pairing_WindowChanged;
+            }
 
             // Relative timestamps go stale silently otherwise.
             _ageTimer = new DispatcherTimer(DispatcherPriority.Background)
@@ -103,6 +110,7 @@ namespace WinDaemon
                 RefreshStatus();
                 RefreshActivity();
                 RefreshDevices();
+                RefreshPending();
             };
         }
 
@@ -183,6 +191,69 @@ namespace WinDaemon
                 1 => "One device paired into this mesh.",
                 _ => $"{_devices.Count} devices paired into this mesh."
             };
+        }
+
+        // ────────────────────────────── pairing confirmation
+
+        private readonly ObservableCollection<PendingRow> _pending = new();
+
+        private void Pairing_Requested(CoreLib.Identity.PendingPairing pending) =>
+            Dispatcher.BeginInvoke(RefreshPending);
+
+        private void Pairing_WindowChanged() => Dispatcher.BeginInvoke(RefreshPending);
+
+        /// <summary>
+        /// Redraws the list of devices waiting to be allowed in.
+        ///
+        /// The card stays hidden until something is actually knocking, so the ordinary case -
+        /// showing the code to a device that has not connected yet - looks exactly as it did.
+        /// </summary>
+        private void RefreshPending()
+        {
+            var waiting = Program.Security?.PendingPairings ?? Array.Empty<CoreLib.Identity.PendingPairing>();
+
+            _pending.Clear();
+            foreach (var candidate in waiting)
+            {
+                _pending.Add(new PendingRow
+                {
+                    Code = candidate.ShortFingerprint,
+                    Name = string.IsNullOrWhiteSpace(candidate.Name)
+                        ? "It did not say what it is called"
+                        : $"Calls itself \"{candidate.Name}\"",
+                    Fingerprint = candidate.Fingerprint
+                });
+            }
+
+            PendingCard.Visibility = _pending.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            PendingHeading.Text = _pending.Count > 1
+                ? $"{_pending.Count} devices want to join"
+                : "A device wants to join";
+        }
+
+        private void BtnConfirmPairing_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not string fingerprint) return;
+
+            if (Program.Security?.ConfirmPairing(fingerprint) == true)
+            {
+                // Refused and told to come back, so it is waiting on a retry rather than on a
+                // socket. Nudging the dial loop turns "up to twenty seconds" into "now", which
+                // is the difference between the confirmation looking like it worked and not.
+                Program.SignalDial();
+            }
+
+            RefreshPending();
+            RefreshDevices();
+            RefreshStatus();
+        }
+
+        private void BtnRejectPairing_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not string fingerprint) return;
+
+            Program.Security?.RejectPairing(fingerprint);
+            RefreshPending();
         }
 
         /// <summary>
@@ -577,7 +648,14 @@ namespace WinDaemon
         {
             ConnectionState.Changed -= ConnectionState_Changed;
             _activity.Changed -= Activity_Changed;
-            if (Program.Security != null) Program.Security.Peers.Changed -= Peers_Changed;
+
+            if (Program.Security != null)
+            {
+                Program.Security.Peers.Changed -= Peers_Changed;
+                Program.Security.PairingRequested -= Pairing_Requested;
+                Program.Security.Pairing.Changed -= Pairing_WindowChanged;
+            }
+
             _ageTimer.Stop();
             _spinner?.Stop(this);
         }
@@ -588,6 +666,14 @@ namespace WinDaemon
             public string Title { get; init; } = "";
             public string Sub { get; init; } = "";
             public string Age { get; init; } = "";
+        }
+
+        /// <summary>One device waiting to be allowed in.</summary>
+        private sealed class PendingRow
+        {
+            public string Code { get; init; } = "";
+            public string Name { get; init; } = "";
+            public string Fingerprint { get; init; } = "";
         }
 
         /// <summary>One paired device, as the Devices page shows it.</summary>

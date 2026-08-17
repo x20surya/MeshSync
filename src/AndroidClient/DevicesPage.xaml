@@ -11,6 +11,54 @@
 
             <local:MeshHeader x:Name="Header" Title="Devices" />
 
+            <!-- ══════════ Waiting to be allowed in ══════════
+                 Hidden until something knocks, so the page is unchanged in the ordinary case.
+                 The code shown here is what the user compares against the other device's
+                 screen: winning the race to connect no longer helps an attacker, because
+                 their fingerprint is not the one being displayed over there. -->
+            <Border x:Name="PendingCard" IsVisible="False" Margin="0,0,0,16"
+                    StrokeThickness="1" Padding="16,14"
+                    Stroke="{AppThemeBinding Light={StaticResource WarnLight}, Dark={StaticResource WarnDark}}"
+                    BackgroundColor="{AppThemeBinding Light={StaticResource WarnSoftLight}, Dark={StaticResource WarnSoftDark}}">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="12" />
+                </Border.StrokeShape>
+
+                <VerticalStackLayout Spacing="4">
+                    <Label x:Name="PendingHeading" Style="{StaticResource T.Body}"
+                           FontSize="14" FontAttributes="Bold"
+                           TextColor="{AppThemeBinding Light={StaticResource WarnLight}, Dark={StaticResource WarnDark}}"
+                           Text="A device wants to join" />
+                    <Label Style="{StaticResource T.Muted}" FontSize="12"
+                           Text="Check this code matches the one shown on the other device before you allow it." />
+
+                    <CollectionView x:Name="PendingList" SelectionMode="None" Margin="0,8,0,0">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Padding="0,7">
+                                    <VerticalStackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                                        <Label Text="{Binding Code}" Style="{StaticResource T.Mono}"
+                                               FontSize="15" FontAttributes="Bold" />
+                                        <Label Text="{Binding Name}" Style="{StaticResource T.Faint}"
+                                               FontSize="11.5" LineBreakMode="TailTruncation" />
+                                    </VerticalStackLayout>
+
+                                    <Button Grid.Column="1" Text="Reject" Style="{StaticResource S.BtnQuiet}"
+                                            FontSize="12" Padding="12,4" VerticalOptions="Center"
+                                            CommandParameter="{Binding Fingerprint}"
+                                            Clicked="OnRejectPairingClicked" />
+
+                                    <Button Grid.Column="2" Text="Allow" Style="{StaticResource S.BtnPrimary}"
+                                            FontSize="12" Padding="14,4" VerticalOptions="Center"
+                                            CommandParameter="{Binding Fingerprint}"
+                                            Clicked="OnConfirmPairingClicked" />
+                                </Grid>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+                </VerticalStackLayout>
+            </Border>
+
             <!-- ══════════ Paired devices ══════════ -->
             <Label x:Name="DevicesSub" Style="{StaticResource T.Muted}" FontSize="12.5"
                    Margin="4,0,4,10" Text="Everything paired into this mesh." />
@@ -103,6 +151,17 @@
                         <Button Grid.Column="2" Text="Copy" Style="{StaticResource S.BtnQuiet}"
                                 FontSize="11.5" Padding="12,4" HeightRequest="32"
                                 Clicked="OnCopyKeyClicked" />
+                    </Grid>
+
+                    <!-- This phone's own fingerprint. The other device shows the same four
+                         groups when it asks to be allowed in, and the two matching is what
+                         makes the pairing safe rather than merely quick. -->
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="Code" Style="{StaticResource T.Muted}"
+                               FontSize="12.5" WidthRequest="66" VerticalOptions="Center" />
+                        <Label Grid.Column="1" x:Name="SelfFingerprint" Style="{StaticResource T.Mono}"
+                               FontSize="13" FontAttributes="Bold" VerticalOptions="Center"
+                               LineBreakMode="TailTruncation" />
                     </Grid>
                 </VerticalStackLayout>
             </Border>

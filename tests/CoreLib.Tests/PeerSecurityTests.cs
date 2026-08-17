@@ -43,19 +43,21 @@ public class PeerSecurityTests
     }
 
     /// <summary>
-    /// Showing the pairing code is the only signal this side gets that a stranger was
-    /// invited, so it is the only moment one is accepted - and it is recorded as it goes,
-    /// so the same device needs no second scan.
+    /// Showing the pairing code says a stranger was invited; confirming its fingerprint says it
+    /// is the <em>right</em> stranger. Once through both, it is a paired device and needs
+    /// neither again.
     /// </summary>
     [Fact]
-    public void A_stranger_is_accepted_and_remembered_while_pairing_is_open()
+    public void A_confirmed_stranger_is_remembered_after_pairing_closes()
     {
         using var local = PeerSecurity.CreateEphemeral();
         using var newcomer = DeviceIdentity.CreateEphemeral();
 
         local.Pairing.Open(TimeSpan.FromMinutes(1));
 
-        Assert.True(local.Authorise(newcomer.PublicKey, "New phone", "192.168.1.77"));
+        // Refused on the first attempt and queued for a human to compare.
+        Assert.False(local.Authorise(newcomer.PublicKey, "New phone", "192.168.1.77"));
+        Assert.True(local.ConfirmPairing(newcomer.Fingerprint));
         Assert.True(local.Peers.IsTrusted(newcomer.Fingerprint));
 
         local.Pairing.Close();
@@ -107,6 +109,116 @@ public class PeerSecurityTests
         Assert.False(local.Pairing.IsOpen);
         Assert.Equal(TimeSpan.Zero, local.Pairing.Remaining);
         Assert.False(local.Authorise(stranger.PublicKey));
+    }
+
+    // ── pairing confirmation ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The property the confirmation step exists for. Winning the race to connect while the
+    /// code is on screen used to be enough; it now only gets a device into a queue.
+    /// </summary>
+    [Fact]
+    public void A_stranger_that_wins_the_race_is_queued_rather_than_trusted()
+    {
+        using var local = PeerSecurity.CreateEphemeral();
+        using var stranger = DeviceIdentity.CreateEphemeral();
+
+        local.Pairing.Open();
+
+        Assert.False(local.Authorise(stranger.PublicKey, "Definitely Your Laptop"));
+        Assert.False(local.Peers.IsTrusted(stranger.Fingerprint));
+
+        var waiting = Assert.Single(local.PendingPairings);
+        Assert.Equal(stranger.Fingerprint, waiting.Fingerprint);
+        Assert.Equal(DeviceIdentity.Shorten(stranger.Fingerprint), waiting.ShortFingerprint);
+    }
+
+    [Fact]
+    public void Confirming_a_device_trusts_it()
+    {
+        using var local = PeerSecurity.CreateEphemeral();
+        using var candidate = DeviceIdentity.CreateEphemeral();
+
+        local.Pairing.Open();
+        local.Authorise(candidate.PublicKey, "S21 FE", "192.168.0.7");
+
+        Assert.True(local.ConfirmPairing(candidate.Fingerprint));
+        Assert.True(local.Peers.IsTrusted(candidate.Fingerprint));
+        Assert.Empty(local.PendingPairings);
+
+        // And the details it announced came along with it.
+        var peer = local.Peers.Find(candidate.Fingerprint);
+        Assert.Equal("S21 FE", peer!.Name);
+        Assert.Equal("192.168.0.7", peer.LastAddress);
+
+        // It is authorised outright from here on, without another prompt.
+        Assert.True(local.Authorise(candidate.PublicKey));
+    }
+
+    [Fact]
+    public void Rejecting_a_device_leaves_it_untrusted()
+    {
+        using var local = PeerSecurity.CreateEphemeral();
+        using var candidate = DeviceIdentity.CreateEphemeral();
+
+        local.Pairing.Open();
+        local.Authorise(candidate.PublicKey);
+
+        Assert.True(local.RejectPairing(candidate.Fingerprint));
+        Assert.False(local.Peers.IsTrusted(candidate.Fingerprint));
+        Assert.Empty(local.PendingPairings);
+    }
+
+    /// <summary>
+    /// A device retrying every few seconds must not reopen the prompt each time, or the screen
+    /// fills with the same device and the user learns to tap through it.
+    /// </summary>
+    [Fact]
+    public void A_device_that_keeps_retrying_is_asked_about_once()
+    {
+        using var local = PeerSecurity.CreateEphemeral();
+        using var candidate = DeviceIdentity.CreateEphemeral();
+
+        int asked = 0;
+        local.PairingRequested += _ => asked++;
+
+        local.Pairing.Open();
+        for (int attempt = 0; attempt < 5; attempt++) local.Authorise(candidate.PublicKey);
+
+        Assert.Equal(1, asked);
+        Assert.Single(local.PendingPairings);
+    }
+
+    /// <summary>
+    /// A prompt left on screen must not be answerable once the window has shut, or walking away
+    /// from an open pairing screen is the same hole the confirmation was added to close.
+    /// </summary>
+    [Fact]
+    public void A_device_cannot_be_confirmed_after_pairing_closes()
+    {
+        using var local = PeerSecurity.CreateEphemeral();
+        using var candidate = DeviceIdentity.CreateEphemeral();
+
+        local.Pairing.Open();
+        local.Authorise(candidate.PublicKey);
+        Assert.Single(local.PendingPairings);
+
+        local.Pairing.Close();
+
+        Assert.Empty(local.PendingPairings);
+        Assert.False(local.ConfirmPairing(candidate.Fingerprint));
+        Assert.False(local.Peers.IsTrusted(candidate.Fingerprint));
+    }
+
+    /// <summary>Nothing is queued when the window was never opened - it is refused outright.</summary>
+    [Fact]
+    public void A_stranger_is_not_even_queued_while_pairing_is_shut()
+    {
+        using var local = PeerSecurity.CreateEphemeral();
+        using var stranger = DeviceIdentity.CreateEphemeral();
+
+        Assert.False(local.Authorise(stranger.PublicKey));
+        Assert.Empty(local.PendingPairings);
     }
 
     /// <summary>

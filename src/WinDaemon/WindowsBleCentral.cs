@@ -300,6 +300,15 @@ namespace WinDaemon
                             break;
 
                         case BleProtocol.ControlWakeWiFi:
+                            // Only from a peer that has identified itself. Control frames ride
+                            // outside the encrypted path, so a service that merely advertises
+                            // the right UUID could otherwise make this machine dial out.
+                            if (RemoteFingerprint.Length == 0)
+                            {
+                                Log.Write("BleCentral", "Ignoring a Wi-Fi request from a peer that has not identified itself.");
+                                break;
+                            }
+
                             Log.Write("BleCentral", "The peer asked for Wi-Fi.");
                             WiFiRequested?.Invoke(this, EventArgs.Empty);
                             break;

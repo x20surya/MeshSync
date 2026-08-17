@@ -51,6 +51,16 @@ namespace AndroidClient
         private static readonly TimeSpan TcpConnectTimeout = TimeSpan.FromSeconds(5);
 
         /// <summary>
+        /// How long the pairing screen waits before saying it did not work.
+        ///
+        /// Sized for a person, not a network: the other device refuses the first attempt and
+        /// asks someone to compare two fingerprints, so this has to cover picking up a laptop
+        /// and looking at it. Being told it failed while the prompt is still on screen over
+        /// there would be worse than waiting.
+        /// </summary>
+        private static readonly TimeSpan PairingConfirmationWait = TimeSpan.FromSeconds(45);
+
+        /// <summary>
         /// How long a sender waits for Wi-Fi to come up before abandoning an image.
         ///
         /// Longer than the connect timeout because the link may have to be requested first and
@@ -425,7 +435,12 @@ namespace AndroidClient
             SignalWiFi();
 
             // Report the outcome of the first attempt for the benefit of the pairing UI.
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(12);
+            //
+            // Longer than it needs to be for the connection itself, because the other device
+            // now refuses the first attempt and asks a human to compare fingerprints before it
+            // will accept. Twelve seconds was enough when the code alone was the whole
+            // handshake; it is not enough for someone to pick up a laptop and look.
+            var deadline = DateTime.UtcNow + PairingConfirmationWait;
             while (DateTime.UtcNow < deadline)
             {
                 if (IsConnected) return true;
@@ -594,6 +609,21 @@ namespace AndroidClient
             if (!_screenOn) return;
             _screenOn = false;
             Log.Write("Sync", "Screen off - Wi-Fi no longer held open.");
+            SignalWiFi();
+        }
+
+        /// <summary>
+        /// Wakes both loops at once, for something that has just made a connection possible
+        /// which was not before - confirming a device by hand, most of all.
+        ///
+        /// A confirmed device was refused and told to come back, so it is waiting on a retry
+        /// rather than on a socket. Without this it would connect on the next scheduled round,
+        /// which reads as the confirmation not having worked.
+        /// </summary>
+        public static void NudgeReconnect()
+        {
+            StartLoops();
+            SignalBle();
             SignalWiFi();
         }
 

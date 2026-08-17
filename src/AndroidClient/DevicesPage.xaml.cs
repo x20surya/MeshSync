@@ -15,11 +15,13 @@ namespace AndroidClient;
 public partial class DevicesPage : ContentPage
 {
     private readonly ObservableCollection<DeviceRow> _devices = new();
+    private readonly ObservableCollection<PendingRow> _pending = new();
 
     public DevicesPage()
     {
         InitializeComponent();
         DeviceList.ItemsSource = _devices;
+        PendingList.ItemsSource = _pending;
     }
 
     protected override void OnAppearing()
@@ -29,6 +31,12 @@ public partial class DevicesPage : ContentPage
         Header.RefreshSubtitle();
         SyncManager.OnConnectionStatusChanged += OnStatusChanged;
         SyncManager.Security.Peers.Changed += OnPeersChanged;
+        SyncManager.Security.PairingRequested += OnPairingRequested;
+        SyncManager.Security.Pairing.Changed += OnPairingWindowChanged;
+
+        // Showing this page is the statement that a human is here inviting something in. It is
+        // the only signal this side gets, so the window follows the page exactly.
+        SyncManager.Security.Pairing.Open();
 
         Render();
     }
@@ -39,11 +47,21 @@ public partial class DevicesPage : ContentPage
 
         SyncManager.OnConnectionStatusChanged -= OnStatusChanged;
         SyncManager.Security.Peers.Changed -= OnPeersChanged;
+        SyncManager.Security.PairingRequested -= OnPairingRequested;
+        SyncManager.Security.Pairing.Changed -= OnPairingWindowChanged;
+
+        // Shut the moment the page is not on screen, which also drops anything still waiting -
+        // a prompt left behind must not be answerable by whoever picks the phone up next.
+        SyncManager.Security.Pairing.Close();
     }
 
     private void OnStatusChanged(string status) => Dispatcher.Dispatch(Render);
 
     private void OnPeersChanged() => Dispatcher.Dispatch(Render);
+
+    private void OnPairingRequested(PendingPairing pending) => Dispatcher.Dispatch(Render);
+
+    private void OnPairingWindowChanged() => Dispatcher.Dispatch(Render);
 
     // ──────────────────────────────────── rendering
 
@@ -87,6 +105,60 @@ public partial class DevicesPage : ContentPage
         SelfName.Text = SyncManager.LocalDeviceName;
         SelfAddress.Text = LocalAddress();
         SelfKey.Text = Shorten(SyncManager.Security.Identity.PublicKey);
+        SelfFingerprint.Text = SyncManager.Security.Identity.ShortFingerprint;
+
+        RenderPending();
+    }
+
+    /// <summary>
+    /// Redraws the devices waiting to be allowed in.
+    ///
+    /// The card stays hidden until something is actually knocking, so the ordinary case - this
+    /// page open with nothing connecting - looks exactly as it did before confirmation existed.
+    /// </summary>
+    private void RenderPending()
+    {
+        var waiting = SyncManager.Security.PendingPairings;
+
+        _pending.Clear();
+        foreach (var candidate in waiting)
+        {
+            _pending.Add(new PendingRow
+            {
+                Code = candidate.ShortFingerprint,
+                Name = string.IsNullOrWhiteSpace(candidate.Name)
+                    ? "It did not say what it is called"
+                    : $"Calls itself \"{candidate.Name}\"",
+                Fingerprint = candidate.Fingerprint
+            });
+        }
+
+        PendingCard.IsVisible = _pending.Count > 0;
+        PendingHeading.Text = _pending.Count > 1
+            ? $"{_pending.Count} devices want to join"
+            : "A device wants to join";
+    }
+
+    private void OnConfirmPairingClicked(object? sender, EventArgs e)
+    {
+        if ((sender as Button)?.CommandParameter is not string fingerprint) return;
+
+        if (SyncManager.Security.ConfirmPairing(fingerprint))
+        {
+            // It was refused and told to come back, so it is waiting on a retry rather than on
+            // a socket. Nudging both loops turns a wait into an immediate reconnect.
+            SyncManager.NudgeReconnect();
+        }
+
+        Render();
+    }
+
+    private void OnRejectPairingClicked(object? sender, EventArgs e)
+    {
+        if ((sender as Button)?.CommandParameter is not string fingerprint) return;
+
+        SyncManager.Security.RejectPairing(fingerprint);
+        Render();
     }
 
     private static string LocalAddress() =>
@@ -172,8 +244,9 @@ public partial class DevicesPage : ContentPage
 
         if (!await SyncManager.ConnectAsync(address, key))
         {
-            await DisplayAlertAsync("Could not add it",
-                "Check the address and key, and that the other device is showing its pairing code.", "OK");
+            await DisplayAlertAsync("Not added yet",
+                $"The other device has to allow this one in. Look for a prompt on it and check the code shown there is {SyncManager.Security.Identity.ShortFingerprint}.\n\nIf there was no prompt, check the address and key.",
+                "OK");
             return;
         }
 
@@ -222,5 +295,13 @@ public partial class DevicesPage : ContentPage
         public string Detail { get; init; } = "";
         public string Fingerprint { get; init; } = "";
         public Color Dot { get; init; } = Colors.Gray;
+    }
+
+    /// <summary>One device waiting to be allowed in.</summary>
+    private sealed class PendingRow
+    {
+        public string Code { get; init; } = "";
+        public string Name { get; init; } = "";
+        public string Fingerprint { get; init; } = "";
     }
 }

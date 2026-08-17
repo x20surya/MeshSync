@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace CoreLib.Identity
 {
@@ -46,6 +48,15 @@ namespace CoreLib.Identity
         {
             Identity = identity ?? throw new ArgumentNullException(nameof(identity));
             Peers = peers ?? throw new ArgumentNullException(nameof(peers));
+
+            // A device that knocked while the code was on screen must not be confirmable an
+            // hour after it came down.
+            Pairing.Changed += OnPairingChanged;
+        }
+
+        private void OnPairingChanged()
+        {
+            if (!Pairing.IsOpen) ClearPendingPairings();
         }
 
         /// <summary>
@@ -62,14 +73,34 @@ namespace CoreLib.Identity
         public static PeerSecurity CreateEphemeral() =>
             new(DeviceIdentity.CreateEphemeral(), PeerRegistry.CreateEphemeral());
 
+        private readonly object _pendingGate = new();
+        private readonly Dictionary<string, PendingPairing> _pending = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A device is waiting to be confirmed. Raised once per device per window, so a peer
+        /// retrying every few seconds does not reopen the prompt each time.
+        /// </summary>
+        public event Action<PendingPairing>? PairingRequested;
+
+        /// <summary>Devices knocking right now, for a UI to show and a human to compare.</summary>
+        public IReadOnlyList<PendingPairing> PendingPairings
+        {
+            get { lock (_pendingGate) return _pending.Values.ToList(); }
+        }
+
         /// <summary>
         /// Decides whether a connecting peer may stay.
         ///
-        /// A device already paired with is let through. A stranger is let through only while
-        /// the pairing window is open - see <see cref="PairingWindow"/> for why that is the
-        /// only moment this side can know a stranger was invited - and is recorded as it goes,
-        /// so the same device is recognised on every subsequent connection without another
-        /// scan.
+        /// <para>A device already paired with is let through. A stranger is <em>not</em>, even
+        /// while the pairing window is open - it is recorded as pending and refused, and the
+        /// user is asked to compare its fingerprint against the one shown on the device that
+        /// scanned the code. It connects on its next retry once confirmed.</para>
+        ///
+        /// <para>Refusing and retrying rather than holding the connection open is deliberate.
+        /// Holding it would mean an authorisation decision that can answer "not yet", which
+        /// changes the contract for all four transports at once; the retry loops that make the
+        /// mesh reconnect already exist and cost one cycle. The user is comparing a fingerprint
+        /// in that time anyway.</para>
         /// </summary>
         public bool Authorise(string? publicKey, string? name = null, string? address = null)
         {
@@ -100,10 +131,85 @@ namespace CoreLib.Identity
                 return false;
             }
 
-            Diagnostics.Log.Write("Peers",
-                $"Accepting {name ?? "a new device"} ({DeviceIdentity.Shorten(fingerprint)}) while pairing is open.");
+            NotePending(publicKey!, fingerprint, name, address);
+            return false;
+        }
 
-            return Peers.Trust(publicKey!, name, address);
+        private void NotePending(string publicKey, string fingerprint, string? name, string? address)
+        {
+            PendingPairing pending;
+
+            lock (_pendingGate)
+            {
+                if (_pending.ContainsKey(fingerprint)) return; // Already asked; a retry is not a new request.
+
+                pending = new PendingPairing(publicKey, name, address);
+                _pending[fingerprint] = pending;
+            }
+
+            Diagnostics.Log.Write("Peers",
+                $"{name ?? "A new device"} ({pending.ShortFingerprint}) is asking to join. Waiting for it to be confirmed.");
+
+            try { PairingRequested?.Invoke(pending); }
+            catch (Exception ex) { Diagnostics.Log.Write("Peers", "PairingRequested handler threw", ex); }
+        }
+
+        /// <summary>
+        /// Accepts a device whose fingerprint the user has compared. It connects on its next
+        /// retry, which the caller should nudge rather than wait out.
+        /// </summary>
+        public bool ConfirmPairing(string fingerprint)
+        {
+            // The window is the statement that a human is standing at this device inviting
+            // something in. Confirming after it has shut would let a prompt left on screen be
+            // answered by whoever walks past next.
+            if (!Pairing.IsOpen)
+            {
+                Diagnostics.Log.Write("Peers", "Refusing to confirm a device: pairing is no longer open.");
+                ClearPendingPairings();
+                return false;
+            }
+
+            PendingPairing? pending;
+            lock (_pendingGate)
+            {
+                if (!_pending.Remove(fingerprint, out pending)) return false;
+            }
+
+            Diagnostics.Log.Write("Peers", $"Confirmed {pending!.ShortFingerprint} by hand.");
+            return Peers.Trust(pending.PublicKey, pending.Name, pending.Address);
+        }
+
+        /// <summary>
+        /// Turns a device away. It is forgotten rather than blocked, so a genuine device that
+        /// was rejected by a mis-tap can simply try again.
+        /// </summary>
+        public bool RejectPairing(string fingerprint)
+        {
+            PendingPairing? pending;
+            lock (_pendingGate)
+            {
+                if (!_pending.Remove(fingerprint, out pending)) return false;
+            }
+
+            Diagnostics.Log.Write("Peers", $"Turned away {pending!.ShortFingerprint}.");
+            return true;
+        }
+
+        /// <summary>
+        /// Drops everything still waiting. Called when the pairing window shuts, so a device
+        /// that knocked while the code was up cannot be confirmed an hour later.
+        /// </summary>
+        public void ClearPendingPairings()
+        {
+            int dropped;
+            lock (_pendingGate)
+            {
+                dropped = _pending.Count;
+                _pending.Clear();
+            }
+
+            if (dropped > 0) Diagnostics.Log.Write("Peers", $"Pairing closed with {dropped} device(s) unconfirmed.");
         }
 
         /// <summary>
@@ -150,6 +256,9 @@ namespace CoreLib.Identity
         {
             if (_disposed) return;
             _disposed = true;
+
+            Pairing.Changed -= OnPairingChanged;
+            PairingRequested = null;
 
             Identity.Dispose();
         }

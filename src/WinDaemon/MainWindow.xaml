@@ -329,6 +329,60 @@
                                      BorderBrush="{DynamicResource B.Border}" BorderThickness="1"
                                      LostFocus="MeshNameBox_LostFocus" KeyDown="MeshNameBox_KeyDown" />
 
+                            <!-- Devices waiting to be confirmed. Hidden until one knocks, so the
+                                 page is unchanged in the ordinary case. The fingerprint here is
+                                 the thing the user compares against the other device's screen:
+                                 winning the race to connect no longer helps an attacker,
+                                 because their fingerprint is not the one being shown. -->
+                            <Border x:Name="PendingCard" Visibility="Collapsed" Margin="0,20,0,0"
+                                    Background="{DynamicResource B.WarnSoft}"
+                                    BorderBrush="{DynamicResource B.Warn}" BorderThickness="1"
+                                    CornerRadius="10" Padding="16,14">
+                                <StackPanel>
+                                    <TextBlock x:Name="PendingHeading" Style="{StaticResource T.Base}"
+                                               FontSize="14" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource B.Warn}"
+                                               Text="A device wants to join" />
+                                    <TextBlock Style="{StaticResource T.Muted}" FontSize="12" TextWrapping="Wrap"
+                                               Margin="0,4,0,0"
+                                               Text="Check this code matches the one shown on the other device before you allow it." />
+
+                                    <ItemsControl x:Name="PendingList" Margin="0,10,0,0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,7">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Code}" Style="{StaticResource T.Mono}"
+                                                                   FontSize="15" FontWeight="SemiBold" />
+                                                        <TextBlock Text="{Binding Name}" Style="{StaticResource T.Muted}"
+                                                                   FontSize="11.5" Margin="0,2,0,0"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+
+                                                    <Button Grid.Column="1" Style="{StaticResource S.BtnQuiet}"
+                                                            Content="Reject" Padding="12,5" FontSize="11.5"
+                                                            VerticalAlignment="Center" Margin="0,0,8,0"
+                                                            Tag="{Binding Fingerprint}"
+                                                            Click="BtnRejectPairing_Click" />
+
+                                                    <Button Grid.Column="2" Style="{StaticResource S.BtnPrimary}"
+                                                            Content="Allow" Padding="14,5" FontSize="11.5"
+                                                            VerticalAlignment="Center"
+                                                            Tag="{Binding Fingerprint}"
+                                                            Click="BtnConfirmPairing_Click" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+
                             <TextBlock x:Name="DevicesHeading" Text="Devices" Style="{StaticResource T.Base}"
                                        FontSize="19" FontWeight="SemiBold"
                                        FontFamily="{DynamicResource F.Display}" Margin="0,26,0,4" />
@@ -422,6 +476,22 @@
                                         <Button Grid.Column="2" x:Name="BtnCopyCode" Style="{StaticResource S.BtnQuiet}"
                                                 Content="Copy" Padding="14,6" FontSize="12"
                                                 Click="BtnCopyCode_Click" Margin="10,0,0,0" />
+                                    </Grid>
+
+                                    <!-- This machine's own fingerprint. The other device shows the
+                                         same four groups when it asks to be allowed in, and the
+                                         two matching is what makes the pairing safe rather than
+                                         merely quick. -->
+                                    <Grid Margin="0,12,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="This device" Style="{StaticResource T.Muted}"
+                                                   FontSize="12.5" VerticalAlignment="Center" Width="74" />
+                                        <TextBlock Grid.Column="1" x:Name="SelfFingerprint" Style="{StaticResource T.Mono}"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                     </Grid>
                                 </StackPanel>
                             </Border>

@@ -263,7 +263,16 @@ namespace WinDaemon
 
                         case BleProtocol.ControlWakeWiFi:
                             // A central can ask this side for Wi-Fi too, now that either end
-                            // may be the one holding something Bluetooth cannot carry.
+                            // may be the one holding something Bluetooth cannot carry - but
+                            // only one that has identified itself. Control frames ride outside
+                            // the encrypted path, so anything that knows the service UUID could
+                            // otherwise make this machine raise a network on demand.
+                            if (RemoteFingerprint.Length == 0)
+                            {
+                                Log.Write("BleServer", "Ignoring a Wi-Fi request from a peer that has not identified itself.");
+                                break;
+                            }
+
                             Log.Write("BleServer", "The peer asked for Wi-Fi.");
                             WiFiRequested?.Invoke(this, EventArgs.Empty);
                             break;

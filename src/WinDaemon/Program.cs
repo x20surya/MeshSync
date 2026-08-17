@@ -681,6 +681,17 @@ namespace WinDaemon
         /// <summary>How often to try reaching paired devices that are not currently connected.</summary>
         private static readonly TimeSpan DialInterval = TimeSpan.FromSeconds(20);
 
+        /// <summary>
+        /// Wakes the dial loop early. Confirming a device by hand should reach it now rather
+        /// than up to twenty seconds later, which reads as the confirmation not having worked.
+        /// </summary>
+        private static readonly SemaphoreSlim _dialSignal = new(0);
+
+        public static void SignalDial()
+        {
+            try { _dialSignal.Release(); } catch (SemaphoreFullException) { }
+        }
+
         /// <summary>How often to look for a Bluetooth peer this machine should connect to.</summary>
         private static readonly TimeSpan BleScanInterval = TimeSpan.FromSeconds(30);
 
@@ -847,7 +858,9 @@ namespace WinDaemon
                         Log.Write("Daemon", "A dialling round failed", ex);
                     }
 
-                    try { await Task.Delay(DialInterval, token).ConfigureAwait(false); }
+                    // Waits on the signal rather than the clock, so a device confirmed by hand
+                    // is dialled at once instead of on the next scheduled round.
+                    try { await _dialSignal.WaitAsync(DialInterval, token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
                 }
             });

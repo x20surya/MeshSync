@@ -306,6 +306,16 @@ namespace AndroidClient.Platforms.Android
                             break;
 
                         case BleProtocol.ControlWakeWiFi:
+                            // Only from a peer that has identified itself. Control frames ride
+                            // outside the encrypted path, so a service that merely advertises
+                            // the right UUID could otherwise make this phone raise Wi-Fi at
+                            // will, which is a battery attack that needs no key at all.
+                            if (RemoteFingerprint.Length == 0)
+                            {
+                                Log.Write("BleClient", "Ignoring a Wi-Fi request from a peer that has not identified itself.");
+                                break;
+                            }
+
                             Log.Write("BleClient", "The computer asked for Wi-Fi.");
                             WiFiRequested?.Invoke(this, EventArgs.Empty);
                             break;
