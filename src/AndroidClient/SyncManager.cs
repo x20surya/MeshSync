@@ -921,7 +921,7 @@ namespace AndroidClient
             System.IO.File.WriteAllBytes(imageFile.AbsolutePath!, body);
 
             var uri = AndroidX.Core.Content.FileProvider.GetUriForFile(
-                context, "com.companyname.androidclient.fileprovider", imageFile);
+                context, "dev.meshsync.app.fileprovider", imageFile);
 
             var clipboard = (ClipboardManager?)context.GetSystemService(Context.ClipboardService);
             if (clipboard != null)

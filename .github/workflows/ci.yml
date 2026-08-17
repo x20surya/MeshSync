@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # CoreLib and its tests are the part that has to be right, and the part that
+  # builds anywhere. Running it on Linux keeps it honest about staying free of
+  # platform references - the apps are where those belong.
+  core:
+    name: CoreLib and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore src/CoreLib/CoreLib.csproj tests/CoreLib.Tests/CoreLib.Tests.csproj
+
+      # Warnings are errors here rather than a convention someone has to remember.
+      # An incremental build does not re-report them, so this is a clean one every time.
+      - name: Build
+        run: dotnet build tests/CoreLib.Tests/CoreLib.Tests.csproj --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj --no-build --verbosity normal
+
+  windows:
+    name: Windows daemon
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build
+        run: dotnet build src/WinDaemon/WinDaemon.csproj -warnaserror
+
+  android:
+    name: Android client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install the Android workload
+        run: dotnet workload install maui-android
+
+      - name: Build
+        run: dotnet build src/AndroidClient/AndroidClient.csproj -f net10.0-android -warnaserror

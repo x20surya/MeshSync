@@ -29,7 +29,7 @@ Never use `pm clear`: it revokes the grant, and only the user can restore it by 
 dotnet build src/AndroidClient/AndroidClient.csproj -t:SignAndroidPackage -f net10.0-android
 
 # 2. Install to connected device via ADB
-adb install -r src/AndroidClient/bin/Debug/net10.0-android/com.companyname.androidclient-Signed.apk
+adb install -r src/AndroidClient/bin/Debug/net10.0-android/dev.meshsync.app-Signed.apk
 
 # 3. Confirm the accessibility service survived the install
 adb shell settings get secure enabled_accessibility_services
@@ -68,7 +68,7 @@ scratch without `pm clear`.
 %LOCALAPPDATA%\MeshSync\peers.json     # paired devices and the mesh name
 
 # Android (app-private)
-adb shell run-as com.companyname.androidclient ls /data/data/com.companyname.androidclient/files
+adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
 ```
 
 ## Project Structure

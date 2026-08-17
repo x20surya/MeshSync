@@ -323,7 +323,7 @@ dotnet run --project src/WinDaemon/WinDaemon.csproj
 
 # Android: build and install, preserving app data
 dotnet build src/AndroidClient/AndroidClient.csproj -t:SignAndroidPackage -f net10.0-android
-adb install -r src/AndroidClient/bin/Debug/net10.0-android/com.companyname.androidclient-Signed.apk
+adb install -r src/AndroidClient/bin/Debug/net10.0-android/dev.meshsync.app-Signed.apk
 
 # Tests
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
