@@ -312,6 +312,45 @@ namespace AndroidClient
             }
         }
 
+        private static FileTransferService? _files;
+
+        /// <summary>
+        /// File transfer, both directions.
+        ///
+        /// Wi-Fi only: at roughly 6.7 KB/s a photograph would take a quarter of an hour over
+        /// Bluetooth, so a send that finds only Bluetooth up raises Wi-Fi first rather than
+        /// promising something the tier cannot do.
+        /// </summary>
+        private static FileTransferService Files
+        {
+            get
+            {
+                var existing = Volatile.Read(ref _files);
+                if (existing != null) return existing;
+
+                lock (_securityGate)
+                {
+                    existing = Volatile.Read(ref _files);
+                    if (existing != null) return existing;
+
+                    var created = new FileTransferService(
+                        System.IO.Path.Combine(StorageDirectory(), "incoming"),
+                        (fingerprint, contentType, body, token) =>
+                            Mesh.SendToAsync(fingerprint, contentType, body, token));
+
+                    created.FileReceived += SaveReceivedFile;
+                    created.FileFailed += (name, reason) =>
+                    {
+                        Log.Write("Sync", $"\"{name}\" did not arrive: {reason}.");
+                        Report($"{name} did not arrive");
+                    };
+
+                    Volatile.Write(ref _files, created);
+                    return created;
+                }
+            }
+        }
+
         /// <summary>The mesh, created on first use so the identity is loaded before it.</summary>
         private static MeshLinks Mesh
         {
@@ -540,6 +579,75 @@ namespace AndroidClient
         {
             if (imageBytes == null || imageBytes.Length == 0) return Task.CompletedTask;
             return SendAsync(ContentImage, imageBytes);
+        }
+
+        /// <summary>
+        /// Sends a file to every connected device, raising Wi-Fi first if only Bluetooth is up.
+        ///
+        /// Fanned out rather than sent once: there is a key per connection, so a file goes to
+        /// each device as its own stream. That is genuinely N times the bytes, and it is the
+        /// cost of a paired device being unable to read another pair's traffic.
+        /// </summary>
+        public static async Task<bool> SendFileAsync(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)) return false;
+            if (!IsPaired) return false;
+
+            string name = System.IO.Path.GetFileName(path);
+
+            // A file needs the tier that can carry it. Holding a lease keeps Wi-Fi up for the
+            // whole transfer even if the screen goes off partway through, which for anything
+            // larger than a photograph it very well might.
+            Interlocked.Increment(ref _wifiHolds);
+            try
+            {
+                if (!WiFiConnected && !await WaitForWiFiAsync(WiFiOnDemandTimeout).ConfigureAwait(false))
+                {
+                    Log.Write("Sync", $"Could not raise Wi-Fi, so \"{name}\" was not sent.");
+                    Report("Files need Wi-Fi");
+                    return false;
+                }
+
+                var targets = Mesh.ConnectedPeers;
+                if (targets.Count == 0)
+                {
+                    Report("No devices in range");
+                    return false;
+                }
+
+                bool anySent = false;
+
+                foreach (string fingerprint in targets)
+                {
+                    var result = await Files.SendAsync(fingerprint, path).ConfigureAwait(false);
+
+                    if (result == FileSendResult.Sent) anySent = true;
+                    else Log.Write("Sync", $"\"{name}\" to {DeviceIdentity.Shorten(fingerprint)}: {result}.");
+                }
+
+                if (anySent)
+                {
+                    try
+                    {
+                        Activity.Record(SyncDirection.Sent, SyncItemKind.File,
+                                        new System.IO.FileInfo(path).Length, name);
+                    }
+                    catch { }
+
+                    Report($"Sent {name}");
+                }
+                else
+                {
+                    Report($"Could not send {name}");
+                }
+
+                return anySent;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _wifiHolds);
+                SignalWiFi();
+            }
         }
 
         /// <summary>Stops both loops and tears the links down. Pairing details are kept.</summary>
@@ -842,6 +950,10 @@ namespace AndroidClient
 
         private static void Apply(PeerRecord peer, byte contentType, byte[] body)
         {
+            // File frames go straight through: they are not clipboard content, so noting them
+            // as an inbound copy would poison the echo suppressor with bytes nobody copied.
+            if (Files.Handle(peer.Fingerprint, contentType, body)) return;
+
             // Recorded before injection so the clipboard listener recognises the resulting
             // change as our own write.
             _echo.NoteInbound(body, contentType == ContentImage ? SyncItemKind.Image : SyncItemKind.Text);
@@ -933,7 +1045,93 @@ namespace AndroidClient
             Log.Write("Sync", $"Received image payload, {body.Length} bytes.");
         }
 
+        /// <summary>
+        /// Moves a finished file somewhere the user can actually find it.
+        ///
+        /// <para>CoreLib deliberately does not know that Downloads exists, because only the app
+        /// does. On Android 10 and above that means MediaStore, which puts the file in the
+        /// shared Downloads collection with no storage permission at all - the app never sees a
+        /// path, only a stream it may write to. Below that there is no MediaStore Downloads
+        /// collection, so it goes to the app's own external files directory: less discoverable,
+        /// but reachable without asking for broad storage access on an old device.</para>
+        /// </summary>
+        private static void SaveReceivedFile(ReceivedFile file)
+        {
 #if ANDROID
+            try
+            {
+                var context = global::Android.App.Application.Context;
+
+                if (OperatingSystem.IsAndroidVersionAtLeast(29))
+                {
+                    var values = new ContentValues();
+                    values.Put(global::Android.Provider.MediaStore.IMediaColumns.DisplayName, file.Name);
+                    values.Put(global::Android.Provider.MediaStore.IMediaColumns.MimeType, "application/octet-stream");
+                    // Pending while it is being written, so nothing picks up a half-copied file -
+                    // the same trap the screenshot observer had to learn about from the other side.
+                    values.Put(global::Android.Provider.MediaStore.IMediaColumns.IsPending, 1);
+
+                    var collection = global::Android.Provider.MediaStore.Downloads.ExternalContentUri!;
+                    var uri = context.ContentResolver!.Insert(collection, values)
+                        ?? throw new InvalidOperationException("MediaStore refused a row for the file.");
+
+                    using (var output = context.ContentResolver.OpenOutputStream(uri, "w")
+                           ?? throw new InvalidOperationException("MediaStore gave no stream to write to."))
+                    using (var input = System.IO.File.OpenRead(file.Path))
+                    {
+                        input.CopyTo(output);
+                    }
+
+                    values.Clear();
+                    values.Put(global::Android.Provider.MediaStore.IMediaColumns.IsPending, 0);
+                    context.ContentResolver.Update(uri, values, null, null);
+                }
+                else
+                {
+                    var folder = context.GetExternalFilesDir(global::Android.OS.Environment.DirectoryDownloads)
+                        ?? throw new InvalidOperationException("No external files directory.");
+
+                    string destination = UniquePath(folder.AbsolutePath!, file.Name);
+                    System.IO.File.Copy(file.Path, destination);
+                }
+
+                Activity.Record(SyncDirection.Received, SyncItemKind.File, file.Size, file.Name);
+                Log.Write("Sync", $"Saved \"{file.Name}\" to Downloads.");
+                Report($"Received {file.Name}");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Sync", $"Could not save \"{file.Name}\"", ex);
+                Report($"Could not save {file.Name}");
+            }
+            finally
+            {
+                try { System.IO.File.Delete(file.Path); } catch { }
+            }
+#else
+            Log.Write("Sync", $"Received \"{file.Name}\" at {file.Path}.");
+#endif
+        }
+
+#if ANDROID
+        /// <summary>A path that is not already taken, so nothing is quietly overwritten.</summary>
+        private static string UniquePath(string folder, string name)
+        {
+            string candidate = System.IO.Path.Combine(folder, name);
+            if (!System.IO.File.Exists(candidate)) return candidate;
+
+            string stem = System.IO.Path.GetFileNameWithoutExtension(name);
+            string extension = System.IO.Path.GetExtension(name);
+
+            for (int attempt = 2; attempt < 1000; attempt++)
+            {
+                candidate = System.IO.Path.Combine(folder, $"{stem} ({attempt}){extension}");
+                if (!System.IO.File.Exists(candidate)) return candidate;
+            }
+
+            return System.IO.Path.Combine(folder, $"{stem} ({Guid.NewGuid():N}){extension}");
+        }
+
         /// <summary>Keeps the image cache bounded - nothing ever deleted these before.</summary>
         private static void PruneImageCache(Java.IO.File cacheDir)
         {

@@ -53,6 +53,17 @@ namespace WinDaemon
         private static PeerSecurity? _security;
         private static bool _trayHintShown;
 
+        /// <summary>
+        /// File transfer, both directions.
+        ///
+        /// Wi-Fi only: at roughly 6.7 KB/s a photograph would take a quarter of an hour over
+        /// Bluetooth, so an offer that finds only Bluetooth up asks the peer to raise Wi-Fi with
+        /// the wake frame that already exists rather than promising something the tier cannot do.
+        /// </summary>
+        private static FileTransferService? _files;
+
+        public static FileTransferService? Files => _files;
+
         public static string LogDirectory { get; private set; } = "";
 
         /// <summary>This device's identity and the devices it is paired with. Null before startup.</summary>
@@ -115,6 +126,7 @@ namespace WinDaemon
 
             WireClipboardCapture();
             WirePayloadReceive();
+            WireFileTransfer();
 
             _ = Task.Run(InitialiseNetworkAsync);
 
@@ -182,6 +194,7 @@ namespace WinDaemon
         {
             var menu = new Forms.ContextMenuStrip();
             menu.Items.Add("Open Mesh Sync", null, (_, _) => ShowDashboardFromTray());
+            menu.Items.Add("Send a file…", null, (_, _) => PromptForFileToSend());
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add("Quit", null, (_, _) => ExitApp());
 
@@ -219,6 +232,84 @@ namespace WinDaemon
 
         private static void ShowDashboardFromTray() =>
             _app?.Dispatcher.BeginInvoke(() => _window?.ShowDashboard());
+
+        /// <summary>Asks for a file and sends it to every connected device.</summary>
+        public static void PromptForFileToSend() =>
+            _app?.Dispatcher.BeginInvoke(() =>
+            {
+                var picker = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = "Send a file to your mesh",
+                    CheckFileExists = true,
+                    Multiselect = false
+                };
+
+                if (picker.ShowDialog() != true) return;
+                _ = SendFileAsync(picker.FileName);
+            });
+
+        /// <summary>
+        /// Sends a file to every connected device, raising Wi-Fi first when only Bluetooth is up.
+        ///
+        /// Fanned out rather than sent once: there is a key per connection, so a file goes to
+        /// each device as its own stream. That is genuinely N times the bytes, and it is the
+        /// cost of a paired device being unable to read another pair's traffic.
+        /// </summary>
+        public static async Task SendFileAsync(string path)
+        {
+            var files = _files;
+            var mesh = _mesh;
+            if (files == null || mesh == null) return;
+
+            var targets = mesh.ConnectedPeers;
+
+            if (targets.Count == 0)
+            {
+                // Only Bluetooth is up, which cannot carry a file at 6.7 KB/s. Asking the peer
+                // to raise Wi-Fi is the same move an image already makes.
+                if (_bleTransport?.IsConnected == true || _bleCentral?.IsConnected == true)
+                {
+                    Log.Write("Daemon", "Only Bluetooth is up; asking the peer to raise Wi-Fi before sending a file.");
+
+                    if (_bleCentral?.IsConnected == true) await _bleCentral.RequestWiFiAsync().ConfigureAwait(false);
+                    else if (_bleTransport != null) await _bleTransport.RequestWiFiAsync(_bleTransport.Peer?.Fingerprint).ConfigureAwait(false);
+
+                    var deadline = DateTime.UtcNow + WiFiWakeTimeout;
+                    while (DateTime.UtcNow < deadline && mesh.ConnectedCount == 0)
+                    {
+                        await Task.Delay(200).ConfigureAwait(false);
+                    }
+
+                    targets = mesh.ConnectedPeers;
+                }
+            }
+
+            if (targets.Count == 0)
+            {
+                Log.Write("Daemon", $"Nothing was reachable over Wi-Fi, so \"{Path.GetFileName(path)}\" was not sent.");
+                return;
+            }
+
+            foreach (string fingerprint in targets)
+            {
+                var result = await files.SendAsync(fingerprint, path).ConfigureAwait(false);
+
+                if (result == FileSendResult.Sent)
+                {
+                    try
+                    {
+                        _activity.Record(SyncDirection.Sent, SyncItemKind.File,
+                                         new FileInfo(path).Length, Path.GetFileName(path));
+                    }
+                    catch { }
+                }
+                else
+                {
+                    Log.Write("Daemon",
+                        $"\"{Path.GetFileName(path)}\" to {DeviceIdentity.Shorten(fingerprint)}: {result}.");
+                }
+            }
+        }
 
         /// <summary>Shown once, the first time the window is dismissed, so it is a hint and not nagging.</summary>
         public static void NotifyHiddenToTray()
@@ -541,6 +632,77 @@ namespace WinDaemon
             }
         }
 
+        /// <summary>
+        /// Sets up file transfer and decides where a finished file lands.
+        ///
+        /// CoreLib deliberately does not know that Downloads exists, so the move happens here.
+        /// A name that is already taken gets a numeric suffix rather than overwriting - a
+        /// transfer must never quietly replace something the user already had.
+        /// </summary>
+        private static void WireFileTransfer()
+        {
+            _files = new FileTransferService(
+                Path.Combine(LogDirectory, "incoming"),
+                (fingerprint, contentType, body, token) =>
+                    _mesh?.SendToAsync(fingerprint, contentType, body, token) ?? Task.FromResult(false));
+
+            _files.FileReceived += file =>
+            {
+                try
+                {
+                    string destination = UniquePath(DownloadsFolder(), file.Name);
+                    File.Move(file.Path, destination);
+
+                    _activity.Record(SyncDirection.Received, SyncItemKind.File, file.Size, file.Name);
+                    Log.Write("Daemon", $"Saved \"{file.Name}\" to {destination}.");
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Daemon", $"Could not save \"{file.Name}\"", ex);
+                    try { File.Delete(file.Path); } catch { }
+                }
+            };
+
+            _files.FileFailed += (name, reason) =>
+                Log.Write("Daemon", $"\"{name}\" did not arrive: {reason}.");
+        }
+
+        private static string DownloadsFolder()
+        {
+            try
+            {
+                // UserProfile plus Downloads rather than a known folder id, because .NET exposes
+                // no SpecialFolder for Downloads and the shell API is not worth a P/Invoke here.
+                string path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+
+                if (Directory.Exists(path)) return path;
+            }
+            catch { }
+
+            string fallback = Path.Combine(LogDirectory, "received");
+            Directory.CreateDirectory(fallback);
+            return fallback;
+        }
+
+        /// <summary>A path that is not already taken, so nothing is quietly overwritten.</summary>
+        private static string UniquePath(string folder, string name)
+        {
+            string candidate = Path.Combine(folder, name);
+            if (!File.Exists(candidate)) return candidate;
+
+            string stem = Path.GetFileNameWithoutExtension(name);
+            string extension = Path.GetExtension(name);
+
+            for (int attempt = 2; attempt < 1000; attempt++)
+            {
+                candidate = Path.Combine(folder, $"{stem} ({attempt}){extension}");
+                if (!File.Exists(candidate)) return candidate;
+            }
+
+            return Path.Combine(folder, $"{stem} ({Guid.NewGuid():N}){extension}");
+        }
+
         private static void WirePayloadReceive()
         {
             // The mesh decrypts before it raises this, because the session a payload arrived on
@@ -577,6 +739,10 @@ namespace WinDaemon
         private static void Apply(PeerRecord peer, byte contentType, byte[] body, string via)
         {
             string from = peer.Name ?? DeviceIdentity.Shorten(peer.Fingerprint);
+
+            // File frames go straight through: they are not clipboard content, so noting them
+            // as an inbound copy would poison the echo suppressor with bytes nobody copied.
+            if (_files?.Handle(peer.Fingerprint, contentType, body) == true) return;
 
             _echo.NoteInbound(body, contentType == ContentImage ? SyncItemKind.Image : SyncItemKind.Text);
 
@@ -916,6 +1082,7 @@ namespace WinDaemon
             catch { }
             try { _listener?.Dispose(); } catch { }
             try { _dialCts?.Cancel(); _dialCts?.Dispose(); } catch { }
+            try { _files?.Dispose(); } catch { }
             try { _mesh?.Dispose(); } catch { }
             try { _clipboard?.Dispose(); } catch { }
 

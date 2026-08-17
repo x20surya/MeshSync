@@ -33,7 +33,10 @@ namespace AndroidClient.Platforms.Android
     [IntentFilter(
         new[] { Intent.ActionSend },
         Categories = new[] { Intent.CategoryDefault },
-        DataMimeTypes = new[] { "text/plain", "image/*" })]
+        // */* so anything shareable can be sent as a file. Text and images keep their own
+        // entries because they take the clipboard path rather than the file one, and listing
+        // them explicitly is what makes Android rank this target properly for them.
+        DataMimeTypes = new[] { "text/plain", "image/*", "*/*" })]
     public class ShareTargetActivity : Activity
     {
         private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(6);
@@ -69,22 +72,27 @@ namespace AndroidClient.Platforms.Android
                     return;
                 }
 
-                string peer = SyncManager.PeerName ?? "your devices";
+                string peer = SyncManager.MeshName;
 
-                if (await TrySendSharedImageAsync().ConfigureAwait(true))
+                // An image goes on the clipboard, so it can be pasted straight into whatever the
+                // user is doing. Anything else is a file, and belongs in Downloads rather than
+                // on a clipboard that cannot hold it.
+                if (IsImageShare() && await TrySendSharedImageAsync().ConfigureAwait(true))
                 {
                     Notify($"Image sent to {peer}");
                     return;
                 }
 
                 string? text = Intent?.GetStringExtra(Intent.ExtraText);
-                if (!string.IsNullOrWhiteSpace(text))
+                if (!string.IsNullOrWhiteSpace(text) && GetStreamExtra() == null)
                 {
                     await SyncManager.SendClipboardAsync(text!).ConfigureAwait(true);
                     Notify($"Sent to {peer}");
                     Log.Write("Share", $"Sent {text!.Length} characters from the share sheet.");
                     return;
                 }
+
+                if (await TrySendSharedFileAsync(peer).ConfigureAwait(true)) return;
 
                 Notify("Nothing to send");
             }
@@ -135,6 +143,102 @@ namespace AndroidClient.Platforms.Android
                 Log.Write("Share", "Reading the shared image failed", ex);
                 return false;
             }
+        }
+
+        private bool IsImageShare() => Intent?.Type?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true;
+
+        /// <summary>
+        /// Copies whatever was shared into the cache and sends it as a file.
+        ///
+        /// <para>The copy is unavoidable. The sharing app grants read access on the intent and
+        /// nothing else, so there is no path to hand the transfer - only a stream that is valid
+        /// while this activity lives, which is not long enough to send a video over. Copying it
+        /// first means the transfer owns its own bytes and the activity can finish.</para>
+        /// </summary>
+        private async Task<bool> TrySendSharedFileAsync(string peer)
+        {
+            string? staged = null;
+
+            try
+            {
+                var uri = GetStreamExtra();
+                if (uri == null) return false;
+
+                var resolver = ContentResolver;
+                if (resolver == null) return false;
+
+                string name = ResolveName(uri);
+
+                var cache = new Java.IO.File(CacheDir, "outgoing");
+                if (!cache.Exists()) cache.Mkdirs();
+
+                staged = Path.Combine(cache.AbsolutePath!, $"{Guid.NewGuid():N}-{name}");
+
+                using (var input = resolver.OpenInputStream(uri))
+                {
+                    if (input == null) return false;
+
+                    using var output = File.Create(staged);
+                    await input.CopyToAsync(output).ConfigureAwait(true);
+                }
+
+                var staging = new FileInfo(staged);
+                if (staging.Length == 0)
+                {
+                    Log.Write("Share", $"\"{name}\" was empty; nothing to send.");
+                    return false;
+                }
+
+                Notify($"Sending {name}…");
+                Log.Write("Share", $"Sending shared file \"{name}\", {staging.Length} bytes.");
+
+                bool sent = await SyncManager.SendFileAsync(staged).ConfigureAwait(true);
+                Notify(sent ? $"{name} sent to {peer}" : $"Could not send {name}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Share", "Sending the shared file failed", ex);
+                Notify("Could not send that file");
+                return true;
+            }
+            finally
+            {
+                if (staged != null)
+                {
+                    try { File.Delete(staged); } catch { }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Asks the provider what the thing is called.
+        ///
+        /// A content URI carries no filename - the last path segment is usually a row id - so
+        /// the display name has to be queried. Falling back to the segment gives something
+        /// rather than nothing when the provider will not say.
+        /// </summary>
+        private string ResolveName(global::Android.Net.Uri uri)
+        {
+            try
+            {
+                using var cursor = ContentResolver?.Query(uri, null, null, null, null);
+                if (cursor != null && cursor.MoveToFirst())
+                {
+                    int column = cursor.GetColumnIndex(global::Android.Provider.IOpenableColumns.DisplayName);
+                    if (column >= 0)
+                    {
+                        string? name = cursor.GetString(column);
+                        if (!string.IsNullOrWhiteSpace(name)) return name!;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Share", "Could not read the shared file's name", ex);
+            }
+
+            return uri.LastPathSegment ?? "shared-file";
         }
 
         private global::Android.Net.Uri? GetStreamExtra()

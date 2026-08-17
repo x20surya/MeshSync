@@ -423,6 +423,12 @@ namespace WinDaemon
                 FooterHint.Text = "Nothing ever leaves your own devices";
             }
 
+            // Sending a file needs a Wi-Fi link, not merely a Bluetooth one, so the button and
+            // the drop hint appear only when there is somewhere for a file to actually go.
+            var sendable = connected && !overBle ? Visibility.Visible : Visibility.Collapsed;
+            BtnSendFile.Visibility = sendable;
+            DropHint.Visibility = sendable;
+
             SentCount.Text = _activity.SentCount.ToString();
             ReceivedCount.Text = _activity.ReceivedCount.ToString();
         }
@@ -559,6 +565,44 @@ namespace WinDaemon
         private void BtnPrimary_Click(object sender, RoutedEventArgs e)
         {
             NavDevices.IsChecked = true;
+        }
+
+        // ────────────────────────────── sending files
+
+        private void BtnSendFile_Click(object sender, RoutedEventArgs e) => Program.PromptForFileToSend();
+
+        /// <summary>
+        /// Accepts a drag only when it is files and there is somewhere for them to go, so the
+        /// cursor tells the truth rather than promising something that will be dropped.
+        /// </summary>
+        private void Window_DragOver(object sender, System.Windows.DragEventArgs e)
+        {
+            bool usable = ConnectionState.IsConnected && e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop);
+
+            e.Effects = usable ? System.Windows.DragDropEffects.Copy : System.Windows.DragDropEffects.None;
+            e.Handled = true;
+        }
+
+        private void Window_Drop(object sender, System.Windows.DragEventArgs e)
+        {
+            e.Handled = true;
+
+            if (e.Data.GetData(System.Windows.DataFormats.FileDrop) is not string[] paths) return;
+
+            foreach (string path in paths)
+            {
+                // Folders are skipped rather than walked. Sending a directory is a different
+                // feature with its own questions - what about the tree, what about the names -
+                // and pretending otherwise by silently sending the first file inside would be
+                // worse than doing nothing.
+                if (Directory.Exists(path))
+                {
+                    Log.Write("UI", $"Skipping \"{System.IO.Path.GetFileName(path)}\": folders cannot be sent.");
+                    continue;
+                }
+
+                if (File.Exists(path)) _ = Program.SendFileAsync(path);
+            }
         }
 
         private void BtnCopyCode_Click(object sender, RoutedEventArgs e)

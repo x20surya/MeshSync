@@ -6,7 +6,7 @@ namespace CoreLib
 {
     public enum SyncDirection { Sent, Received }
 
-    public enum SyncItemKind { Text, Image }
+    public enum SyncItemKind { Text, Image, File }
 
     public sealed class SyncActivityEntry
     {
@@ -16,7 +16,11 @@ namespace CoreLib
         /// <summary>Short, single-line preview for text items. Empty for images.</summary>
         public string Preview { get; init; } = string.Empty;
 
-        public int SizeBytes { get; init; }
+        /// <summary>
+        /// Long rather than int since files joined the clipboard here. A clipboard item cannot
+        /// reach two gigabytes; a video can, and an overflowed size would report a negative one.
+        /// </summary>
+        public long SizeBytes { get; init; }
         public DateTime AtUtc { get; init; } = DateTime.UtcNow;
 
         /// <summary>"2s", "4m", "3h" - compact enough for a dashboard row.</summary>
@@ -38,12 +42,20 @@ namespace CoreLib
         {
             < 1024 => $"{SizeBytes} B",
             < 1024 * 1024 => $"{SizeBytes / 1024.0:F1} KB",
-            _ => $"{SizeBytes / (1024.0 * 1024.0):F1} MB"
+            < 1024 * 1024 * 1024 => $"{SizeBytes / (1024.0 * 1024.0):F1} MB",
+            _ => $"{SizeBytes / (1024.0 * 1024.0 * 1024.0):F1} GB"
         };
 
-        public string Title => Kind == SyncItemKind.Image
-            ? (Direction == SyncDirection.Sent ? "Image sent" : "Image received")
-            : Preview;
+        /// <summary>
+        /// What the row says. A file carries its own name in <see cref="Preview"/>, which is far
+        /// more use than "File received" - it is the thing the user goes looking for.
+        /// </summary>
+        public string Title => Kind switch
+        {
+            SyncItemKind.Image => Direction == SyncDirection.Sent ? "Image sent" : "Image received",
+            SyncItemKind.File => Preview.Length > 0 ? Preview : (Direction == SyncDirection.Sent ? "File sent" : "File received"),
+            _ => Preview
+        };
     }
 
     /// <summary>
@@ -73,14 +85,21 @@ namespace CoreLib
             get { lock (_gate) return _entries.First?.Value.AtUtc; }
         }
 
-        public void Record(SyncDirection direction, SyncItemKind kind, int sizeBytes, string? textContent = null)
+        public void Record(SyncDirection direction, SyncItemKind kind, long sizeBytes, string? textContent = null)
         {
             var entry = new SyncActivityEntry
             {
                 Direction = direction,
                 Kind = kind,
                 SizeBytes = sizeBytes,
-                Preview = kind == SyncItemKind.Text ? MakePreview(textContent) : string.Empty,
+                // A file's name is worth showing as-is: it is what the user goes looking for.
+                // Text is trimmed to a preview; an image has nothing to say.
+                Preview = kind switch
+                {
+                    SyncItemKind.Text => MakePreview(textContent),
+                    SyncItemKind.File => MakePreview(textContent),
+                    _ => string.Empty
+                },
                 AtUtc = DateTime.UtcNow
             };
 

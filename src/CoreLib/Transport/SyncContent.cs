@@ -29,5 +29,25 @@ namespace CoreLib.Transport
         /// it becomes an invitation to redirect the next connection.</para>
         /// </summary>
         public const byte Address = 0x02;
+
+        /// <summary>
+        /// "I have a file for you": an id, a name, a size and a SHA-256.
+        ///
+        /// <para>A file cannot be one payload the way a clipboard image is. The frame ceiling is
+        /// 32 MB, and even under it, holding a whole video in memory on both ends to encrypt and
+        /// decrypt it is not something to do to a phone. So the transfer is an offer, a decision,
+        /// and a stream of chunks written straight to disk as they land.</para>
+        ///
+        /// <para>The hash is in the offer rather than at the end so the receiver knows what it is
+        /// checking for before it starts, and a truncated transfer is a failure rather than a
+        /// file that looks fine and is not.</para>
+        /// </summary>
+        public const byte FileOffer = 0x03;
+
+        /// <summary>Whether the receiver wants it. A refusal is a normal answer, not an error.</summary>
+        public const byte FileAck = 0x04;
+
+        /// <summary>One piece of a file: the id, the offset it belongs at, and the bytes.</summary>
+        public const byte FileChunk = 0x05;
     }
 }

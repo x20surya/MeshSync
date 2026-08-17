@@ -11,6 +11,9 @@
         TextOptions.TextFormattingMode="Ideal"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
+        AllowDrop="True"
+        DragOver="Window_DragOver"
+        Drop="Window_Drop"
         WindowStyle="None"
         ResizeMode="CanResize">
 
@@ -216,13 +219,27 @@
                                        Margin="0,7,0,0"
                                        Text="Open Mesh Sync on another device and scan the pairing code." />
 
-                            <Button x:Name="BtnPrimary" Style="{StaticResource S.BtnPrimary}"
-                                    Content="Pair a device" HorizontalAlignment="Center"
-                                    MinWidth="168" Margin="0,20,0,0" Click="BtnPrimary_Click" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+                                <Button x:Name="BtnPrimary" Style="{StaticResource S.BtnPrimary}"
+                                        Content="Pair a device"
+                                        MinWidth="168" Click="BtnPrimary_Click" />
+
+                                <Button x:Name="BtnSendFile" Style="{StaticResource S.BtnQuiet}"
+                                        Content="Send a file" Padding="18,9" Margin="10,0,0,0"
+                                        Visibility="Collapsed" Click="BtnSendFile_Click" />
+                            </StackPanel>
 
                             <TextBlock x:Name="StatusSub" Style="{StaticResource T.Base}" FontSize="12"
                                        Foreground="{DynamicResource B.TextFaint}"
                                        HorizontalAlignment="Center" Margin="0,12,0,0" Text="" />
+
+                            <!-- Says the window is a drop target, because nothing else would.
+                                 Only shown when there is somewhere for a file to go. -->
+                            <TextBlock x:Name="DropHint" Style="{StaticResource T.Base}" FontSize="11.5"
+                                       Foreground="{DynamicResource B.TextFaint}"
+                                       HorizontalAlignment="Center" Margin="0,16,0,0"
+                                       Visibility="Collapsed"
+                                       Text="or drop a file anywhere on this window" />
 
                             <!-- Transport mode, in the spirit of the reference's Mode control -->
                             <TextBlock Text="CONNECTION" Style="{StaticResource T.SectionLabel}" Margin="2,30,0,8" />
