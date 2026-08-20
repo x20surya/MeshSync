@@ -30,6 +30,22 @@ There is no bug bounty and no formal disclosure process.
 - **Storage.** The private key is wrapped before it reaches the disk: DPAPI at `CurrentUser` scope
   on Windows, an AES key held in the Android Keystore on Android.
 
+## What it deliberately does not ask for
+
+**No accessibility service.** Reading the clipboard in the background is only possible on Android
+through one, and Mesh Sync does not use one. That decision costs a real feature - copies made on
+the phone do not sync on their own - and it is made anyway, for two reasons.
+
+The first is that UPI and banking apps refuse to run while any accessibility service is enabled.
+They are right to: it is the route screen-reading fraud takes, and it can read every text field in
+every app on the device. An app that silently makes your phone unable to take payments has taken
+more than it gave.
+
+The second is that this is the permission a reader should be most suspicious of, and the honest
+answer to "why does a clipboard app want to read my screen" is that it should not have to.
+Sending from the phone is one tap through the Quick Settings tile, the selection menu or the share
+sheet, and everything arriving *at* the phone is unaffected.
+
 ## What it protects against
 
 - **Reading your clipboard off the wire.** Both tiers carry the same encrypted payload. Bluetooth

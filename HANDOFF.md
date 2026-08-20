@@ -39,8 +39,11 @@ intact, and the next run read it back without rewriting.
 
 The rest is tested over loopback and against its own protocols, which is real coverage and is not
 the same as a radio. **The first thing to do with a phone attached is a clean pair**, because the
-application id changed and Android will treat this as a different app: the accessibility grant and
-the existing pairing are both gone.
+application id changed and Android will treat this as a different app.
+
+There is no accessibility grant to restore any more - that service is gone. What needs checking on
+a device instead is that the foreground service comes up on its own after a reboot, and that the
+Quick Settings tile appears and sends.
 
 ---
 
@@ -168,11 +171,29 @@ Both are qualified where they appear.
 Referencing the package explicitly produces `NU1510` rather than working quietly, which costs the
 zero-warning bar.
 
-**Play Store is closed to this app, and it is the accessibility service that closes it.**
-Google's accessibility policy is about serving users with disabilities, and a service configured
-with `canRetrieveWindowContent` reading `typeViewTextChanged` is the exact pattern it targets.
-It is also the only reason background clipboard capture works at all on Android 10 and above, so
-there is nothing to trim - removing it removes the product.
+**The accessibility service made the phone refuse to take payments.**
+UPI and banking apps in India - BHIM among them - detect any enabled accessibility service and
+block until it is turned off, because that is the route screen-reading fraud takes.
+So the app was not merely asking for a frightening permission, it was actively breaking something
+the owner needs far more than clipboard sync.
+It has been removed, and sending from the phone is user-initiated now.
+
+**It was also hosting three things that had nothing to do with it.**
+The screenshot observer, the network watcher and the screen watcher all lived in the accessibility
+service, and none of them needed accessibility.
+Declining that one permission silently cost screenshot sync, reconnect-on-network-change and the
+screen-following Wi-Fi logic as well.
+They belong to the foreground service now.
+
+**And it was quietly the boot-persistence mechanism.**
+Android rebinds an enabled accessibility service on boot, and that service started everything
+else, so nothing ever needed a `BOOT_COMPLETED` receiver.
+Removing it would have shown up as a phone that stopped syncing after a restart until the app was
+opened by hand - and would have looked like a transport bug rather than a missing receiver.
+
+**Play Store is no longer closed, which was not the reason for any of this.**
+The accessibility service was the single blocker, and it is gone.
+Worth revisiting whether that changes the distribution decision, which was made because of it.
 
 **iOS can never be a peer**, for two separate reasons.
 Background pasteboard reads have returned nil since iOS 9, and a backgrounded app's advertised
@@ -333,8 +354,9 @@ compile error rather than the hint that the flag was unnecessary.
 notification is posted before anything else that can fail.
 
 **Starting a foreground service from the background is refused on Android 12+.**
-An accessibility service coming up after a reboot is exactly that case, so the start is also
-attempted from the activity and from a clipboard change, and a refusal is logged rather than thrown.
+Receiving `BOOT_COMPLETED` is one of the exemptions, which is what makes the boot receiver the
+right place to do it. It is also started from the activity, and a refusal is logged rather than
+thrown - the app still works when the user next opens it.
 
 **Stopping a foreground service is what removes its notification.**
 Cancelling the notification directly does nothing while the service is up.
@@ -378,10 +400,10 @@ It belongs to `PeerSecurity` now, which is better design and fixed the tests as 
 **An incremental build does not re-report warnings.**
 Use `-t:Rebuild` when you need to be sure of the zero-warning bar.
 
-**`adb install -r` usually preserves the accessibility grant. `pm clear` never does.**
+**`adb install -r` preserves the identity and the paired devices. `pm clear` wipes both.**
 
 ```powershell
-adb shell settings get secure enabled_accessibility_services
+adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
 ```
 
 **Kill the daemon before building**, or the build fails with `MSB3021` on a locked `CoreLib.dll`.
@@ -457,8 +479,9 @@ src/CoreLib/
 src/WinDaemon/        WPF window with sidebar and device list, GATT server and client,
                       clipboard worker, tray
 src/AndroidClient/    MAUI app with a navigation drawer: Home, Activity, Devices, Settings,
-                      About, plus the setup wizard. Accessibility service, foreground service,
-                      screen watcher, GATT client and server, PROCESS_TEXT and share targets
+                      About, plus the setup wizard. Foreground service hosting the screenshot,
+                      network and screen watchers; boot receiver; notification listener; ringer;
+                      GATT client and server; Quick Settings tile, PROCESS_TEXT and share targets
 src/assets/           brand handoff: SVG, PNG, style sheet
 tests/CoreLib.Tests/  205 tests: crypto, key agreement, identity, key storage, the registry,
                       and mesh links over real loopback sockets

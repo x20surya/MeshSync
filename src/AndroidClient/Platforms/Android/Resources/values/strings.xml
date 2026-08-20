@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_service_description">Universal Clipboard requires Accessibility permission to securely capture text copied to your clipboard in the background.</string>
+    <!-- Empty on purpose. This held the accessibility service's description until that service
+         was removed: it made the phone refuse to run UPI and banking apps, which treat any
+         enabled accessibility service as a fraud risk. Kept as a file because the values folder
+         is referenced by the build. -->
 </resources>

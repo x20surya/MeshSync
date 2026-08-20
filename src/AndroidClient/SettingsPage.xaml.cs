@@ -42,12 +42,6 @@ public partial class SettingsPage : ContentPage
             ? "Turned off - nothing is being synced"
             : "Copy on any device and it appears on the others";
 
-        bool clipboard = IsClipboardServiceOn();
-        ClipboardState.Text = clipboard
-            ? "On - copies on this phone are picked up"
-            : "Off - copying here will not sync until you switch it on";
-        ClipboardButton.Text = clipboard ? "Settings" : "Turn on";
-
         bool advertise = CanAdvertise();
         BluetoothState.Text = advertise
             ? "Granted - this phone can be found without any network"
@@ -227,36 +221,9 @@ public partial class SettingsPage : ContentPage
         Render();
     }
 
-    private void OnClipboardClicked(object? sender, EventArgs e)
-    {
-        if (IsClipboardServiceOn()) OpenAppSettings();
-        else OpenAccessibilitySettings();
-    }
-
     private void OnAppSettingsClicked(object? sender, EventArgs e) => OpenAppSettings();
 
     // ──────────────────────────────────── platform hops
-
-    private static bool IsClipboardServiceOn()
-    {
-#if ANDROID
-        try
-        {
-            string? enabled = global::Android.Provider.Settings.Secure.GetString(
-                global::Android.App.Application.Context.ContentResolver,
-                global::Android.Provider.Settings.Secure.EnabledAccessibilityServices);
-
-            return enabled != null &&
-                   enabled.Contains("ClipboardAccessibilityService", StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
-#else
-        return true;
-#endif
-    }
 
     /// <summary>
     /// Whether this phone may advertise, which is what decides if it can ever be the peripheral.
@@ -282,23 +249,6 @@ public partial class SettingsPage : ContentPage
         }
 #else
         return false;
-#endif
-    }
-
-    private static void OpenAccessibilitySettings()
-    {
-#if ANDROID
-        try
-        {
-            var intent = new global::Android.Content.Intent(
-                global::Android.Provider.Settings.ActionAccessibilitySettings);
-            intent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
-            global::Android.App.Application.Context.StartActivity(intent);
-        }
-        catch (Exception ex)
-        {
-            Log.Write("Settings", "Could not open accessibility settings", ex);
-        }
 #endif
     }
 

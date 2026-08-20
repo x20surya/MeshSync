@@ -44,7 +44,7 @@ already open, and its peer raises Wi-Fi in response.
 
 | | |
 |---|---|
-| **Clipboard** | Copy text or an image anywhere, paste it anywhere else |
+| **Clipboard** | Copy on the desktop and paste on the phone with nothing to do. The other way takes one tap - [see below](#sending-from-the-phone) |
 | **Files** | Send a file from the share sheet, the tray, or by dropping it on the window |
 | **Find my device** | Make a device sound an alarm, through silent mode, with no network |
 | **Notifications** | Mirror the apps you choose from your phone, and dismiss them from either end |
@@ -60,9 +60,7 @@ getting in by connecting first.
 
 ## Installing
 
-There is no store release. Android builds here need the accessibility service to read the
-clipboard in the background, which Google Play's accessibility policy does not permit, so the app
-is distributed as a signed APK instead.
+There is no store release yet. The app is built from source or installed as a signed APK.
 
 ### Windows
 
@@ -83,8 +81,22 @@ dotnet build src/AndroidClient/AndroidClient.csproj -t:SignAndroidPackage -f net
 adb install -r src/AndroidClient/bin/Debug/net10.0-android/dev.meshsync.app-Signed.apk
 ```
 
-Then grant the accessibility service in Settings. Without it, Android will not let any app read
-the clipboard in the background and only the share sheet and text-selection entry points work.
+### Sending from the phone
+
+Android only lets an app read the clipboard while that app is in front, so sending from the phone
+is something you do rather than something that happens:
+
+- **Quick Settings tile** - add "Send clipboard" to your shade, then it is one tap from anywhere.
+- **Select text** - highlight anything and pick "Send to my devices" from the menu.
+- **Share** - share to Mesh Sync from any app, which also covers files and images.
+- **Screenshots** go automatically, with no tap at all.
+
+Receiving is never restricted, so anything sent *to* the phone arrives on its own.
+
+Mesh Sync deliberately does **not** use an accessibility service to work around this. That is the
+only way to read the clipboard in the background, and UPI and banking apps refuse to run while any
+accessibility service is enabled - they treat it as a fraud risk, correctly, because it is the
+route screen-reading fraud takes. A clipboard tool is not worth breaking payments for.
 
 ## Privacy
 
@@ -108,9 +120,9 @@ it does not.
 - **`src/WinDaemon`** - WPF window with a sidebar and a tray icon.
   Win32 clipboard listener, TCP listener and dialler, Bluetooth GATT server and client.
 - **`src/AndroidClient`** - .NET MAUI app with a navigation drawer.
-  Accessibility service for the clipboard, MediaStore observer for screenshots, a
-  `connectedDevice` foreground service, TCP listener and dialler, Bluetooth GATT client and
-  server, and `PROCESS_TEXT` and share targets.
+  A `connectedDevice` foreground service holding the links and the screenshot, network and
+  screen watchers; a boot receiver; a notification listener; TCP listener and dialler; Bluetooth
+  GATT client and server; and the Quick Settings tile, `PROCESS_TEXT` and share targets.
 - **`src/assets`** - brand handoff: the mark, the palette and the illustrations.
 - **`tests/CoreLib.Tests`** - transport tests over real loopback sockets, key agreement, wire
   formats, Bluetooth role rules and the peer registry.

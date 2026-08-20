@@ -42,6 +42,19 @@ namespace AndroidClient.Platforms.Android
 
         public static bool IsRunning => _running;
 
+        // ── what this service watches ───────────────────────────────────────────────────
+        //
+        // All three used to live in the accessibility service, which was the wrong host for
+        // any of them: none needs accessibility, and hanging them there meant refusing that
+        // permission silently cost screenshot sync, reconnect-on-network-change and the
+        // screen-following Wi-Fi logic as well as the thing it was actually about.
+        //
+        // They belong here, in the service that already holds the links for the same lifetime.
+
+        private ScreenshotObserver? _screenshotObserver;
+        private NetworkWatcher? _networkWatcher;
+        private ScreenStateWatcher? _screenWatcher;
+
         /// <summary>
         /// Starts the service, tolerating a refusal.
         ///
@@ -92,6 +105,12 @@ namespace AndroidClient.Platforms.Android
                 if (!EnterForeground()) return StartCommandResult.NotSticky;
 
                 _running = true;
+
+                // Diagnostics need a sink before anything can report a failure. The
+                // accessibility service used to install it; on a boot start nothing else has.
+                Log.Sink ??= line => global::Android.Util.Log.Info("MeshSync", line);
+
+                StartWatchers();
 
                 SyncManager.OnConnectionStatusChanged -= OnStatusChanged;
                 SyncManager.OnConnectionStatusChanged += OnStatusChanged;
@@ -149,9 +168,66 @@ namespace AndroidClient.Platforms.Android
             }
         }
 
+        /// <summary>
+        /// Starts the three things that watch the phone rather than the links.
+        ///
+        /// Each is best-effort and independent: a screenshot observer that will not register
+        /// must not stop the screen watcher, because losing the screen watcher would leave Wi-Fi
+        /// held open all night, which is the drain standby exists to avoid.
+        /// </summary>
+        private void StartWatchers()
+        {
+            try
+            {
+                // Intercepts screenshots without touching the clipboard, which is what lets them
+                // sync without the user copying anything.
+                _screenshotObserver = new ScreenshotObserver(this, new Handler(Looper.MainLooper!));
+                ContentResolver?.RegisterContentObserver(
+                    global::Android.Provider.MediaStore.Images.Media.ExternalContentUri!,
+                    true,
+                    _screenshotObserver);
+                Log.Write("Service", "Screenshot observer registered.");
+            }
+            catch (Exception ex) { Log.Write("Service", "Could not register the screenshot observer", ex); }
+
+            try
+            {
+                _networkWatcher = new NetworkWatcher(this);
+                _networkWatcher.Start();
+            }
+            catch (Exception ex) { Log.Write("Service", "Could not watch the network", ex); }
+
+            try
+            {
+                // Decides whether the Wi-Fi link is held open, now that Bluetooth is the
+                // standing link rather than the fallback.
+                _screenWatcher = new ScreenStateWatcher(this);
+                _screenWatcher.Start();
+            }
+            catch (Exception ex) { Log.Write("Service", "Could not watch the screen state", ex); }
+        }
+
+        private void StopWatchers()
+        {
+            try
+            {
+                if (_screenshotObserver != null) ContentResolver?.UnregisterContentObserver(_screenshotObserver);
+            }
+            catch (Exception ex) { Log.Write("Service", "Unregistering the screenshot observer failed", ex); }
+            _screenshotObserver = null;
+
+            try { _networkWatcher?.Stop(); } catch (Exception ex) { Log.Write("Service", "Stopping the network watcher failed", ex); }
+            _networkWatcher = null;
+
+            try { _screenWatcher?.Stop(); } catch (Exception ex) { Log.Write("Service", "Stopping the screen watcher failed", ex); }
+            _screenWatcher = null;
+        }
+
         public override void OnDestroy()
         {
             _running = false;
+
+            StopWatchers();
 
             SyncManager.OnConnectionStatusChanged -= OnStatusChanged;
             SyncManager.Activity.Changed -= OnActivityChanged;

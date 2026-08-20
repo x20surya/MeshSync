@@ -13,9 +13,12 @@ namespace AndroidClient.Platforms.Android
     /// <summary>
     /// Mirrors this phone's notifications to the rest of the mesh.
     ///
-    /// <para><b>Its own permission, and a normal one.</b> Unlike the accessibility service this
-    /// app also uses, <c>BIND_NOTIFICATION_LISTENER_SERVICE</c> is a permission Android intends
-    /// applications to ask for. The user grants it in Settings and can revoke it there.</para>
+    /// <para><b>A normal permission, and the only sensitive one left.</b>
+    /// <c>BIND_NOTIFICATION_LISTENER_SERVICE</c> is a permission Android intends applications to
+    /// ask for: the user grants it in Settings and can revoke it there. Unlike the accessibility
+    /// service this app used to carry, nothing else on the phone treats it as a fraud risk - UPI
+    /// and banking apps refuse to run alongside an accessibility service and do not care about
+    /// this one.</para>
     ///
     /// <para><b>Off until asked, and then per application.</b> Nothing is mirrored by default and
     /// nothing is mirrored wholesale. Mirroring everything is unusable within a day - the second

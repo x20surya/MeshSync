@@ -127,11 +127,21 @@ none of its own, which is what stops two devices that disagree overwriting each 
 - **Windows**: a message-only window receives `WM_CLIPBOARDUPDATE`.
   All clipboard access happens on one dedicated STA thread, never on the message pump, because
   those calls block for seconds whenever another process holds the clipboard lock.
-- **Android**: an accessibility service watches clipboard text.
-  A `ContentObserver` on MediaStore intercepts screenshots without touching the clipboard.
-  A `connectedDevice` foreground service holds the links, which is what lets them survive Doze.
+- **Android**: nothing watches the clipboard, and nothing can.
+  Android only lets an app read it while that app is in front, and the accessibility service that
+  used to work around this has been removed - UPI and banking apps refuse to run at all while any
+  accessibility service is enabled, because that is the route screen-reading fraud takes.
+  A clipboard tool that stops you paying for things is not one worth having.
+- So **sending from the phone is user-initiated**, through three routes that each get focus in
+  their own way: a Quick Settings tile, the `PROCESS_TEXT` selection menu, and the share sheet.
+  Receiving is unaffected - writing to the clipboard has never been restricted.
+- A `ContentObserver` on MediaStore intercepts screenshots without touching the clipboard, so
+  those still send with no interaction at all.
+- A `connectedDevice` foreground service holds the links, which is what lets them survive Doze,
+  and now also hosts the screenshot, network and screen watchers.
+  A `BOOT_COMPLETED` receiver starts it after a restart - the accessibility service used to be
+  what did that, since Android rebinds an enabled one on boot.
 - Images are downscaled and re-encoded as JPEG before transmission.
-- `PROCESS_TEXT` and a share target are two further entry points that avoid the clipboard entirely.
 
 ### 8. What the tiers carry, and why the split falls where it does
 
@@ -245,9 +255,12 @@ made a phone shriek from across the street.
   `WinExe` with no console attached, so anything written there is discarded.
 - Kill `WinDaemon` before building or the build fails on a locked `CoreLib.dll`. It relaunches on
   its own because run-on-startup is enabled.
-- Never use `adb shell pm clear` on the Android client. It revokes the accessibility grant, which
-  only the user can restore by hand, and every reading taken before they do is meaningless. Use
-  `adb install -r` instead, and check the grant survived.
+- **Never reintroduce an accessibility service.** It is the only way to read the clipboard in the
+  background and it is not worth it: UPI and banking apps in India refuse to run while one is
+  enabled, so the app would make the phone worse at something the owner needs far more than
+  clipboard sync. Sending is user-initiated on Android and that is a deliberate ceiling.
+- `adb shell pm clear` still wipes the identity and the paired devices, which costs a re-pair.
+  Use `adb install -r`, which keeps them.
 - If editing the Android project, remember that it targets `net10.0-android` and requires
   `<EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>` for debug builds deployed via CLI.
 - **Declaring an Android permission is not requesting it.** The Bluetooth permissions are runtime

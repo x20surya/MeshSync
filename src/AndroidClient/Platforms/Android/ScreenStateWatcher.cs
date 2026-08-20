@@ -18,7 +18,7 @@ namespace AndroidClient.Platforms.Android
     ///
     /// <para><c>ACTION_SCREEN_ON</c> and <c>ACTION_SCREEN_OFF</c> cannot be declared in the
     /// manifest - Android only delivers them to receivers registered at runtime - so this is
-    /// owned by the accessibility service, which is the longest-lived component there is.</para>
+    /// owned by the foreground service, which is the longest-lived component there is.</para>
     ///
     /// <para>Deliberately carries no <c>[BroadcastReceiver]</c> attribute. That attribute exists
     /// to write a <c>&lt;receiver&gt;</c> element into the manifest, which would require a public

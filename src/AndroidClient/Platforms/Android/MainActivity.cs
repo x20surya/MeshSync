@@ -21,10 +21,9 @@ public class MainActivity : MauiAppCompatActivity
 
         HandleIntent(Intent);
 
-        // Started from here as well as from the accessibility service, because this is the one
-        // moment Android is certain to allow it: starting a foreground service from the
-        // background is refused on Android 12 and above, and an accessibility service coming up
-        // after a reboot is exactly that case.
+        // Started from here as well as from the boot receiver, because this is the one moment
+        // Android is certain to allow it: starting a foreground service from the background is
+        // refused on Android 12 and above, and opening the app is unambiguously the foreground.
         Platforms.Android.SyncForegroundService.Start(this);
 
         // Always attempt auto-connect when the app is opened

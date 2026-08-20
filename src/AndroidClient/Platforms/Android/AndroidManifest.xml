@@ -50,4 +50,11 @@
 	     BLUETOOTH_CONNECT above. -->
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+	<!-- The accessibility service used to be what came back after a restart, because Android
+	     rebinds an enabled one on boot. Removing it removed boot persistence with it, so this
+	     is what brings the links back now. Receiving BOOT_COMPLETED is also one of the
+	     exemptions from the Android 12 ban on starting a foreground service from the
+	     background, which is what makes it the right place to do it. -->
+	<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 </manifest>

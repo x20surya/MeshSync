@@ -9,7 +9,7 @@ namespace AndroidClient;
 public partial class SetupPage : ContentPage
 {
     private const int StepPair = 0;
-    private const int StepClipboard = 1;
+    private const int StepSending = 1;
     private const int StepScreenshots = 2;
 
     private int _step = StepPair;
@@ -53,27 +53,56 @@ public partial class SetupPage : ContentPage
 
     private static bool IsPaired => SyncManager.IsPaired;
 
-    private static bool IsClipboardServiceOn()
+    /// <summary>
+    /// Asks Android to offer the "Send clipboard" tile.
+    ///
+    /// <para>Android 13 added a prompt for this, which is far better than telling someone to
+    /// open the shade, find the edit button and go hunting. Below that there is no API, so the
+    /// step just explains where to find it.</para>
+    ///
+    /// <para>This matters more than it would have done: with no accessibility service watching
+    /// the clipboard, the tile is the closest thing left to sending without thinking about it.
+    /// </para>
+    /// </summary>
+    private static void OfferQuickSettingsTile()
     {
 #if ANDROID
         try
         {
-            string? enabled = global::Android.Provider.Settings.Secure.GetString(
-                global::Android.App.Application.Context.ContentResolver,
-                global::Android.Provider.Settings.Secure.EnabledAccessibilityServices);
+            if (!OperatingSystem.IsAndroidVersionAtLeast(33)) return;
 
-            return enabled != null &&
-                   enabled.Contains("ClipboardAccessibilityService", StringComparison.OrdinalIgnoreCase);
+            var context = global::Android.App.Application.Context;
+            var statusBar = (global::Android.App.StatusBarManager?)
+                context.GetSystemService("statusbar");
+
+            statusBar?.RequestAddTileService(
+                new global::Android.Content.ComponentName(
+                    context, Java.Lang.Class.FromType(typeof(Platforms.Android.SendClipboardTileService))),
+                "Send clipboard",
+                global::Android.Graphics.Drawables.Icon.CreateWithResource(
+                    context, global::Android.Resource.Drawable.IcMenuShare),
+                Java.Util.Concurrent.Executors.NewSingleThreadExecutor()!,
+                new TileRequestCallback());
         }
         catch (Exception ex)
         {
-            Log.Write("Setup", "Could not read accessibility settings", ex);
-            return false;
+            Log.Write("Setup", "Could not offer the Quick Settings tile", ex);
         }
-#else
-        return false;
 #endif
     }
+
+#if ANDROID
+    /// <summary>
+    /// Android insists on a callback. Nothing useful can be done with the answer - the user
+    /// either added it or did not - so this exists to satisfy the signature and say what
+    /// happened in the log.
+    /// </summary>
+    private sealed class TileRequestCallback : Java.Lang.Object, Java.Util.Functions.IConsumer
+    {
+        public void Accept(Java.Lang.Object? result) =>
+            Log.Write("Setup", $"Quick Settings tile request returned {result}.");
+    }
+#endif
 
     private static async Task<bool> HasPhotoAccessAsync()
     {
@@ -98,12 +127,7 @@ public partial class SetupPage : ContentPage
 
     private void Render()
     {
-        bool done = _step switch
-        {
-            StepPair => IsPaired,
-            StepClipboard => IsClipboardServiceOn(),
-            _ => false
-        };
+        bool done = _step == StepPair && IsPaired;
 
         var accent = (Color)(Application.Current!.Resources.TryGetValue(
             Application.Current.RequestedTheme == AppTheme.Dark ? "AccentDark" : "AccentLight", out var a)
@@ -114,13 +138,13 @@ public partial class SetupPage : ContentPage
             ? i : Colors.LightGray);
 
         Bar1.Color = _step >= StepPair ? accent : idle;
-        Bar2.Color = _step >= StepClipboard ? accent : idle;
+        Bar2.Color = _step >= StepSending ? accent : idle;
         Bar3.Color = _step >= StepScreenshots ? accent : idle;
 
         StepCounter.Text = $"Step {_step + 1} of 3";
 
         IconPair.IsVisible = _step == StepPair;
-        IconClipboard.IsVisible = _step == StepClipboard;
+        IconClipboard.IsVisible = _step == StepSending;
         IconImage.IsVisible = _step == StepScreenshots;
 
         ManualPanel.IsVisible = _step == StepPair && _manualVisible;
@@ -138,16 +162,16 @@ public partial class SetupPage : ContentPage
                 SecondaryButton.IsVisible = !IsPaired;
                 break;
 
-            case StepClipboard:
-                bool on = IsClipboardServiceOn();
-                StepTitle.Text = on ? "Clipboard access is on" : "Let it see your clipboard";
-                StepBody.Text = on
-                    ? "Mesh Sync will now notice whenever you copy something."
-                    : "Android needs you to switch on the Mesh Sync accessibility service so the app can tell when you copy something.";
-                StepNote.Text = "Each pair of devices has its own key, so a copy is encrypted for the device it is going to. Nothing is stored.";
-                PrimaryButton.Text = on ? "Continue" : "Open Android settings";
-                SecondaryButton.Text = "Skip for now";
-                SecondaryButton.IsVisible = !on;
+            case StepSending:
+                StepTitle.Text = "Sending from this phone";
+                StepBody.Text = "Anything from your other devices arrives here on its own. " +
+                                "To send from this phone: tap the Send clipboard tile in your quick settings, " +
+                                "highlight text and choose Send to my devices, or share to Mesh Sync from any app.";
+                StepNote.Text = "Android does not let apps read the clipboard in the background, and the workaround for that " +
+                                "stops banking and UPI apps working - so sending is one tap rather than none.";
+                PrimaryButton.Text = "Add the tile";
+                SecondaryButton.Text = "Skip";
+                SecondaryButton.IsVisible = true;
                 break;
 
             case StepScreenshots:
@@ -178,15 +202,14 @@ public partial class SetupPage : ContentPage
                 OpenCamera();
                 break;
 
-            case StepClipboard when IsClipboardServiceOn():
-                // The ongoing notification is the app's main surface once it is backgrounded,
-                // and it carries the "Sync Clipboard" action, so ask here where it makes sense.
+            case StepSending:
+                // The tile is the nearest thing left to sending without thinking about it, so
+                // offering it here is the difference between the user having it and never
+                // finding it. The ongoing notification carries a Sync action too, which is why
+                // notification access is asked for in the same breath.
+                OfferQuickSettingsTile();
                 await RequestNotificationAccessAsync();
                 Advance();
-                break;
-
-            case StepClipboard:
-                OpenAccessibilitySettings();
                 break;
 
             case StepScreenshots:
@@ -205,7 +228,7 @@ public partial class SetupPage : ContentPage
                 Render();
                 break;
 
-            case StepClipboard:
+            case StepSending:
                 Advance();
                 break;
 
@@ -311,22 +334,6 @@ public partial class SetupPage : ContentPage
 #endif
     }
 
-    private static void OpenAccessibilitySettings()
-    {
-#if ANDROID
-        try
-        {
-            var intent = new global::Android.Content.Intent(
-                global::Android.Provider.Settings.ActionAccessibilitySettings);
-            intent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
-            global::Android.App.Application.Context.StartActivity(intent);
-        }
-        catch (Exception ex)
-        {
-            Log.Write("Setup", "Could not open accessibility settings", ex);
-        }
-#endif
-    }
 
     /// <summary>
     /// Android 13+ will not show any notification without this, which silently disabled the

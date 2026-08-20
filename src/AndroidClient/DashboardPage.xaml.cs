@@ -6,11 +6,8 @@ namespace AndroidClient;
 
 public partial class DashboardPage : ContentPage
 {
-    private enum WarningKind { None, Accessibility, Notifications }
-
     private readonly ObservableCollection<ActivityRow> _rows = new();
     private IDispatcherTimer? _refresh;
-    private WarningKind _warning = WarningKind.None;
 
     public DashboardPage()
     {
@@ -115,31 +112,26 @@ public partial class DashboardPage : ContentPage
         RenderWarning();
     }
 
-    /// <summary>Highest-severity unmet requirement wins, so the user is given one clear next step.</summary>
+    /// <summary>
+    /// The one thing left worth warning about.
+    ///
+    /// There used to be a warning above this one about clipboard access being off, because the
+    /// app watched the clipboard through an accessibility service. Nothing watches it now, so
+    /// there is nothing to warn about - sending from this phone is something the user does
+    /// rather than something that fails quietly.
+    /// </summary>
     private void RenderWarning()
     {
-        if (!IsClipboardServiceOn())
-        {
-            _warning = WarningKind.Accessibility;
-            WarningTitle.Text = "Clipboard access is off";
-            WarningBody.Text = "Copying on this phone will not sync until you switch it on.";
-            WarningAction.Text = "Fix";
-            WarningCard.IsVisible = true;
-            return;
-        }
+        bool missing = !AreNotificationsEnabled();
 
-        if (!AreNotificationsEnabled())
+        if (missing)
         {
-            _warning = WarningKind.Notifications;
             WarningTitle.Text = "Notifications are off";
             WarningBody.Text = "Turn them on to see sync status and the quick Sync button.";
             WarningAction.Text = "Fix";
-            WarningCard.IsVisible = true;
-            return;
         }
 
-        _warning = WarningKind.None;
-        WarningCard.IsVisible = false;
+        WarningCard.IsVisible = missing;
     }
 
     private static bool AreNotificationsEnabled()
@@ -154,27 +146,6 @@ public partial class DashboardPage : ContentPage
         catch
         {
             return true; // never nag on the strength of a failed check
-        }
-#else
-        return true;
-#endif
-    }
-
-    private static bool IsClipboardServiceOn()
-    {
-#if ANDROID
-        try
-        {
-            string? enabled = global::Android.Provider.Settings.Secure.GetString(
-                global::Android.App.Application.Context.ContentResolver,
-                global::Android.Provider.Settings.Secure.EnabledAccessibilityServices);
-
-            return enabled != null &&
-                   enabled.Contains("ClipboardAccessibilityService", StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
         }
 #else
         return true;
@@ -227,29 +198,23 @@ public partial class DashboardPage : ContentPage
 #if ANDROID
         try
         {
-            if (_warning == WarningKind.Notifications)
-            {
-                // Ask inline first; only fall back to Settings if the prompt is no longer offered.
-                if (OperatingSystem.IsAndroidVersionAtLeast(33) &&
-                    await Permissions.RequestAsync<Permissions.PostNotifications>() == PermissionStatus.Granted)
-                {
-                    RenderWarning();
-                    return;
-                }
+            // Notifications are the only thing left worth warning about, now that nothing
+            // watches the clipboard and so nothing can silently fail to.
 
-                var settings = new global::Android.Content.Intent(
-                    global::Android.Provider.Settings.ActionAppNotificationSettings);
-                settings.PutExtra(global::Android.Provider.Settings.ExtraAppPackage,
-                    global::Android.App.Application.Context.PackageName);
-                settings.AddFlags(global::Android.Content.ActivityFlags.NewTask);
-                global::Android.App.Application.Context.StartActivity(settings);
+            // Ask inline first; only fall back to Settings if the prompt is no longer offered.
+            if (OperatingSystem.IsAndroidVersionAtLeast(33) &&
+                await Permissions.RequestAsync<Permissions.PostNotifications>() == PermissionStatus.Granted)
+            {
+                RenderWarning();
                 return;
             }
 
-            var intent = new global::Android.Content.Intent(
-                global::Android.Provider.Settings.ActionAccessibilitySettings);
-            intent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
-            global::Android.App.Application.Context.StartActivity(intent);
+            var settings = new global::Android.Content.Intent(
+                global::Android.Provider.Settings.ActionAppNotificationSettings);
+            settings.PutExtra(global::Android.Provider.Settings.ExtraAppPackage,
+                global::Android.App.Application.Context.PackageName);
+            settings.AddFlags(global::Android.Content.ActivityFlags.NewTask);
+            global::Android.App.Application.Context.StartActivity(settings);
         }
         catch (Exception ex)
         {

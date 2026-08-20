@@ -17,7 +17,7 @@ namespace AndroidClient
     /// Owns the links to every paired device, including reconnection.
     ///
     /// Every entry point funnels through the loops below, because the previous design let the
-    /// deep link, the activity, the accessibility service and the disconnect handler each start
+    /// deep link, the activity, the background service and the disconnect handler each start
     /// their own connect attempt. Each attempt built a fresh transport and overwrote the
     /// previous one without disposing it, so sockets and receive-loop tasks accumulated for the
     /// life of the process.
@@ -544,8 +544,8 @@ namespace AndroidClient
         /// <summary>Starts the reconnect loops using previously saved pairing details.</summary>
         public static Task AutoConnectAsync(bool isUserInitiated = false)
         {
-            // Every caller funnels through here, so honouring the flag once keeps the app,
-            // the accessibility service and the deep link from each reviving a stopped sync.
+            // Every caller funnels through here, so honouring the flag once keeps the app, the
+            // foreground service, the tile and the deep link from each reviving a stopped sync.
             if (IsPaused)
             {
                 Log.Write("Sync", "Auto-connect skipped: syncing is paused.");

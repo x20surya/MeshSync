@@ -42,21 +42,47 @@
                 </VerticalStackLayout>
             </Border>
 
+            <!-- ══════════ Sending from this phone ══════════
+                 Not a permission any more, so not in that section. Android only lets an app read
+                 the clipboard while it is in front, and the accessibility service that used to
+                 work around that made UPI and banking apps refuse to run - so sending is
+                 something you do rather than something that happens. -->
+            <Label Text="Sending from this phone" Style="{StaticResource T.SectionLabel}" Margin="4,24,4,8" />
+            <Border Style="{StaticResource S.Card}">
+                <VerticalStackLayout Padding="16" Spacing="14">
+                    <Label Style="{StaticResource T.Faint}" FontSize="11.5"
+                           Text="Anything sent from another device arrives here on its own. Sending from this phone takes a tap, because Android does not let apps read the clipboard in the background." />
+
+                    <VerticalStackLayout Spacing="2">
+                        <Label Text="Quick Settings tile" Style="{StaticResource T.Body}" FontSize="14" />
+                        <Label Style="{StaticResource T.Faint}" FontSize="11.5"
+                               Text="Add &quot;Send clipboard&quot; to your quick settings, then it is one tap from anywhere" />
+                    </VerticalStackLayout>
+
+                    <VerticalStackLayout Spacing="2">
+                        <Label Text="Select text" Style="{StaticResource T.Body}" FontSize="14" />
+                        <Label Style="{StaticResource T.Faint}" FontSize="11.5"
+                               Text="Highlight anything and pick &quot;Send to my devices&quot; from the menu" />
+                    </VerticalStackLayout>
+
+                    <VerticalStackLayout Spacing="2">
+                        <Label Text="Share" Style="{StaticResource T.Body}" FontSize="14" />
+                        <Label Style="{StaticResource T.Faint}" FontSize="11.5"
+                               Text="Share to Mesh Sync from any app, for files and images too" />
+                    </VerticalStackLayout>
+
+                    <VerticalStackLayout Spacing="2">
+                        <Label Text="Screenshots" Style="{StaticResource T.Body}" FontSize="14" />
+                        <Label Style="{StaticResource T.Faint}" FontSize="11.5"
+                               Text="Sent automatically - these need no tap at all" />
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
             <!-- ══════════ Permissions ══════════ -->
             <Label Text="Permissions" Style="{StaticResource T.SectionLabel}" Margin="4,24,4,8" />
             <Border Style="{StaticResource S.Card}">
                 <VerticalStackLayout Padding="16" Spacing="16">
-
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                        <VerticalStackLayout Grid.Column="0" Spacing="2">
-                            <Label Text="Clipboard access" Style="{StaticResource T.Body}" FontSize="14" />
-                            <Label x:Name="ClipboardState" Style="{StaticResource T.Faint}" FontSize="11.5"
-                                   Text="Needed to notice when you copy something" />
-                        </VerticalStackLayout>
-                        <Button Grid.Column="1" x:Name="ClipboardButton" Text="Open" HeightRequest="34"
-                                Style="{StaticResource S.BtnQuiet}" FontSize="12" Padding="14,4"
-                                VerticalOptions="Center" Clicked="OnClipboardClicked" />
-                    </Grid>
 
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                         <VerticalStackLayout Grid.Column="0" Spacing="2">

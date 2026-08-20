@@ -15,8 +15,9 @@ namespace AndroidClient.Platforms.Android
     ///
     /// Android offers every activity with a PROCESS_TEXT filter as an item in that toolbar,
     /// so this needs no permissions and, unlike the clipboard route, never overwrites what
-    /// the user already had copied. It also works without the accessibility service, which
-    /// makes it the one sync path that keeps working if the user declines that permission.
+    /// the user already had copied. It is now one of the two main ways text leaves this phone -
+    /// the other being the Quick Settings tile - since there is no longer anything watching the
+    /// clipboard in the background.
     ///
     /// No result is returned, so the selected text is left exactly as it was.
     /// </summary>
@@ -107,8 +108,8 @@ namespace AndroidClient.Platforms.Android
         }
 
         /// <summary>
-        /// Normally the accessibility service already holds the connection and this returns
-        /// at once. When the app was not running at all, this is a cold start, so give the
+        /// Normally the foreground service already holds the connection and this returns at
+        /// once. When the app was not running at all, this is a cold start, so give the
         /// reconnect loop a bounded moment to reach the computer.
         /// </summary>
         private static async Task<bool> EnsureConnectedAsync()

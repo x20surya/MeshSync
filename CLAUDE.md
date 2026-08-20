@@ -20,14 +20,12 @@ dotnet run --project src/WinDaemon/WinDaemon.csproj
 ### Build & Deploy Android App (Manually)
 
 Because of .NET 10 MAUI device deployment bugs, we compile and push manually.
-Use `install -r`, which preserves app data, the accessibility grant, the device identity and the
-paired devices.
+Use `install -r`, which preserves app data, the device identity and the paired devices.
 
 **The next install after the rename is the exception.** The application id moved from
 `com.companyname.androidclient` to `dev.meshsync.app`, and Android treats that as a different app:
-the old one has to be uninstalled, the accessibility grant regranted by hand, and the devices
-paired again. Once only.
-Never use `pm clear`: it revokes the grant, and only the user can restore it by hand.
+the old one has to be uninstalled and the devices paired again. Once only.
+Avoid `pm clear` otherwise: it wipes the identity and the paired devices, which costs a re-pair.
 
 ```powershell
 # 1. Build the APK (FastDeployment disabled in .csproj)
@@ -36,8 +34,8 @@ dotnet build src/AndroidClient/AndroidClient.csproj -t:SignAndroidPackage -f net
 # 2. Install to connected device via ADB
 adb install -r src/AndroidClient/bin/Debug/net10.0-android/dev.meshsync.app-Signed.apk
 
-# 3. Confirm the accessibility service survived the install
-adb shell settings get secure enabled_accessibility_services
+# 3. Confirm the identity and paired devices survived the install
+adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
 ```
 
 ### Run Tests
@@ -90,9 +88,9 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
   file drop target; Win32 clipboard listener, TCP listener and dialler, Bluetooth GATT server and
   client, the ringer, and the tray icon.
 - `src/AndroidClient`: .NET MAUI app with a navigation drawer (Home, Activity, Devices, Settings,
-  About) plus the setup wizard, an accessibility service for the clipboard, a notification listener
-  for mirroring, a MediaStore observer for screenshots, a `connectedDevice` foreground service, TCP
-  listener and dialler, Bluetooth GATT client and server, the ringer, and the `PROCESS_TEXT` and
-  share targets.
+  About) plus the setup wizard, a `connectedDevice` foreground service hosting the screenshot,
+  network and screen watchers, a boot receiver, a notification listener for mirroring, TCP listener
+  and dialler, Bluetooth GATT client and server, the ringer, and the Quick Settings tile,
+  `PROCESS_TEXT` and share targets.
 - `src/assets`: brand handoff, the source of truth for the mark, palette and illustrations.
 - `tests/CoreLib.Tests`: 205 tests, including transport tests over real loopback sockets.
