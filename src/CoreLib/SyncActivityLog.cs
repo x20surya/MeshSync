@@ -23,6 +23,22 @@ namespace CoreLib
         public long SizeBytes { get; init; }
         public DateTime AtUtc { get; init; } = DateTime.UtcNow;
 
+        /// <summary>
+        /// Where a received file ended up, in whatever form the platform can reopen it by.
+        ///
+        /// <para>Deliberately an opaque string rather than a path: on Android a file saved
+        /// through MediaStore has no path the app is allowed to know, only a content URI handed
+        /// back at the time of writing. Losing that URI means the file is on the device and
+        /// unreachable from the app that put it there, which is why it is kept here rather than
+        /// recomputed later.</para>
+        ///
+        /// <para>Empty for anything that is not a received file.</para>
+        /// </summary>
+        public string Location { get; init; } = string.Empty;
+
+        /// <summary>Whether there is somewhere to go when this row is tapped.</summary>
+        public bool CanOpen => Location.Length > 0;
+
         /// <summary>"2s", "4m", "3h" - compact enough for a dashboard row.</summary>
         public string RelativeAge
         {
@@ -85,13 +101,15 @@ namespace CoreLib
             get { lock (_gate) return _entries.First?.Value.AtUtc; }
         }
 
-        public void Record(SyncDirection direction, SyncItemKind kind, long sizeBytes, string? textContent = null)
+        public void Record(SyncDirection direction, SyncItemKind kind, long sizeBytes,
+                           string? textContent = null, string? location = null)
         {
             var entry = new SyncActivityEntry
             {
                 Direction = direction,
                 Kind = kind,
                 SizeBytes = sizeBytes,
+                Location = location ?? string.Empty,
                 // A file's name is worth showing as-is: it is what the user goes looking for.
                 // Text is trimmed to a preview; an image has nothing to say.
                 Preview = kind switch

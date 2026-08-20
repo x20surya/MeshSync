@@ -1206,6 +1206,11 @@ namespace AndroidClient
         private static void SaveReceivedFile(ReceivedFile file)
         {
 #if ANDROID
+            // Kept so the activity row can reopen it later. On Android 10 and above this is the
+            // only handle that will ever exist - MediaStore does not tell the app where it put
+            // the file, and there is no way to ask afterwards.
+            string location = "";
+
             try
             {
                 var context = global::Android.App.Application.Context;
@@ -1233,6 +1238,8 @@ namespace AndroidClient
                     values.Clear();
                     values.Put(global::Android.Provider.MediaStore.IMediaColumns.IsPending, 0);
                     context.ContentResolver.Update(uri, values, null, null);
+
+                    location = uri.ToString() ?? "";
                 }
                 else
                 {
@@ -1241,9 +1248,11 @@ namespace AndroidClient
 
                     string destination = UniquePath(folder.AbsolutePath!, file.Name);
                     System.IO.File.Copy(file.Path, destination);
+
+                    location = global::Android.Net.Uri.FromFile(new Java.IO.File(destination))?.ToString() ?? "";
                 }
 
-                Activity.Record(SyncDirection.Received, SyncItemKind.File, file.Size, file.Name);
+                Activity.Record(SyncDirection.Received, SyncItemKind.File, file.Size, file.Name, location);
                 Log.Write("Sync", $"Saved \"{file.Name}\" to Downloads.");
                 Report($"Received {file.Name}");
             }

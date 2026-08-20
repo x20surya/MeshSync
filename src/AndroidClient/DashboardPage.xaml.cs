@@ -180,10 +180,16 @@ public partial class DashboardPage : ContentPage
         {
             _rows.Add(new ActivityRow
             {
-                Glyph = entry.Kind == SyncItemKind.Image ? "▣" : "⧉",
+                Glyph = entry.Kind switch
+                {
+                    SyncItemKind.Image => "▣",
+                    SyncItemKind.File => "⭳",
+                    _ => "⧉"
+                },
                 Title = string.IsNullOrWhiteSpace(entry.Title) ? "(empty)" : entry.Title,
                 Sub = $"{(entry.Direction == SyncDirection.Sent ? "Sent" : "Received")} · {entry.SizeLabel}",
-                Age = entry.RelativeAge
+                Age = entry.RelativeAge,
+                Location = entry.Location
             });
         }
 
@@ -223,6 +229,60 @@ public partial class DashboardPage : ContentPage
 #else
         await Task.CompletedTask;
 #endif
+    }
+
+    /// <summary>
+    /// Picks a file and sends it to the mesh.
+    ///
+    /// <para>The share sheet could already do this, and asking the user to leave the app, find
+    /// the file in another one and share it back is not the same as the button the desktop has
+    /// had all along. <c>SyncManager.SendFileAsync</c> existed and nothing called it.</para>
+    ///
+    /// <para>The picker hands back a stream rather than a path, because the file may live in a
+    /// provider with no path to give - Drive, or another app's private storage. So it is copied
+    /// into the cache first and sent from there.</para>
+    /// </summary>
+    private async void OnSendFileClicked(object? sender, EventArgs e)
+    {
+        if (!SyncManager.IsConnected)
+        {
+            await DisplayAlertAsync("Not connected",
+                "Your computer is not reachable right now. Files need Wi-Fi, so check that both devices are on the same network.", "OK");
+            return;
+        }
+
+        try
+        {
+            var picked = await FilePicker.Default.PickAsync();
+            if (picked == null) return;
+
+            string staged = System.IO.Path.Combine(FileSystem.CacheDirectory, picked.FileName);
+
+            using (var source = await picked.OpenReadAsync())
+            using (var destination = System.IO.File.Create(staged))
+            {
+                await source.CopyToAsync(destination);
+            }
+
+            SendFileButton.IsEnabled = false;
+            try
+            {
+                if (!await SyncManager.SendFileAsync(staged))
+                {
+                    await DisplayAlertAsync("Not sent", $"\"{picked.FileName}\" could not be sent just now.", "OK");
+                }
+            }
+            finally
+            {
+                SendFileButton.IsEnabled = true;
+                try { System.IO.File.Delete(staged); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Files", "Picking a file to send failed", ex);
+            await DisplayAlertAsync("Could not send", "That file could not be read.", "OK");
+        }
     }
 
     private async void OnSendNowClicked(object? sender, EventArgs e)
@@ -271,11 +331,37 @@ public partial class DashboardPage : ContentPage
     private async void OnRepairClicked(object? sender, EventArgs e) =>
         await Shell.Current.GoToAsync("//setup");
 
+    /// <summary>
+    /// Opens a received file, which is the other half of being able to send one.
+    ///
+    /// A file that arrives and cannot be reached from the app that received it has not really
+    /// arrived. Rows that are not received files carry no location and quietly do nothing.
+    /// </summary>
+    private async void OnActivityRowTapped(object? sender, TappedEventArgs e)
+    {
+        if ((sender as Element)?.BindingContext is not ActivityRow row || !row.CanOpen) return;
+
+#if ANDROID
+        if (!Platforms.Android.ReceivedFiles.Open(row.Location))
+        {
+            await DisplayAlertAsync("Cannot open",
+                $"Nothing on this phone will open \"{row.Title}\". It is in your Downloads folder.", "OK");
+        }
+#else
+        await Task.CompletedTask;
+#endif
+    }
+
     private sealed class ActivityRow
     {
         public string Glyph { get; init; } = "";
         public string Title { get; init; } = "";
         public string Sub { get; init; } = "";
         public string Age { get; init; } = "";
+
+        /// <summary>Where the file went, for a received file. Empty for everything else.</summary>
+        public string Location { get; init; } = "";
+
+        public bool CanOpen => Location.Length > 0;
     }
 }

@@ -97,6 +97,12 @@
                         <CollectionView.ItemTemplate>
                             <DataTemplate>
                                 <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Padding="12,11">
+                                    <!-- Only a received file has anywhere to go; every other row
+                                         ignores the tap rather than pretending to be a link. -->
+                                    <Grid.GestureRecognizers>
+                                        <TapGestureRecognizer Tapped="OnActivityRowTapped" />
+                                    </Grid.GestureRecognizers>
+
                                     <Border Grid.Column="0" WidthRequest="32" HeightRequest="32"
                                             StrokeThickness="0" VerticalOptions="Center"
                                             BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceAltLight}, Dark={StaticResource SurfaceAltDark}}">
@@ -116,9 +122,13 @@
                                                TextColor="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
                                     </VerticalStackLayout>
 
-                                    <Label Grid.Column="2" Text="{Binding Age}" FontSize="12"
-                                           VerticalOptions="Center"
-                                           TextColor="{AppThemeBinding Light={StaticResource FaintLight}, Dark={StaticResource FaintDark}}" />
+                                    <HorizontalStackLayout Grid.Column="2" Spacing="8" VerticalOptions="Center">
+                                        <Label Text="Open" FontSize="12" IsVisible="{Binding CanOpen}"
+                                               VerticalOptions="Center"
+                                               TextColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
+                                        <Label Text="{Binding Age}" FontSize="12" VerticalOptions="Center"
+                                               TextColor="{AppThemeBinding Light={StaticResource FaintLight}, Dark={StaticResource FaintDark}}" />
+                                    </HorizontalStackLayout>
                                 </Grid>
                             </DataTemplate>
                         </CollectionView.ItemTemplate>
@@ -133,6 +143,9 @@
             <!-- ══════════ Actions ══════════ -->
             <Button x:Name="SendNowButton" Text="Send clipboard now" Style="{StaticResource S.BtnPrimary}"
                     Margin="0,20,0,0" Clicked="OnSendNowClicked" />
+
+            <Button x:Name="SendFileButton" Text="Send a file" Style="{StaticResource S.BtnQuiet}"
+                    Margin="0,4,0,0" Clicked="OnSendFileClicked" />
 
             <Button Text="Pair another device" Style="{StaticResource S.BtnQuiet}"
                     Margin="0,4,0,0" Clicked="OnRepairClicked" />
