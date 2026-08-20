@@ -1,0 +1,82 @@
+﻿<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage
+    x:Class="AndroidClient.FilesPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:local="clr-namespace:AndroidClient"
+    Shell.NavBarIsVisible="False"
+    BackgroundColor="{AppThemeBinding Light={StaticResource PageBgLight}, Dark={StaticResource PageBgDark}}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="18,0,18,28">
+
+            <local:MeshHeader x:Name="Header" Title="Files" />
+
+            <!-- Where you are. Tapping a crumb goes back up to it. -->
+            <Border Style="{StaticResource S.Card}" Margin="0,4,0,0" Padding="14,10">
+                <VerticalStackLayout Spacing="4">
+                    <Label x:Name="CrumbDevice" Style="{StaticResource T.Faint}" FontSize="11.5"
+                           Text="Choose a device" />
+                    <Label x:Name="CrumbPath" Style="{StaticResource T.Body}" FontSize="14"
+                           LineBreakMode="HeadTruncation" MaxLines="1" Text="" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Button x:Name="UpButton" Text="Back" Style="{StaticResource S.BtnQuiet}"
+                    Margin="0,8,0,0" IsVisible="False" Clicked="OnUpClicked" />
+
+            <Border Style="{StaticResource S.Card}" Margin="0,12,0,0" Padding="4,2">
+                <VerticalStackLayout>
+
+                    <ActivityIndicator x:Name="Busy" IsRunning="False" IsVisible="False"
+                                       Margin="0,20"
+                                       Color="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
+
+                    <CollectionView x:Name="EntryList" SelectionMode="None">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Padding="12,12">
+                                    <Grid.GestureRecognizers>
+                                        <TapGestureRecognizer Tapped="OnEntryTapped" />
+                                    </Grid.GestureRecognizers>
+
+                                    <Border Grid.Column="0" WidthRequest="32" HeightRequest="32"
+                                            StrokeThickness="0" VerticalOptions="Center"
+                                            BackgroundColor="{AppThemeBinding Light={StaticResource SurfaceAltLight}, Dark={StaticResource SurfaceAltDark}}">
+                                        <Border.StrokeShape>
+                                            <RoundRectangle CornerRadius="9" />
+                                        </Border.StrokeShape>
+                                        <Label Text="{Binding Glyph}" FontSize="14"
+                                               HorizontalOptions="Center" VerticalOptions="Center"
+                                               TextColor="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
+                                    </Border>
+
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                        <Label Text="{Binding Name}" FontSize="14" LineBreakMode="TailTruncation"
+                                               MaxLines="1"
+                                               TextColor="{AppThemeBinding Light={StaticResource TextLight}, Dark={StaticResource TextDark}}" />
+                                        <Label Text="{Binding Sub}" FontSize="12"
+                                               TextColor="{AppThemeBinding Light={StaticResource MutedLight}, Dark={StaticResource MutedDark}}" />
+                                    </VerticalStackLayout>
+
+                                    <Label Grid.Column="2" Text="{Binding Action}" FontSize="12"
+                                           VerticalOptions="Center"
+                                           TextColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
+                                </Grid>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+
+                    <Label x:Name="EmptyLabel" Style="{StaticResource T.Muted}"
+                           HorizontalTextAlignment="Center" Margin="0,24,0,26"
+                           Text="Nothing here." />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label x:Name="TruncatedNote" Style="{StaticResource T.Faint}" FontSize="11.5"
+                   Margin="4,10,0,0" IsVisible="False"
+                   Text="This folder has more in it than can be listed at once." />
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

@@ -116,6 +116,15 @@
                             </StackPanel>
                         </RadioButton>
 
+                        <RadioButton x:Name="NavFiles" Style="{StaticResource S.NavItem}" GroupName="Nav"
+                                     Checked="Nav_Checked" Tag="Files">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource S.NavIcon}"
+                                      Data="M 2,4 L 7,4 L 9,6 L 16,6 L 16,15 L 2,15 Z" />
+                                <TextBlock Text="Files" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </RadioButton>
+
                         <RadioButton x:Name="NavDevices" Style="{StaticResource S.NavItem}" GroupName="Nav"
                                      Checked="Nav_Checked" Tag="Devices">
                             <StackPanel Orientation="Horizontal">
@@ -427,6 +436,63 @@
                         </StackPanel>
 
                         <!-- ─────────── DEVICES ─────────── -->
+                        <!-- ─────────── FILES ─────────── -->
+                        <StackPanel x:Name="PageFiles" Visibility="Collapsed" MaxWidth="620">
+                            <TextBlock Text="Files on your devices" Style="{StaticResource T.Base}"
+                                       FontSize="19" FontWeight="SemiBold" Margin="0,22,0,4"
+                                       FontFamily="{DynamicResource F.Display}" />
+                            <TextBlock x:Name="FilesCrumb" Style="{StaticResource T.Muted}" FontSize="12.5"
+                                       TextWrapping="Wrap" Text="Choose a device." />
+
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button x:Name="BtnFilesUp" Style="{StaticResource S.BtnQuiet}" Content="Back"
+                                        Padding="14,5" FontSize="11.5" Visibility="Collapsed"
+                                        Click="BtnFilesUp_Click" />
+                                <TextBlock x:Name="FilesBusy" Text="Asking…" Style="{StaticResource T.Muted}"
+                                           FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
+                                           Visibility="Collapsed" />
+                            </StackPanel>
+
+                            <Border Style="{StaticResource S.Card}" Padding="6,4" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <ItemsControl x:Name="FileList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="10,9">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontSize="13"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding Sub}" Style="{StaticResource T.Muted}"
+                                                                   FontSize="11.5" Margin="0,2,0,0" />
+                                                    </StackPanel>
+
+                                                    <Button Grid.Column="1" Style="{StaticResource S.BtnQuiet}"
+                                                            Content="{Binding Action}" Padding="12,5" FontSize="11.5"
+                                                            VerticalAlignment="Center" Margin="10,0,0,0"
+                                                            Tag="{Binding Token}"
+                                                            Click="BtnFileEntry_Click" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <TextBlock x:Name="FilesEmpty" Text="Nothing here."
+                                               Style="{StaticResource T.Muted}" FontSize="12.5" TextWrapping="Wrap"
+                                               Margin="10,16,10,18" />
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock x:Name="FilesTruncated" Style="{StaticResource T.Base}"
+                                       Foreground="{DynamicResource B.TextFaint}" FontSize="11.5"
+                                       Margin="2,10,0,0" TextWrapping="Wrap" Visibility="Collapsed"
+                                       Text="This folder has more in it than can be listed at once." />
+                        </StackPanel>
+
                         <StackPanel x:Name="PageDevices" Visibility="Collapsed" MaxWidth="480">
                             <TextBlock Text="Your mesh" Style="{StaticResource T.Base}" FontSize="19"
                                        FontWeight="SemiBold" FontFamily="{DynamicResource F.Display}"

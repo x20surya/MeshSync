@@ -48,6 +48,10 @@
         <ShellContent ContentTemplate="{DataTemplate local:ActivityPage}" />
     </FlyoutItem>
 
+    <FlyoutItem Title="Files" Route="files">
+        <ShellContent ContentTemplate="{DataTemplate local:FilesPage}" />
+    </FlyoutItem>
+
     <FlyoutItem Title="Devices" Route="devices">
         <ShellContent ContentTemplate="{DataTemplate local:DevicesPage}" />
     </FlyoutItem>

@@ -12,6 +12,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using CoreLib;
 using CoreLib.Diagnostics;
+using CoreLib.Identity;
 using CoreLib.Transport;
 using QRCoder;
 
@@ -131,7 +132,12 @@ namespace WinDaemon
             PageHome.Visibility = section == "Home" ? Visibility.Visible : Visibility.Collapsed;
             PageActivity.Visibility = section == "Activity" ? Visibility.Visible : Visibility.Collapsed;
             PageNotifications.Visibility = section == "Notifications" ? Visibility.Visible : Visibility.Collapsed;
+            PageFiles.Visibility = section == "Files" ? Visibility.Visible : Visibility.Collapsed;
             PageDevices.Visibility = section == "Devices" ? Visibility.Visible : Visibility.Collapsed;
+
+            // Browsing starts at the device list every time it is opened. A listing goes stale
+            // the moment the other device changes anything, and there is no way to be told.
+            if (section == "Files") ShowBrowseDevices();
             PageSettings.Visibility = section == "Settings" ? Visibility.Visible : Visibility.Collapsed;
             PageAbout.Visibility = section == "About" ? Visibility.Visible : Visibility.Collapsed;
 
@@ -836,5 +842,188 @@ namespace WinDaemon
             // ambiguous between System.Drawing and System.Windows.Media.
             public System.Windows.Media.Brush Dot { get; init; } = System.Windows.Media.Brushes.Gray;
         }
+        // ──────────────────────────────────── files on other devices
+
+        private readonly System.Collections.ObjectModel.ObservableCollection<BrowseRow> _browseRows = new();
+
+        /// <summary>Empty until a device is chosen.</summary>
+        private string _browsePeer = "";
+        private string _browsePeerName = "";
+
+        /// <summary>Empty while listing a device's shared folders.</summary>
+        private string _browseFolderId = "";
+        private string _browseFolderName = "";
+
+        /// <summary>Where we are inside that folder. Empty is its top.</summary>
+        private string _browsePath = "";
+
+        private void ShowBrowseDevices()
+        {
+            _browsePeer = _browsePeerName = _browseFolderId = _browseFolderName = _browsePath = "";
+
+            _browseRows.Clear();
+
+            var peers = Program.Security?.Peers;
+
+            if (peers != null)
+            {
+                foreach (var peer in peers.Peers.OrderBy(p => p.Name ?? p.Fingerprint))
+                {
+                    _browseRows.Add(new BrowseRow
+                    {
+                        Name = string.IsNullOrWhiteSpace(peer.Name)
+                            ? DeviceIdentity.Shorten(peer.Fingerprint)
+                            : peer.Name!,
+                        Sub = DeviceIdentity.Shorten(peer.Fingerprint),
+                        Action = "Browse",
+                        Kind = BrowseRowKind.Device,
+                        Target = peer.Fingerprint
+                    });
+                }
+            }
+
+            if (FileList.ItemsSource == null) FileList.ItemsSource = _browseRows;
+
+            FilesCrumb.Text = _browseRows.Count == 0 ? "Nothing paired yet." : "Choose a device.";
+            BtnFilesUp.Visibility = Visibility.Collapsed;
+            FilesTruncated.Visibility = Visibility.Collapsed;
+            FilesEmpty.Text = "Pair a device first.";
+            FilesEmpty.Visibility = _browseRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private async Task ShowBrowseListingAsync()
+        {
+            FilesBusy.Visibility = Visibility.Visible;
+            FilesTruncated.Visibility = Visibility.Collapsed;
+            FilesEmpty.Visibility = Visibility.Collapsed;
+
+            try
+            {
+                var reply = await Program.Browse.BrowseAsync(_browsePeer, _browseFolderId, _browsePath);
+
+                _browseRows.Clear();
+
+                foreach (var entry in reply.Entries)
+                {
+                    _browseRows.Add(new BrowseRow
+                    {
+                        Name = entry.Name,
+                        Sub = entry.IsDirectory
+                            ? "Folder"
+                            : $"{entry.SizeLabel} · {entry.ModifiedUtc.ToLocalTime():d MMM yyyy}",
+                        Action = entry.IsDirectory ? "Open" : "Get",
+                        Kind = _browseFolderId.Length == 0 ? BrowseRowKind.Folder
+                             : entry.IsDirectory ? BrowseRowKind.Directory
+                             : BrowseRowKind.File,
+                        Target = _browseFolderId.Length == 0 ? entry.Id : entry.Name
+                    });
+                }
+
+                FilesTruncated.Visibility = reply.Truncated ? Visibility.Visible : Visibility.Collapsed;
+
+                FilesEmpty.Text = reply.Status switch
+                {
+                    BrowseStatus.NotAllowed => "That folder is not shared.",
+                    BrowseStatus.NoSuchFolder => "That folder is no longer shared.",
+                    BrowseStatus.NotFound when _browseFolderId.Length == 0 => $"{_browsePeerName} has not shared anything, or did not answer.",
+                    BrowseStatus.NotFound => "That device did not answer.",
+                    _ when _browseFolderId.Length == 0 => $"{_browsePeerName} has not shared anything.",
+                    _ => "This folder is empty."
+                };
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Browse", "Listing failed", ex);
+                _browseRows.Clear();
+                FilesEmpty.Text = "That listing could not be read.";
+            }
+            finally
+            {
+                FilesBusy.Visibility = Visibility.Collapsed;
+                FilesEmpty.Visibility = _browseRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+                FilesCrumb.Text = _browseFolderId.Length == 0
+                    ? $"{_browsePeerName} · shared folders"
+                    : _browsePath.Length == 0
+                        ? $"{_browsePeerName} · {_browseFolderName}"
+                        : $"{_browsePeerName} · {_browseFolderName}/{_browsePath}";
+
+                BtnFilesUp.Visibility = _browsePeer.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+
+        private async void BtnFileEntry_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not string token) return;
+
+            var row = _browseRows.FirstOrDefault(r => r.Token == token);
+            if (row == null) return;
+
+            switch (row.Kind)
+            {
+                case BrowseRowKind.Device:
+                    _browsePeer = row.Target;
+                    _browsePeerName = row.Name;
+                    _browseFolderId = _browseFolderName = _browsePath = "";
+                    await ShowBrowseListingAsync();
+                    break;
+
+                case BrowseRowKind.Folder:
+                    _browseFolderId = row.Target;
+                    _browseFolderName = row.Name;
+                    _browsePath = "";
+                    await ShowBrowseListingAsync();
+                    break;
+
+                case BrowseRowKind.Directory:
+                    _browsePath = _browsePath.Length == 0 ? row.Target : $"{_browsePath}/{row.Target}";
+                    await ShowBrowseListingAsync();
+                    break;
+
+                case BrowseRowKind.File:
+                    string relative = _browsePath.Length == 0 ? row.Target : $"{_browsePath}/{row.Target}";
+
+                    if (await Program.Browse.FetchAsync(_browsePeer, _browseFolderId, relative))
+                    {
+                        FilesCrumb.Text = $"Asked for \"{row.Name}\". It will appear in your Downloads.";
+                    }
+                    break;
+            }
+        }
+
+        private async void BtnFilesUp_Click(object sender, RoutedEventArgs e)
+        {
+            if (_browsePath.Length > 0)
+            {
+                int cut = _browsePath.LastIndexOf('/');
+                _browsePath = cut < 0 ? "" : _browsePath[..cut];
+                await ShowBrowseListingAsync();
+                return;
+            }
+
+            if (_browseFolderId.Length > 0)
+            {
+                _browseFolderId = _browseFolderName = "";
+                await ShowBrowseListingAsync();
+                return;
+            }
+
+            ShowBrowseDevices();
+        }
+
+        private enum BrowseRowKind { Device, Folder, Directory, File }
+
+        private sealed class BrowseRow
+        {
+            /// <summary>Identifies the row to its own button, since a WPF tag carries one value.</summary>
+            public string Token { get; } = Guid.NewGuid().ToString("N");
+
+            public string Name { get; init; } = "";
+            public string Sub { get; init; } = "";
+            public string Action { get; init; } = "";
+            public BrowseRowKind Kind { get; init; }
+            public string Target { get; init; } = "";
+        }
+
     }
 }

@@ -62,6 +62,11 @@ namespace WinDaemon
         /// </summary>
         private static FileTransferService? _files;
 
+        private static readonly BrowseService _browse = new();
+
+        /// <summary>Browsing this machine's shared folders, and other devices' in return.</summary>
+        public static BrowseService Browse => _browse;
+
         public static FileTransferService? Files => _files;
 
         public static string LogDirectory { get; private set; } = "";
@@ -723,6 +728,32 @@ namespace WinDaemon
 
             _files.FileFailed += (name, reason) =>
                 Log.Write("Daemon", $"\"{name}\" did not arrive: {reason}.");
+
+            WireBrowsing();
+        }
+
+        /// <summary>
+        /// Gives the browse service a way to talk, and a first shared folder.
+        ///
+        /// <para>Downloads is shared out of the box because it is where this app already puts
+        /// everything it receives, so the alternative is a feature that does nothing until
+        /// configured - which is the mistake notification mirroring made and had to be undone.
+        /// Anything else is the user's to add, and this one is theirs to remove.</para>
+        /// </summary>
+        private static void WireBrowsing()
+        {
+            _browse.Send = (fingerprint, contentType, body) =>
+                _mesh?.SendToAsync(fingerprint, contentType, body) ?? Task.FromResult(false);
+
+            _browse.SendFile = async (fingerprint, path) =>
+            {
+                var files = _files;
+                if (files == null) return;
+
+                await files.SendAsync(fingerprint, path).ConfigureAwait(false);
+            };
+
+            _browse.Shared.Add(DownloadsFolder(), "Downloads");
         }
 
         private static string DownloadsFolder()
@@ -801,6 +832,9 @@ namespace WinDaemon
             // File frames go straight through: they are not clipboard content, so noting them
             // as an inbound copy would poison the echo suppressor with bytes nobody copied.
             if (_files?.Handle(peer.Fingerprint, contentType, body) == true) return;
+
+            // Browsing frames are the same case: a listing is not something anybody copied.
+            if (_browse.Handle(peer.Fingerprint, contentType, body)) return;
 
             _echo.NoteInbound(body, contentType == ContentImage ? SyncItemKind.Image : SyncItemKind.Text);
 

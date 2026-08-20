@@ -61,7 +61,10 @@ public class SyncContentTests
             nameof(SyncContent.FileChunk),
             nameof(SyncContent.Ring),
             nameof(SyncContent.Notification),
-            nameof(SyncContent.NotificationDismiss)
+            nameof(SyncContent.NotificationDismiss),
+            nameof(SyncContent.BrowseRequest),
+            nameof(SyncContent.BrowseReply),
+            nameof(SyncContent.FetchRequest)
         };
 
         Assert.Equal(expected.OrderBy(n => n), AllContentTypes().Keys.OrderBy(n => n));

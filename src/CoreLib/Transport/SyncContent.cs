@@ -83,5 +83,31 @@ namespace CoreLib.Transport
         /// second inbox to clear. Clearing it on the desktop clears it on the phone.
         /// </summary>
         public const byte NotificationDismiss = 0x08;
+
+        /// <summary>
+        /// "Show me what is in this folder." A shared-folder id and a path relative to it.
+        ///
+        /// <para><b>Why browsing is not just more file transfer.</b> Sending a file is the sender
+        /// deciding to hand something over. Browsing is the other device deciding what it wants,
+        /// which means the request names something the receiver has to go and find - and a
+        /// request that names a path is a request that can name the wrong one. So a browse never
+        /// carries an absolute path: it carries the id of a folder that was explicitly shared,
+        /// and a relative path underneath it, resolved and then checked to still be inside that
+        /// folder. See <see cref="SharedFolders"/>.</para>
+        ///
+        /// <para>Small enough for Bluetooth in both directions, so browsing works on the standing
+        /// link; only the fetch that follows needs Wi-Fi.</para>
+        /// </summary>
+        public const byte BrowseRequest = 0x09;
+
+        /// <summary>The answer to a browse: the folder's contents, or why there are none.</summary>
+        public const byte BrowseReply = 0x0A;
+
+        /// <summary>
+        /// "Send me that one." Named the same way a browse is, and answered with an ordinary
+        /// file offer - so the transfer, the hashing and the resume behaviour are the ones that
+        /// were already built and tested rather than a second copy of them.
+        /// </summary>
+        public const byte FetchRequest = 0x0B;
     }
 }

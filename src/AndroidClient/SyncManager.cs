@@ -314,6 +314,51 @@ namespace AndroidClient
 
         private static FileTransferService? _files;
 
+        private static BrowseService? _browse;
+
+        /// <summary>
+        /// Browsing the mesh's shared folders, and answering when it browses this phone.
+        ///
+        /// <para>Created on first use like <see cref="Files"/>, and for the same reason: the
+        /// transport it talks through does not exist until sync has started.</para>
+        ///
+        /// <para>Downloads is shared to begin with, because it is where everything this app
+        /// receives already goes. A browse feature that shows nothing until somebody finds a
+        /// settings screen is the same mistake notification mirroring made.</para>
+        /// </summary>
+        public static BrowseService Browse
+        {
+            get
+            {
+                var existing = Volatile.Read(ref _browse);
+                if (existing != null) return existing;
+
+                lock (_securityGate)
+                {
+                    existing = Volatile.Read(ref _browse);
+                    if (existing != null) return existing;
+
+                    var created = new BrowseService
+                    {
+                        Send = (fingerprint, contentType, body) =>
+                            Mesh.SendToAsync(fingerprint, contentType, body),
+                        SendFile = async (fingerprint, path) =>
+                            await Files.SendAsync(fingerprint, path).ConfigureAwait(false)
+                    };
+
+#if ANDROID
+                    string downloads = global::Android.OS.Environment
+                        .GetExternalStoragePublicDirectory(global::Android.OS.Environment.DirectoryDownloads)?.AbsolutePath ?? "";
+
+                    if (downloads.Length > 0) created.Shared.Add(downloads, "Downloads");
+#endif
+
+                    Volatile.Write(ref _browse, created);
+                    return created;
+                }
+            }
+        }
+
         /// <summary>
         /// File transfer, both directions.
         ///
@@ -953,6 +998,10 @@ namespace AndroidClient
             // File frames go straight through: they are not clipboard content, so noting them
             // as an inbound copy would poison the echo suppressor with bytes nobody copied.
             if (Files.Handle(peer.Fingerprint, contentType, body)) return;
+
+            // A listing is not something anybody copied, so it must not reach the echo
+            // suppressor either.
+            if (Browse.Handle(peer.Fingerprint, contentType, body)) return;
 
             // Recorded before injection so the clipboard listener recognises the resulting
             // change as our own write.
