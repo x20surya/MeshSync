@@ -483,13 +483,17 @@ namespace WinDaemon
         /// Both halves of the tier use it, and both get the same answer: a device this computer
         /// has not paired with never reaches the point of having a session to encrypt with.
         /// </summary>
-        private static PeerSession? OpenBleSession(string peerPublicKey, string peerEphemeral,
-                                                   EphemeralKeyPair localEphemeral)
+        private static PeerSession? OpenBleSession(string peerPublicKey, string peerName,
+                                                   string peerEphemeral, EphemeralKeyPair localEphemeral)
         {
             var security = _security;
             if (security == null) return null;
 
-            return security.Authorise(peerPublicKey)
+            // The name goes in so a device waiting to be confirmed can say what it calls itself.
+            // Without it the prompt reads "It did not say what it is called" about a device that
+            // did say - which makes the one screen where the user is being asked to trust
+            // something less informative than it has to be.
+            return security.Authorise(peerPublicKey, peerName)
                 ? security.OpenSession(peerPublicKey, localEphemeral, peerEphemeral)
                 : null;
         }

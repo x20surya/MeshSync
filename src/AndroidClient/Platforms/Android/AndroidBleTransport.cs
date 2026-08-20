@@ -91,7 +91,7 @@ namespace AndroidClient.Platforms.Android
         /// Authorises the peer and agrees the key this link is encrypted with. Returning null
         /// drops the link.
         /// </summary>
-        public Func<string, string, CoreLib.Identity.EphemeralKeyPair, CoreLib.Identity.PeerSession?>? OpenSession { get; set; }
+        public Func<string, string, string, CoreLib.Identity.EphemeralKeyPair, CoreLib.Identity.PeerSession?>? OpenSession { get; set; }
 
         /// <summary>
         /// This link's ephemeral keypair. One per instance is correct here: the reconnect loop
@@ -496,7 +496,7 @@ namespace AndroidClient.Platforms.Android
             var open = OpenSession;
             if (open != null)
             {
-                var agreed = open(publicKey, peerEphemeral, _ephemeral);
+                var agreed = open(publicKey, peerName, peerEphemeral, _ephemeral);
                 if (agreed == null)
                 {
                     Log.Write("BleClient", peerEphemeral.Length == 0

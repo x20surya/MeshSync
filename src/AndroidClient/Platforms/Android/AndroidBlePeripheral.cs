@@ -102,7 +102,7 @@ namespace AndroidClient.Platforms.Android
         /// Authorises a peer and agrees the key this link is encrypted with. Returning null
         /// drops the link.
         /// </summary>
-        public Func<string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
+        public Func<string, string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
 
         /// <summary>
         /// This connection's ephemeral keypair. Rolled whenever a central subscribes, so
@@ -440,7 +440,7 @@ namespace AndroidClient.Platforms.Android
             var open = OpenSession;
             if (open != null)
             {
-                var agreed = open(publicKey, peerEphemeral, _ephemeral);
+                var agreed = open(publicKey, peerName, peerEphemeral, _ephemeral);
                 if (agreed == null)
                 {
                     Log.Write("BlePeripheral", peerEphemeral.Length == 0

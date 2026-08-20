@@ -143,7 +143,7 @@ namespace CoreLib.Transport
         /// is what the listener used to do unconditionally - only appropriate for tests and for
         /// a transport with no registry behind it.</para>
         /// </summary>
-        public Func<string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
+        public Func<string, string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
 
         /// <summary>
         /// The agreed key for the live connection, or null before the peer's hello arrives.
@@ -483,7 +483,7 @@ namespace CoreLib.Transport
             var open = OpenSession;
             if (open != null)
             {
-                var agreed = open(publicKey, ephemeralKey, session.Ephemeral);
+                var agreed = open(publicKey, name, ephemeralKey, session.Ephemeral);
                 if (agreed == null)
                 {
                     Log.Write("Transport",

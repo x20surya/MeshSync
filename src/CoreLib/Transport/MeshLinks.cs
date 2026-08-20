@@ -305,8 +305,8 @@ namespace CoreLib.Transport
 
                 // Authorising and agreeing a key are one step: a peer this device has not
                 // paired with never reaches the point of having a session to encrypt with.
-                OpenSession = (peerKey, peerEphemeral, localEphemeral) =>
-                    _security.Authorise(peerKey)
+                OpenSession = (peerKey, peerName, peerEphemeral, localEphemeral) =>
+                    _security.Authorise(peerKey, peerName)
                         ? _security.OpenSession(peerKey, localEphemeral, peerEphemeral)
                         : null
             };

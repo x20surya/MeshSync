@@ -74,7 +74,7 @@ namespace WinDaemon
         /// Authorises a peer and agrees the key this link is encrypted with. Returning null
         /// drops the link.
         /// </summary>
-        public Func<string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
+        public Func<string, string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
 
         /// <summary>
         /// This link's ephemeral keypair. One per instance is correct here, unlike the server
@@ -367,7 +367,7 @@ namespace WinDaemon
             var open = OpenSession;
             if (open != null)
             {
-                var agreed = open(publicKey, peerEphemeral, _ephemeral);
+                var agreed = open(publicKey, peerName, peerEphemeral, _ephemeral);
                 if (agreed == null)
                 {
                     Log.Write("BleCentral", peerEphemeral.Length == 0

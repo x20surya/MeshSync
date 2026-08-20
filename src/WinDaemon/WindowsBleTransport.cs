@@ -71,7 +71,7 @@ namespace WinDaemon
         /// drops what it sent; leaving it null accepts anyone and agrees nothing, which is what
         /// this tier used to do unconditionally.
         /// </summary>
-        public Func<string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
+        public Func<string, string, string, EphemeralKeyPair, PeerSession?>? OpenSession { get; set; }
 
         /// <summary>
         /// This connection's ephemeral keypair. Rolled whenever a central subscribes, so
@@ -181,6 +181,8 @@ namespace WinDaemon
                 // serves would share one and the forward secrecy would only be per process.
                 RollEphemeral();
 
+                HoldTheLink(sender);
+
                 Log.Write("BleServer", $"Phone subscribed. Notification size {MaxNotificationSize()} bytes.");
                 ClientConnected?.Invoke(this, EventArgs.Empty);
             }
@@ -189,6 +191,43 @@ namespace WinDaemon
                 Log.Write("BleServer", "Phone unsubscribed.");
                 _reassembler.Reset();
                 ConnectionClosed?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        /// <summary>
+        /// Asks Windows to keep the radio link up.
+        ///
+        /// <para><b>Why this is needed even though the peer is pinging.</b> Windows drops an idle
+        /// BLE connection unless something has asked it not to. That was already known for the
+        /// central role - <c>WindowsBleCentral</c> sets the same flag - but the server half never
+        /// did, and a GATT server does not hold its own link either. The phone's heartbeat does
+        /// not save it: those are ATT writes, and Windows tears the connection down anyway.</para>
+        ///
+        /// <para>Measured on hardware before this existed: the link died at almost exactly 30
+        /// seconds, every time, reported to the phone as <c>status 19</c> - the peer terminated
+        /// it. The phone reconnected within a second and the cycle repeated for as long as it
+        /// was watched. Nothing was lost, because a reconnect is fast and the clipboard is
+        /// retried, but "the standing link" was reconnecting a hundred and twenty times an hour
+        /// and paying the radio cost of it.</para>
+        /// </summary>
+        private static void HoldTheLink(GattLocalCharacteristic outbox)
+        {
+            try
+            {
+                foreach (var client in outbox.SubscribedClients)
+                {
+                    var session = client.Session;
+                    if (session == null) continue;
+
+                    session.MaintainConnection = true;
+                    Log.Write("BleServer", "Holding the Bluetooth link open.");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Not fatal: without it the link churns rather than fails, which is how it
+                // behaved before this was added.
+                Log.Write("BleServer", "Could not ask Windows to hold the link open", ex);
             }
         }
 
@@ -439,7 +478,7 @@ namespace WinDaemon
             var open = OpenSession;
             if (open != null)
             {
-                var agreed = open(publicKey, peerEphemeral, _ephemeral);
+                var agreed = open(publicKey, peerName, peerEphemeral, _ephemeral);
                 if (agreed == null)
                 {
                     Log.Write("BleServer", peerEphemeral.Length == 0
@@ -462,6 +501,17 @@ namespace WinDaemon
 
             Log.Write("BleServer", $"Peer identified as {DeviceIdentity.Shorten(RemoteFingerprint)}.");
 
+            // Answered in kind *before* anything else goes out.
+            //
+            // This ordering is load-bearing now and was not before. The session key is agreed
+            // from both ephemeral keys, and ours only reaches the peer in this hello - so any
+            // payload sent ahead of it arrives at a peer that cannot possibly open it. It was
+            // harmless when the key came from the peer's identity alone and was known before the
+            // connection existed; with forward secrecy it means the first thing this device says
+            // after every reconnect is dropped. Observed on hardware doing exactly that, once
+            // per reconnect, to the address announcement below.
+            await SendHelloAsync(ClientFor(deviceId)).ConfigureAwait(false);
+
             try
             {
                 PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs
@@ -473,10 +523,6 @@ namespace WinDaemon
                 });
             }
             catch (Exception ex) { Log.Write("BleServer", "PeerIdentified handler threw", ex); }
-
-            // Answered in kind, so the peer can seal for this device without having to guess
-            // from a registry of one.
-            await SendHelloAsync(ClientFor(deviceId)).ConfigureAwait(false);
         }
 
         /// <summary>Announces this device's identity and this link's ephemeral key.</summary>
