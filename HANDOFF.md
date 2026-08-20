@@ -31,19 +31,20 @@ on both screens says it is the right somebody.
 
 **Three features.** File transfer, find my device, notification mirroring.
 
-### What has not been near a phone
+### It has now been near a phone
 
-Everything since the identity work, except the Windows DPAPI migration - that was verified end to
-end on a real key file: 138 bytes plaintext became 362 wrapped, same fingerprint, paired device
-intact, and the next run read it back without rewriting.
+Everything above was taken to hardware on 2026-08-20 against the S21 FE, and the tables further
+down record what held and what did not.
+Four defects came out of it that no test could have found, all fixed: the Quick Settings tile never
+actually read the clipboard, nothing worked over Wi-Fi while the phone was the hotspot, ringing
+could not vibrate, and notification mirroring had no logging to diagnose itself with.
 
-The rest is tested over loopback and against its own protocols, which is real coverage and is not
-the same as a radio. **The first thing to do with a phone attached is a clean pair**, because the
-application id changed and Android will treat this as a different app.
+The clean pair the previous note asked for was done, and the Android Keystore wrap came through it
+intact.
+The accessibility grant is gone for good and nothing needs restoring in its place.
 
-There is no accessibility grant to restore any more - that service is gone. What needs checking on
-a device instead is that the foreground service comes up on its own after a reboot, and that the
-Quick Settings tile appears and sends.
+Two things are still open and both need a person holding the phone: a real reboot, because
+`BOOT_COMPLETED` only arrives after the lock screen is cleared, and Doze survival overnight.
 
 ---
 
@@ -90,7 +91,7 @@ It rides in the pairing code and in both hellos.
 **A DHCP lease change no longer breaks pairing.**
 Devices announce their address to each other over whichever link is up.
 
-### Verified on hardware this session
+### Verified on hardware, before the security work
 
 | Thing | Evidence |
 |---|---|
@@ -105,29 +106,90 @@ Devices announce their address to each other over whichever link is up.
 | Mesh name adopted by an already-paired device | `[Peers] Mesh name set to "Surya's Mesh"` |
 | Address handover | `Announced this computer at 192.168.0.104` |
 
-### Not verified
+### Verified on hardware after the security and features work
 
-Everything in the table above was confirmed on hardware **before** the security and features work.
-Nothing since has been near a phone, so the whole list below is open, and the first four items in
-particular are things only a radio can answer.
+Run on 2026-08-20 against the S21 FE (`AC83-492B-684F-4263`) and this laptop
+(`3B7F-5889-CC1C-09B4`), with the phone acting as the hotspot.
 
-- **A pair under the new handshake.** Forward secrecy changed both wire formats and both ends must
-  update together. Loopback proves the agreement; it does not prove two radios agreeing.
-- **The fingerprint comparison, end to end.** Confirming on one device and watching the other
-  connect on its next retry.
-- **The Android Keystore wrap.** It compiles. The Windows half was verified on a real key file;
-  this half has not been run.
-- **A file crossing between two real devices**, and landing in Downloads through MediaStore.
-- **Ringing a phone that is face-down on silent**, which is the case the alarm stream exists for.
-- **Notification mirroring**, including whether dismissal really round-trips.
-- **Three devices at once.** The code holds a link per peer and fans out, but that path has only
-  been exercised by tests over loopback.
-- **A phone acting as peripheral carrying real traffic.** The GATT server advertises and accepts
-  connections, confirmed on device, but with one phone the role rule correctly makes it the
-  central, so nothing has crossed that link.
+| Thing | Evidence |
+|---|---|
+| The forward-secret handshake between two radios | Both ends re-identify on every reconnect, over Bluetooth and TCP |
+| The Android Keystore wrap | `device.key` begins `MSK1`; the fingerprint is unchanged across restarts, force-stops and reinstalls |
+| Clipboard, desktop to phone | `[Sync] Received text payload`, and the text pasteable on the phone |
+| Clipboard, phone to desktop, share sheet | `[Share] Sent 22 characters from the share sheet`, matched by `Get-Clipboard` |
+| Clipboard, phone to desktop, selection menu | `[ProcessText] Sent 23 characters`, matched by `Get-Clipboard` |
+| Clipboard, phone to desktop, Quick Settings tile | `[Clipboard] Sending 16 characters from the clipboard`, after the focus fix below |
+| An image crossing over Wi-Fi | 11853 bytes sent, 11853 received, cached as `clip_*.jpg` |
+| A file crossing, and landing in Downloads through MediaStore | Identical SHA-256 on both sides, 12000 bytes |
+| Ringing the phone from the daemon | `[Ring] MSI-SURYANSHU asked this phone to ring`, and `[Ring] Stopped ringing.` |
+| Notification mirroring, phone to desktop | `[Notify] Mirroring a notification…` then `[Notify] Mirrored a notification from S21 FE` |
+| Notification dismissal, both directions | Dismissing on the desktop cleared it on the phone, and the phone's removal cleared it on the desktop |
+| The phone as hotspot raising the Wi-Fi tier | `[Sync] Acting as a hotspot on swlan0`, then `[Transport] Peer identified` |
+| Address handover both ways | Each side's `peers.json` now holds the other's address, and the daemon dialled the phone |
+| Recovery after being force-stopped | The process came back unaided and re-established the link |
+
+### Found on hardware and fixed
+
+These are the four defects the radios found, none of which any test could have.
+
+**The Quick Settings tile never read the clipboard.**
+It read in `OnCreate`, and Android only answers a clipboard read to an app that already holds
+window focus, which an activity does not during `OnCreate`.
+The read does not throw: it returns an empty clip, indistinguishable from the clipboard genuinely
+being empty, and the empty path logged nothing at all.
+The tile appeared to work and silently sent nothing.
+Reading now happens in `OnWindowFocusChanged`, and the read is separated from the send so that
+waiting for a link cannot cost the focus the read depends on.
+
+**Nothing worked over Wi-Fi while the phone was the hotspot.**
+`HasUsableNetwork` asked for the active network's transport, and on a phone sharing its connection
+that is cellular, because that is how the phone reaches the internet.
+Tethering is not surfaced as a Wi-Fi transport at all.
+So the check answered "no usable network" in the one topology where the peer was a single hop away,
+and images and files fell back to Bluetooth or were dropped as not worth encrypting.
+It now falls through to the interface list and recognises an access-point interface.
+
+**Ringing could not vibrate.**
+`android.permission.VIBRATE` was missing from the manifest.
+The sound still played, so this was invisible until a real ring was tried, and Android throws a
+`SecurityException` for the vibrate call rather than ignoring it.
+The buzz is the half that finds a phone face-down in a sofa.
+
+**Notification mirroring had no logging on any path.**
+A listener that Android had not yet bound looked exactly like mirroring being broken.
+There is now one line when a notification is mirrored, one when it goes away, and one when a
+notification is dropped because nothing is connected.
+
+### Still not verified
+
+- **A real reboot.**
+  The phone has a secure lock, so `BOOT_COMPLETED` is only broadcast after the user unlocks, and
+  `am broadcast` cannot stand in for it: `BOOT_COMPLETED` is a protected broadcast and the shell is
+  refused.
+  What was shown instead is that the app recovers unaided after a force-stop.
+- **Three devices at once.**
+  The code holds a link per peer and fans out, but that path has only been exercised over loopback.
+- **A phone acting as peripheral carrying real traffic.**
+  With one phone the role rule correctly makes it the central, so nothing has crossed that link.
 - **Overnight Doze survival** of the foreground service.
-- **Screen-off actually dropping Wi-Fi** and screen-on raising it, watched end to end.
-- **The wake frame** carrying a real image from laptop to phone.
+- **Ringing a phone that is face-down on silent**, which is the case the alarm stream exists for.
+- **The wake frame** carrying a real image: the image that crossed went over a Wi-Fi link that was
+  already up.
+
+### The Bluetooth link churns, and it is not ours
+
+A standing Bluetooth link is dropped by Windows at almost exactly 30 seconds and immediately
+re-established by the phone, which reports it as `status 19`, `GATT_CONN_TERMINATE_PEER_USER`.
+It reconnects in about a second and nothing is lost, but the "standing" link is reconnecting
+roughly a hundred and twenty times an hour.
+
+The phone is not the cause: its heartbeat has a 24 second timeout that never fires, so traffic is
+crossing right up to the moment the radio goes.
+`GattSession.MaintainConnection` on each subscribed client was the obvious fix, is what the central
+half already does, and does not stop it - the flag is honoured for a link Windows dialled, not for
+one it accepted.
+Left in place because it is correct practice and harmless.
+Whatever the real cause, it is below this code, and the reconnect path covers it.
 
 ---
 
