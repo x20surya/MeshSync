@@ -128,6 +128,10 @@ Run on 2026-08-20 against the S21 FE (`AC83-492B-684F-4263`) and this laptop
 | The phone as hotspot raising the Wi-Fi tier | `[Sync] Acting as a hotspot on swlan0`, then `[Transport] Peer identified` |
 | Address handover both ways | Each side's `peers.json` now holds the other's address, and the daemon dialled the phone |
 | Recovery after being force-stopped | The process came back unaided and re-established the link |
+| Browsing a phone's shared folders from the desktop | The listing came back with real sizes and dates |
+| Fetching a file the desktop asked for | `[Files] Received "screenshot.png", 18 KB` and saved to Downloads |
+| A browse against a peer that does not speak it | Times out, says so, and leaves the link unharmed |
+| Delivering an 81.8 MB APK over the mesh | Sent in under two seconds over the phone's own hotspot |
 | Boot persistence, on a real reboot | `[Service] The phone restarted; bringing the links back.`, unprompted |
 | The Keystore unwrap after a cold boot | `[Sync] Identity AC83-492B-684F-4263, 1 paired device(s)` on the first run after restart |
 | A hotspot subnet change surviving | The subnet moved from `10.178.251.x` to `10.137.49.x` across the reboot and both sides re-announced and reconnected |
@@ -198,11 +202,8 @@ Downloads is shared out of the box on both sides.
 
 ### Still not verified
 
-- **Browsing, against a device that speaks it.** The daemon's half was exercised against a phone
-  still on the older build: the request timed out, the page said so plainly, and the link was
-  unharmed - which is the degradation that was wanted and is not the same as a listing arriving.
-  Deploying to the phone needs USB, and the cable was not carrying data.
-- **A file pulled by fetch rather than pushed**, and the phone's own Files page against the desktop.
+- **The phone's own Files page against the desktop.** The desktop-to-phone direction is verified;
+  the reverse runs the same code from the other end but has not been tapped through.
 - **The phone displaying a mirrored notification**, which needs a second phone or Windows-to-phone
   mirroring to have a sender at all.
 - **Three devices at once.**
