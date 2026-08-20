@@ -23,26 +23,40 @@ namespace AndroidClient.Platforms.Android
     /// service, and it is worth paying - banking and UPI apps refuse to run while one is
     /// enabled.</para>
     /// </summary>
+    /// <remarks>
+    /// <para><b>Deliberately not <c>NoHistory</c>.</b> That flag finishes an activity the moment it
+    /// stops being visible, which for a translucent window with no content is almost immediately -
+    /// killing the send before the link is even up. <c>ExcludeFromRecents</c> plus finishing by
+    /// hand keeps it out of the task switcher without that hazard.</para>
+    /// </remarks>
     [Activity(
         Label = "Send clipboard",
         Theme = "@android:style/Theme.Translucent.NoTitleBar",
         Exported = true,
         ExcludeFromRecents = true,
-        NoHistory = true,
         TaskAffinity = "",
         LaunchMode = LaunchMode.SingleTop)]
     public class SendClipboardActivity : Activity
     {
         /// <summary>How long to wait for a link before giving up on this tap.</summary>
-        private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(6);
+        private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(12);
 
-        protected override void OnCreate(Bundle? savedInstanceState)
+        private bool _started;
+
+        /// <summary>
+        /// The clipboard is read here and nowhere else, because this is the first callback in the
+        /// lifecycle where Android will actually answer the read. See <see cref="ClipboardCapture.Capture"/>.
+        /// </summary>
+        public override void OnWindowFocusChanged(bool hasFocus)
         {
-            base.OnCreate(savedInstanceState);
-            _ = HandleAsync();
+            base.OnWindowFocusChanged(hasFocus);
+            if (!hasFocus || _started) return;
+
+            _started = true;
+            _ = HandleAsync(ClipboardCapture.Capture(this));
         }
 
-        private async Task HandleAsync()
+        private async Task HandleAsync(ClipboardCapture.CapturedClip clip)
         {
             try
             {
@@ -58,13 +72,20 @@ namespace AndroidClient.Platforms.Android
                     return;
                 }
 
+                if (clip.IsEmpty)
+                {
+                    Notify("Nothing on the clipboard");
+                    return;
+                }
+
                 if (!await EnsureConnectedAsync().ConfigureAwait(true))
                 {
+                    Log.Write("Clipboard", "Nothing in range to send the clipboard to.");
                     Notify("No devices in range");
                     return;
                 }
 
-                var result = await ClipboardCapture.SendCurrentClipAsync(this).ConfigureAwait(true);
+                var result = await ClipboardCapture.SendAsync(this, clip).ConfigureAwait(true);
                 Notify(ClipboardCapture.Describe(result, SyncManager.MeshName));
             }
             catch (Exception ex)

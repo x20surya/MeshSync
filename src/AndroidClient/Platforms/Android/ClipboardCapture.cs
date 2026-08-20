@@ -35,43 +35,82 @@ namespace AndroidClient.Platforms.Android
         /// <summary>Cap on a single clipboard image, to avoid an out-of-memory kill.</summary>
         private const int MaxClipboardImageBytes = 48 * 1024 * 1024;
 
+        /// <summary>What was on the clipboard, lifted out while the reader still had focus.</summary>
+        public readonly struct CapturedClip
+        {
+            public string? Text { get; init; }
+            public global::Android.Net.Uri? Uri { get; init; }
+            public bool IsEmpty => Text == null && Uri == null;
+        }
+
         /// <summary>
-        /// Sends whatever is on the clipboard right now.
+        /// Takes a copy of the clipboard. Must be called while the caller genuinely holds window
+        /// focus, not merely while it is starting up.
         ///
-        /// The caller must be a focused activity, or Android returns nothing and this reports
-        /// the clipboard as empty - which is indistinguishable from it actually being empty, and
-        /// is why every entry point routes through a foreground activity rather than a service.
+        /// <para><b>The rule this exists to obey.</b> Since Android 10 the clipboard may only be
+        /// read by the app the user is currently looking at. An activity does not qualify during
+        /// <c>OnCreate</c> - focus arrives later, at <c>OnWindowFocusChanged</c> - and a read made
+        /// too early does not throw. It returns an empty clip, which is indistinguishable from the
+        /// clipboard actually being empty. That silent-empty is why this is a separate call: it
+        /// forces the caller to say when it is reading, and the only correct answer is "the moment
+        /// I was given focus".</para>
+        ///
+        /// <para>Reading is also kept apart from sending because sending can take seconds - it may
+        /// have to raise a Bluetooth link first - and focus will not survive that wait. Grab first,
+        /// send after.</para>
         /// </summary>
-        public static async Task<ClipboardSendResult> SendCurrentClipAsync(Context context)
+        public static CapturedClip Capture(Context context)
         {
             try
             {
                 var clipboard = (ClipboardManager?)context.GetSystemService(Context.ClipboardService);
-                if (clipboard?.HasPrimaryClip != true) return ClipboardSendResult.Empty;
-
-                var clip = clipboard.PrimaryClip;
-                if (clip == null || clip.ItemCount == 0) return ClipboardSendResult.Empty;
-
-                var item = clip.GetItemAt(0);
-                if (item == null) return ClipboardSendResult.Empty;
-
-                var uri = item.Uri;
-                if (uri != null)
+                if (clipboard?.HasPrimaryClip != true)
                 {
-                    var imageResult = await TrySendImageAsync(context, uri).ConfigureAwait(false);
-                    if (imageResult != null) return imageResult.Value;
+                    Log.Write("Clipboard", "The clipboard is empty, or this app was not allowed to read it.");
+                    return default;
                 }
 
-                string? text = item.CoerceToText(context)?.ToString();
-                if (string.IsNullOrEmpty(text)) return ClipboardSendResult.Empty;
+                var clip = clipboard.PrimaryClip;
+                if (clip == null || clip.ItemCount == 0) return default;
 
-                Log.Write("Clipboard", $"Sending {text!.Length} characters from the clipboard.");
-                await SyncManager.SendClipboardAsync(text).ConfigureAwait(false);
-                return ClipboardSendResult.Sent;
+                var item = clip.GetItemAt(0);
+                if (item == null) return default;
+
+                return new CapturedClip
+                {
+                    Uri = item.Uri,
+                    Text = item.CoerceToText(context)?.ToString() is { Length: > 0 } t ? t : null
+                };
             }
             catch (Exception ex)
             {
                 Log.Write("Clipboard", "Reading the clipboard failed", ex);
+                return default;
+            }
+        }
+
+        /// <summary>Sends a clip captured earlier. Safe to call once focus has been lost.</summary>
+        public static async Task<ClipboardSendResult> SendAsync(Context context, CapturedClip clip)
+        {
+            try
+            {
+                if (clip.IsEmpty) return ClipboardSendResult.Empty;
+
+                if (clip.Uri != null)
+                {
+                    var imageResult = await TrySendImageAsync(context, clip.Uri).ConfigureAwait(false);
+                    if (imageResult != null) return imageResult.Value;
+                }
+
+                if (clip.Text == null) return ClipboardSendResult.Empty;
+
+                Log.Write("Clipboard", $"Sending {clip.Text.Length} characters from the clipboard.");
+                await SyncManager.SendClipboardAsync(clip.Text).ConfigureAwait(false);
+                return ClipboardSendResult.Sent;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Clipboard", "Sending the clipboard failed", ex);
                 return ClipboardSendResult.Unreadable;
             }
         }
