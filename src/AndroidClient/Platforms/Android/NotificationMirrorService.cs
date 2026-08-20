@@ -75,7 +75,7 @@ namespace AndroidClient.Platforms.Android
                 // screen with a stuck row on it.
                 if (sbn.IsOngoing) return;
 
-                if (!NotificationMirrorSettings.IsAllowed(package)) return;
+                if (!NotificationMirrorSettings.IsMirrored(package)) return;
 
                 var extras = sbn.Notification?.Extras;
                 string title = extras?.GetString(Notification.ExtraTitle) ?? "";
@@ -120,7 +120,7 @@ namespace AndroidClient.Platforms.Android
             {
                 if (sbn == null || !NotificationMirrorSettings.IsEnabled) return;
                 if (sbn.PackageName == PackageName) return;
-                if (!NotificationMirrorSettings.IsAllowed(sbn.PackageName ?? "")) return;
+                if (!NotificationMirrorSettings.IsMirrored(sbn.PackageName ?? "")) return;
 
                 string key = sbn.Key ?? "";
                 if (key.Length == 0) return;
@@ -220,31 +220,78 @@ namespace AndroidClient.Platforms.Android
     }
 
     /// <summary>
-    /// Which applications may be mirrored, and whether mirroring is on at all.
+    /// Whether mirroring is on, and which applications are muted.
     ///
-    /// Default deny, deliberately. Granting the listener says "you may see my notifications";
-    /// it does not say "send all of them to my laptop", and conflating the two would be taking
-    /// something the user did not offer.
+    /// <para><b>On by default, and a mute list rather than an allow list.</b> This used to deny by
+    /// default and require each application to be picked, on the reasoning that granting the
+    /// listener says "you may see my notifications" rather than "send them all to my laptop".
+    /// That is a defensible position and it made the feature nearly unusable: the phone was
+    /// granted, the service was bound, and nothing appeared, because a second and third opt-in
+    /// were still waiting in a settings screen. A mirror that shows nothing until configured is
+    /// indistinguishable from a broken one.</para>
+    ///
+    /// <para>So everything mirrors once the listener is granted, and muting is per application.
+    /// The grant is still the real gate - Android asks for it in its own settings, in its own
+    /// words, and it can be revoked there. What changed is that the app no longer asks a second
+    /// time for something the user already said yes to.</para>
+    ///
+    /// <para><b>Mute the ones that matter.</b> Banking and authenticator applications are the
+    /// obvious candidates: an OTP is precisely the kind of thing that should not travel to
+    /// every paired device. The mute list is where that belongs.</para>
     /// </summary>
     public static class NotificationMirrorSettings
     {
         private const string PrefsName = "NotificationMirror";
         private const string KeyEnabled = "Enabled";
-        private const string KeyAllowed = "AllowedPackages";
+        private const string KeyMuted = "MutedPackages";
+        private const string KeySchema = "SchemaVersion";
+
+        /// <summary>Bumped when the meaning of the stored keys changes, not their layout.</summary>
+        private const int CurrentSchema = 2;
 
         private static ISharedPreferences? Prefs()
         {
             try
             {
-                return global::Android.App.Application.Context
+                var prefs = global::Android.App.Application.Context
                     .GetSharedPreferences(PrefsName, FileCreationMode.Private);
+
+                if (prefs != null) Migrate(prefs);
+                return prefs;
             }
             catch { return null; }
         }
 
+        /// <summary>
+        /// Drops the settings written under the deny-by-default model.
+        ///
+        /// <para>There is no honest translation between the two. An allow list naming three
+        /// applications is not the same answer as a mute list naming every other one - it is an
+        /// answer to a different question, given when the default was the opposite. Carrying it
+        /// across would silently mute everything the user had not got round to picking.</para>
+        ///
+        /// <para>The stored <c>Enabled=false</c> is worse, because under the old model that was
+        /// the default rather than a choice: honouring it would leave mirroring off for everyone
+        /// who never opened the screen, which is exactly the state this change exists to end. So
+        /// both keys go and the new defaults apply.</para>
+        /// </summary>
+        private static void Migrate(ISharedPreferences prefs)
+        {
+            if (prefs.GetInt(KeySchema, 1) >= CurrentSchema) return;
+
+            prefs.Edit()
+                ?.Remove(KeyEnabled)
+                ?.Remove("AllowedPackages")
+                ?.PutInt(KeySchema, CurrentSchema)
+                ?.Apply();
+
+            Log.Write("Notify", "Notification mirroring is now on for every app; mute the ones you do not want.");
+        }
+
+        /// <summary>Defaults to true: the listener grant is the decision, not this.</summary>
         public static bool IsEnabled
         {
-            get => Prefs()?.GetBoolean(KeyEnabled, false) ?? false;
+            get => Prefs()?.GetBoolean(KeyEnabled, true) ?? true;
             set
             {
                 Prefs()?.Edit()?.PutBoolean(KeyEnabled, value)?.Apply();
@@ -252,26 +299,32 @@ namespace AndroidClient.Platforms.Android
             }
         }
 
-        public static IReadOnlyList<string> Allowed()
+        public static IReadOnlyList<string> Muted()
         {
-            string raw = Prefs()?.GetString(KeyAllowed, "") ?? "";
+            string raw = Prefs()?.GetString(KeyMuted, "") ?? "";
             return raw.Length == 0
                 ? Array.Empty<string>()
                 : raw.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         }
 
-        public static bool IsAllowed(string package) =>
-            package.Length > 0 && Allowed().Contains(package, StringComparer.Ordinal);
+        /// <summary>The question asked on every notification: does this one travel?</summary>
+        public static bool IsMirrored(string package) =>
+            package.Length > 0 && !Muted().Contains(package, StringComparer.Ordinal);
 
-        public static void SetAllowed(string package, bool allowed)
+        public static bool IsMuted(string package) => !IsMirrored(package);
+
+        public static void SetMuted(string package, bool muted)
         {
-            var current = Allowed().ToList();
+            if (package.Length == 0) return;
 
-            if (allowed && !current.Contains(package, StringComparer.Ordinal)) current.Add(package);
-            else if (!allowed) current.RemoveAll(p => string.Equals(p, package, StringComparison.Ordinal));
+            var current = Muted().ToList();
+
+            if (muted && !current.Contains(package, StringComparer.Ordinal)) current.Add(package);
+            else if (!muted) current.RemoveAll(p => string.Equals(p, package, StringComparison.Ordinal));
             else return;
 
-            Prefs()?.Edit()?.PutString(KeyAllowed, string.Join('\n', current))?.Apply();
+            Prefs()?.Edit()?.PutString(KeyMuted, string.Join('\n', current))?.Apply();
+            Log.Write("Notify", muted ? $"Muted {package}." : $"Unmuted {package}.");
         }
     }
 }

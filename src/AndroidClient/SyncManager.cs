@@ -965,7 +965,7 @@ namespace AndroidClient
                 else if (contentType == SyncContent.Address) NoteAnnouncedAddress(peer, body);
                 else if (contentType == SyncContent.Ring) ApplyRing(peer, body);
                 else if (contentType == SyncContent.NotificationDismiss) ApplyNotificationDismiss(body);
-                else if (contentType == SyncContent.Notification) { /* the phone is the source, not a display */ }
+                else if (contentType == SyncContent.Notification) ApplyNotification(peer, body);
                 else Log.Write("Sync", $"Ignoring unknown content type {contentType}.");
             }
             catch (Exception ex)
@@ -1040,8 +1040,35 @@ namespace AndroidClient
             if (!NotificationProtocol.TryParseDismiss(body, out string key)) return;
 
             Log.Write("Sync", "A peer dismissed a notification; clearing it here too.");
+
+            // Either half can be the right one and neither knows which: the key may name a
+            // notification this phone posted and mirrored out, or one it is showing on another
+            // device's behalf. Both are addressed by the same opaque key, and clearing the wrong
+            // one is a no-op.
             Platforms.Android.NotificationMirrorService.DismissByKey(key);
+            Platforms.Android.MirroredNotificationDisplay.Dismiss(key);
 #else
+            _ = body;
+#endif
+        }
+
+        /// <summary>
+        /// Shows a notification another device posted.
+        ///
+        /// The phone used to drop these on the floor, on the reasoning that it was the source of
+        /// notifications rather than a display of them. True with one phone and one computer;
+        /// false the moment a second phone joins, and out of step with every other content type,
+        /// which all cross both ways.
+        /// </summary>
+        private static void ApplyNotification(PeerRecord peer, byte[] body)
+        {
+#if ANDROID
+            if (!NotificationProtocol.TryParse(body, out var notification) || notification == null) return;
+
+            string from = peer.Name ?? DeviceIdentity.Shorten(peer.Fingerprint);
+            Platforms.Android.MirroredNotificationDisplay.Show(notification, from);
+#else
+            _ = peer;
             _ = body;
 #endif
         }

@@ -132,9 +132,9 @@
                             IsVisible="False" Clicked="OnNotificationsGrantClicked" />
 
                     <VerticalStackLayout x:Name="NotificationsAppsSection" IsVisible="False" Spacing="8">
-                        <Label Text="Which apps" Style="{StaticResource T.Faint}" FontSize="11.5" />
+                        <Label Text="Apps that mirror" Style="{StaticResource T.Faint}" FontSize="11.5" />
                         <Label x:Name="NotificationsAppsEmpty" Style="{StaticResource T.Faint}" FontSize="11.5"
-                               Text="Apps appear here once they have notified you at least once." />
+                               Text="Every app mirrors. Turn one off to keep it on this phone." />
 
                         <CollectionView x:Name="NotificationAppList" SelectionMode="None">
                             <CollectionView.ItemTemplate>
@@ -143,7 +143,7 @@
                                         <Label Grid.Column="0" Text="{Binding Name}" Style="{StaticResource T.Body}"
                                                FontSize="13.5" VerticalOptions="Center"
                                                LineBreakMode="TailTruncation" />
-                                        <Switch Grid.Column="1" IsToggled="{Binding Allowed, Mode=OneWay}"
+                                        <Switch Grid.Column="1" IsToggled="{Binding Mirrored, Mode=OneWay}"
                                                 VerticalOptions="Center"
                                                 ClassId="{Binding Package}"
                                                 Toggled="OnNotificationAppToggled" />

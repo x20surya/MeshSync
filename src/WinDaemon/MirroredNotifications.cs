@@ -81,6 +81,10 @@ namespace WinDaemon
             // Deliberately no contents in the log line. Knowing one arrived is useful for
             // diagnosis; knowing what it said is nobody's business, including the log file's.
             Log.Write("Notify", $"Mirrored a notification from {peerName}.");
+
+            // Where a notification actually belongs. The page in this window is a record of what
+            // arrived; Action Center is the place a person will see it without being asked to look.
+            WindowsToasts.Show(notification, peerName);
             Raise();
         }
 
@@ -102,6 +106,9 @@ namespace WinDaemon
                 entry = node.Value;
                 Entries.Remove(node);
             }
+
+            // Whichever end dismissed it, the toast goes with it.
+            WindowsToasts.Remove(key);
 
             if (tellThePeer)
             {
@@ -130,6 +137,8 @@ namespace WinDaemon
             }
 
             if (dropped.Count == 0) return;
+
+            WindowsToasts.Clear();
 
             var send = DismissOnPeer;
             if (send != null)
@@ -160,6 +169,7 @@ namespace WinDaemon
                     var next = node.Next;
                     if (string.Equals(node.Value.PeerFingerprint, peerFingerprint, StringComparison.OrdinalIgnoreCase))
                     {
+                        WindowsToasts.Remove(node.Value.Notification.Key);
                         Entries.Remove(node);
                         removed = true;
                     }

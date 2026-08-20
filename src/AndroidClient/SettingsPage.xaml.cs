@@ -62,9 +62,12 @@ public partial class SettingsPage : ContentPage
 
     /// <summary>
     /// Two separate things, shown as two: whether Android will tell us about notifications at
-    /// all, and which apps we pass on. The grant is Android's to give and the allowlist is the
-    /// user's to choose, and conflating them is how an app ends up mirroring everything because
-    /// someone tapped Allow once.
+    /// all, and which apps are held back. The grant is Android's to give; the mute list is the
+    /// user's to choose.
+    ///
+    /// Every app mirrors once the grant is in place, so each switch here is on until it is
+    /// turned off. Banking and authenticator apps are what this list is for - an OTP should
+    /// not travel to every paired device.
     /// </summary>
     private void RenderNotifications()
     {
@@ -79,7 +82,7 @@ public partial class SettingsPage : ContentPage
         NotificationsState.Text = !granted
             ? "Needs notification access before it can mirror anything"
             : enabled
-                ? "On - the apps below appear on your other devices"
+                ? "On - every app mirrors except the ones you turn off below"
                 : "Off - nothing is being mirrored";
 
         NotificationsGrantButton.IsVisible = !granted;
@@ -91,11 +94,12 @@ public partial class SettingsPage : ContentPage
 
         if (granted && enabled)
         {
-            var allowed = Platforms.Android.NotificationMirrorSettings.Allowed();
+            var muted = Platforms.Android.NotificationMirrorSettings.Muted();
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
-            // Everything currently notifying, plus anything already allowed, so a choice never
-            // vanishes from the list merely because that app happens to be quiet right now.
+            // Everything currently notifying, plus anything already muted, so a mute never
+            // vanishes from the list merely because that app happens to be quiet right now -
+            // which would silently un-mute it as far as the user can tell.
             foreach (var (package, name) in Platforms.Android.NotificationMirrorService.RecentApps())
             {
                 if (!seen.Add(package)) continue;
@@ -103,14 +107,14 @@ public partial class SettingsPage : ContentPage
                 {
                     Package = package,
                     Name = name,
-                    Allowed = allowed.Contains(package, StringComparer.Ordinal)
+                    Mirrored = !muted.Contains(package, StringComparer.Ordinal)
                 });
             }
 
-            foreach (string package in allowed)
+            foreach (string package in muted)
             {
                 if (!seen.Add(package)) continue;
-                _notificationApps.Add(new NotificationAppRow { Package = package, Name = package, Allowed = true });
+                _notificationApps.Add(new NotificationAppRow { Package = package, Name = package, Mirrored = false });
             }
         }
 
@@ -158,17 +162,17 @@ public partial class SettingsPage : ContentPage
         if ((sender as Switch)?.ClassId is not string package || package.Length == 0) return;
 
 #if ANDROID
-        Platforms.Android.NotificationMirrorSettings.SetAllowed(package, e.Value);
-        Log.Write("Notify", e.Value ? "An app was added to notification mirroring." : "An app was removed from notification mirroring.");
+        // The switch reads as "mirror this app", so muting is its inverse.
+        Platforms.Android.NotificationMirrorSettings.SetMuted(package, muted: !e.Value);
 #endif
     }
 
-    /// <summary>One app in the mirroring allowlist.</summary>
+    /// <summary>One app in the mirroring list. The switch is on unless the app is muted.</summary>
     private sealed class NotificationAppRow
     {
         public string Package { get; init; } = "";
         public string Name { get; init; } = "";
-        public bool Allowed { get; init; }
+        public bool Mirrored { get; init; }
     }
 
     // ──────────────────────────────────── actions
