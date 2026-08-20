@@ -97,6 +97,11 @@ namespace AndroidClient.Platforms.Android
 
                 if (mirrored.Key.Length == 0) return;
 
+                // The one line that makes "why did this notification not appear on my computer"
+                // answerable. Bounded by how many notifications the allowed apps actually post,
+                // and the packages are ones the user chose, so it says which app rather than
+                // what was in it.
+                Log.Write("Notify", $"Mirroring a notification from {package}.");
                 _ = SyncManager.SendNotificationAsync(mirrored);
             }
             catch (Exception ex)
@@ -118,7 +123,10 @@ namespace AndroidClient.Platforms.Android
                 if (!NotificationMirrorSettings.IsAllowed(sbn.PackageName ?? "")) return;
 
                 string key = sbn.Key ?? "";
-                if (key.Length > 0) _ = SyncManager.SendNotificationDismissAsync(key);
+                if (key.Length == 0) return;
+
+                Log.Write("Notify", $"A notification from {sbn.PackageName} went away.");
+                _ = SyncManager.SendNotificationDismissAsync(key);
             }
             catch (Exception ex)
             {

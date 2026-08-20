@@ -43,6 +43,12 @@
 	<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 	<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
+	<!-- Ringing a lost phone. Without this the sound still plays but the buzz does not, which is
+	     the half that finds a phone face-down in a sofa. Android throws a SecurityException for
+	     the vibrate call rather than ignoring it, so the omission was silent until a real ring
+	     was tried on a real device. Normal permission: granted at install, never prompted. -->
+	<uses-permission android:name="android.permission.VIBRATE" />
+
 	<!-- The links are held by a real foreground service now. Before this there was an ongoing
 	     notification and no startForeground behind it, so Android would not keep a socket open
 	     in that context and Doze eventually killed it. connectedDevice is the type that

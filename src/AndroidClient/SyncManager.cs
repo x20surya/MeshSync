@@ -253,9 +253,9 @@ namespace AndroidClient
         /// the tier use it, so a device this phone has not paired with never reaches the point
         /// of having a session to encrypt with.
         /// </summary>
-        private static PeerSession? OpenBleSession(string peerPublicKey, string peerEphemeral,
-                                                   EphemeralKeyPair localEphemeral) =>
-            Security.Authorise(peerPublicKey)
+        private static PeerSession? OpenBleSession(string peerPublicKey, string peerName,
+                                                   string peerEphemeral, EphemeralKeyPair localEphemeral) =>
+            Security.Authorise(peerPublicKey, peerName)
                 ? Security.OpenSession(peerPublicKey, localEphemeral, peerEphemeral)
                 : null;
 
@@ -1058,7 +1058,14 @@ namespace AndroidClient
         /// </summary>
         public static async Task SendNotificationAsync(MirroredNotification notification)
         {
-            if (!IsConnected) return;
+            // Notifications are not queued: one that arrives while nothing is connected is stale
+            // by the time a link comes back, and the phone is still showing it anyway. Said out
+            // loud because otherwise this is indistinguishable from mirroring being broken.
+            if (!IsConnected)
+            {
+                Log.Write("Notify", "Nothing is connected, so that notification was not mirrored.");
+                return;
+            }
 
             byte[] body = NotificationProtocol.Build(notification);
 
@@ -1540,6 +1547,19 @@ namespace AndroidClient
         /// LAN address, and mobile data can never route to it. Asking only whether a network
         /// existed answered yes on cellular and spent the TCP timeout proving otherwise
         /// before Bluetooth got a turn.
+        ///
+        /// <para><b>The hotspot case, which the capability check alone gets wrong.</b> When the
+        /// phone is the hotspot and the computer is a client of it, the computer is one hop away
+        /// over the phone's own access-point interface - the best possible case for the Wi-Fi
+        /// tier. But <c>ActiveNetwork</c> reports cellular, because that is how the *phone*
+        /// reaches the internet, and tethering is not surfaced as a Wi-Fi transport at all. The
+        /// capability check therefore answered "no network" in the one topology where the peer
+        /// was closest, and images and file transfer silently fell back to Bluetooth or were
+        /// dropped as not worth encrypting.</para>
+        ///
+        /// <para>So a negative from the capability check is not taken as final: the interface
+        /// list is consulted for an access-point interface holding a private address. See
+        /// <see cref="HasTetheringInterface"/>.</para>
         /// </summary>
         private static bool HasUsableNetwork()
         {
@@ -1550,15 +1570,18 @@ namespace AndroidClient
                     .GetSystemService(Context.ConnectivityService);
 
                 var network = manager?.ActiveNetwork;
-                if (network == null) return false;
-
-                var capabilities = manager?.GetNetworkCapabilities(network);
-                if (capabilities == null) return false;
+                var capabilities = network == null ? null : manager?.GetNetworkCapabilities(network);
 
                 // Deliberately not checking Validated: a local-only network with no internet
                 // uplink is exactly the setup this project is built for.
-                return capabilities.HasTransport(global::Android.Net.TransportType.Wifi)
-                       || capabilities.HasTransport(global::Android.Net.TransportType.Ethernet);
+                if (capabilities != null
+                    && (capabilities.HasTransport(global::Android.Net.TransportType.Wifi)
+                        || capabilities.HasTransport(global::Android.Net.TransportType.Ethernet)))
+                {
+                    return true;
+                }
+
+                return HasTetheringInterface();
             }
             catch (Exception ex)
             {
@@ -1569,6 +1592,60 @@ namespace AndroidClient
             return true;
 #endif
         }
+
+#if ANDROID
+        /// <summary>
+        /// Whether this phone is running an access point that a peer could already be sitting on.
+        ///
+        /// <para>Android does not expose "I am a hotspot" through any supported API - the
+        /// <c>WifiManager</c> call for it has been hidden since API 26 - so the interface list is
+        /// the honest way to ask. An access point interface is up, is not loopback, carries a
+        /// private IPv4, and is named by one of the handful of conventions the OEMs use.</para>
+        ///
+        /// <para>The name check is what keeps this from answering yes on plain cellular, where
+        /// <c>rmnet</c> also carries a private address handed out by the carrier. Matching on
+        /// names is unlovely, but the alternative - treating any private IPv4 as reachable - puts
+        /// the five second TCP timeout back on the cellular path that the capability check was
+        /// added to avoid.</para>
+        /// </summary>
+        private static bool HasTetheringInterface()
+        {
+            // Every access-point interface name in use across the OEMs, lowercased.
+            string[] apPrefixes = ["ap", "swlan", "softap", "wlan1"];
+
+            foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                if (nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+
+                string name = nic.Name.ToLowerInvariant();
+                if (!apPrefixes.Any(p => name.StartsWith(p, StringComparison.Ordinal))) continue;
+
+                foreach (var address in nic.GetIPProperties().UnicastAddresses)
+                {
+                    if (address.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+                    if (!IsPrivateV4(address.Address)) continue;
+
+                    Log.Write("Sync", $"Acting as a hotspot on {nic.Name}, so the Wi-Fi tier is worth raising.");
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsPrivateV4(System.Net.IPAddress address)
+        {
+            byte[] o = address.GetAddressBytes();
+            return o[0] switch
+            {
+                10 => true,
+                172 => o[1] >= 16 && o[1] <= 31,
+                192 => o[1] == 168,
+                _ => false
+            };
+        }
+#endif
 
         private static DateTime _lastBleScanUtc = DateTime.MinValue;
 
