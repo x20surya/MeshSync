@@ -18,14 +18,18 @@ jobs:
     name: CoreLib and tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
 
+      # One project, not two: restore takes a single project or solution, and naming
+      # both failed outright with MSB1008. The test project references CoreLib, so
+      # restoring it restores both. The solution would not do - it holds the Android
+      # project, which needs a workload this job deliberately does not install.
       - name: Restore
-        run: dotnet restore src/CoreLib/CoreLib.csproj tests/CoreLib.Tests/CoreLib.Tests.csproj
+        run: dotnet restore tests/CoreLib.Tests/CoreLib.Tests.csproj
 
       # Warnings are errors here rather than a convention someone has to remember.
       # An incremental build does not re-report them, so this is a clean one every time.
@@ -39,9 +43,9 @@ jobs:
     name: Windows daemon
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
 
@@ -52,9 +56,9 @@ jobs:
     name: Android client
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
 
