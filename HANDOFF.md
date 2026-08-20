@@ -43,8 +43,9 @@ The clean pair the previous note asked for was done, and the Android Keystore wr
 intact.
 The accessibility grant is gone for good and nothing needs restoring in its place.
 
-Two things are still open and both need a person holding the phone: a real reboot, because
-`BOOT_COMPLETED` only arrives after the lock screen is cleared, and Doze survival overnight.
+The reboot was done too: the phone came back, the boot receiver started the service unaided, and
+the Keystore unwrapped the identity on the first run after a cold boot.
+What is still open is Doze survival overnight, which only time can answer.
 
 ---
 
@@ -127,6 +128,9 @@ Run on 2026-08-20 against the S21 FE (`AC83-492B-684F-4263`) and this laptop
 | The phone as hotspot raising the Wi-Fi tier | `[Sync] Acting as a hotspot on swlan0`, then `[Transport] Peer identified` |
 | Address handover both ways | Each side's `peers.json` now holds the other's address, and the daemon dialled the phone |
 | Recovery after being force-stopped | The process came back unaided and re-established the link |
+| Boot persistence, on a real reboot | `[Service] The phone restarted; bringing the links back.`, unprompted |
+| The Keystore unwrap after a cold boot | `[Sync] Identity AC83-492B-684F-4263, 1 paired device(s)` on the first run after restart |
+| A hotspot subnet change surviving | The subnet moved from `10.178.251.x` to `10.137.49.x` across the reboot and both sides re-announced and reconnected |
 
 ### Found on hardware and fixed
 
@@ -162,11 +166,6 @@ notification is dropped because nothing is connected.
 
 ### Still not verified
 
-- **A real reboot.**
-  The phone has a secure lock, so `BOOT_COMPLETED` is only broadcast after the user unlocks, and
-  `am broadcast` cannot stand in for it: `BOOT_COMPLETED` is a protected broadcast and the shell is
-  refused.
-  What was shown instead is that the app recovers unaided after a force-stop.
 - **Three devices at once.**
   The code holds a link per peer and fans out, but that path has only been exercised over loopback.
 - **A phone acting as peripheral carrying real traffic.**
