@@ -257,19 +257,47 @@ public class MeshLinksTests : IDisposable
         var dialB = b.Links.ConnectToAsync(PeerAt(b, a), TimeSpan.FromSeconds(10));
         await Task.WhenAll(dialA, dialB);
 
-        Assert.True(await WaitFor(() => a.Links.ConnectedCount == 1 && b.Links.ConnectedCount == 1));
-
-        // And the surviving link still carries traffic in both directions.
         var atA = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         var atB = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         a.Links.PayloadReceived += (_, e) => atA.TrySetResult(e.Body);
         b.Links.PayloadReceived += (_, e) => atB.TrySetResult(e.Body);
 
-        Assert.Equal(1, await a.Links.BroadcastAsync(SyncContent.Text, "a to b"u8.ToArray()));
-        Assert.Equal(1, await b.Links.BroadcastAsync(SyncContent.Text, "b to a"u8.ToArray()));
+        // Probed until it flows rather than asserted at one instant, because there is no
+        // moment this test can name as "converged".
+        //
+        // Both dials have returned, so each side has identified the link it opened. Each is
+        // still about to receive the one the peer opened, and only then does it notice the
+        // collision and retire the loser. ConnectedCount is 1 throughout - before the second
+        // link arrives and after the loser is gone - so it cannot tell those two apart, and
+        // waiting on it passes in the first window as readily as the second. Sending there
+        // puts a payload on a socket that is about to be dropped, which is precisely how this
+        // failed on a slower machine while passing on a faster one.
+        //
+        // Retiring a link raises nothing, so there is no signal to wait for either. What can
+        // be observed is the property actually under test: that traffic ends up crossing.
+        var deadline = DateTime.UtcNow + Timeout;
 
-        Assert.Equal("a to b"u8.ToArray(), await atB.Task.WaitAsync(Timeout));
-        Assert.Equal("b to a"u8.ToArray(), await atA.Task.WaitAsync(Timeout));
+        while (DateTime.UtcNow < deadline && !(atA.Task.IsCompleted && atB.Task.IsCompleted))
+        {
+            // The result is deliberately not asserted here. A send made during the collision
+            // can land on the socket that is about to lose and fail, and that is the behaviour
+            // under test rather than a fault - asserting on it would be asserting that the race
+            // does not happen. What matters is that a send eventually crosses, and that is what
+            // the loop is waiting for.
+            await a.Links.BroadcastAsync(SyncContent.Text, "a to b"u8.ToArray());
+            await b.Links.BroadcastAsync(SyncContent.Text, "b to a"u8.ToArray());
+
+            await Task.Delay(100);
+        }
+
+        Assert.Equal("a to b"u8.ToArray(), await atB.Task.WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.Equal("b to a"u8.ToArray(), await atA.Task.WaitAsync(TimeSpan.FromSeconds(1)));
+
+        // Converged, and stays converged: one link each, and it still carries a send.
+        Assert.Equal(1, a.Links.ConnectedCount);
+        Assert.Equal(1, b.Links.ConnectedCount);
+        Assert.Equal(1, await a.Links.BroadcastAsync(SyncContent.Text, "still there"u8.ToArray()));
+        Assert.Equal(1, await b.Links.BroadcastAsync(SyncContent.Text, "still there"u8.ToArray()));
     }
 
     /// <summary>
