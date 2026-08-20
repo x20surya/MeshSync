@@ -164,8 +164,47 @@ A listener that Android had not yet bound looked exactly like mirroring being br
 There is now one line when a notification is mirrored, one when it goes away, and one when a
 notification is dropped because nothing is connected.
 
+### Added after the hardware run
+
+**Notification mirroring is on by default and muted per app.**
+Deny-by-default plus an empty allow list meant three opt-ins before anything appeared, which is
+indistinguishable from the feature being broken.
+The listener grant is the real gate; the mute list is what banking and authenticator apps are for.
+Old settings are dropped on read rather than translated - an allow list of three apps is not a mute
+list of every other one.
+
+**Mirrored notifications reach the Windows notification centre.**
+An AppUserModelID registered under `HKCU` is what makes toasts possible without an installer, and a
+hashed tag is what makes them removable when the phone dismisses one.
+Verified by watching `LastNotificationAddedTime` advance under the app's own id on every send.
+Banners will not appear while Windows Do Not Disturb is on, which is a setting rather than a bug and
+cost some time to work out.
+
+**The phone displays notifications from the mesh** instead of only sourcing them, and a swipe there
+tells the device it came from - through a delete intent, because the listener ignores this app's own
+notifications and would never see it.
+
+**The phone can send a file and open one that arrives.**
+`SendFileAsync` had existed with nothing calling it.
+Receiving had the matching hole: a file arrived and could not be reached from the app that received
+it, because a file written through MediaStore has no path the app is allowed to know and the content
+URI has to be kept at the moment of writing.
+
+**Browsing a paired device's shared folders, both ways.**
+`SharedFolders` is the whole security story: the wire carries a folder id and a relative path, never
+a path, and the relative half is rejected, joined, resolved and then checked to still be inside the
+folder it came from.
+Downloads is shared out of the box on both sides.
+
 ### Still not verified
 
+- **Browsing, against a device that speaks it.** The daemon's half was exercised against a phone
+  still on the older build: the request timed out, the page said so plainly, and the link was
+  unharmed - which is the degradation that was wanted and is not the same as a listing arriving.
+  Deploying to the phone needs USB, and the cable was not carrying data.
+- **A file pulled by fetch rather than pushed**, and the phone's own Files page against the desktop.
+- **The phone displaying a mirrored notification**, which needs a second phone or Windows-to-phone
+  mirroring to have a sender at all.
 - **Three devices at once.**
   The code holds a link per peer and fans out, but that path has only been exercised over loopback.
 - **A phone acting as peripheral carrying real traffic.**
