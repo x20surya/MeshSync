@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>LinuxDaemon</RootNamespace>
+    <!-- Named so the thing on PATH reads like a daemon rather than like a project. -->
+    <AssemblyName>meshsyncd</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DesktopCore\DesktopCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WinDaemon uses this package's System.Drawing renderer, which is Windows only.
+         Only QRCodeData is touched here, and that half is portable. -->
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+  </ItemGroup>
+
+</Project>

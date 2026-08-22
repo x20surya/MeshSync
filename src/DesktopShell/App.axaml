@@ -1,0 +1,187 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="DesktopShell.App"
+             RequestedThemeVariant="Default">
+
+    <Application.Styles>
+        <FluentTheme />
+
+        <!-- Type. The Windows daemon uses Segoe UI Variable at 13; Inter is the bundled
+             equivalent here and the sizes are carried across unchanged so the two builds read
+             the same. -->
+        <Style Selector="Window">
+            <Setter Property="FontFamily" Value="Inter, Segoe UI, Cantarell, Noto Sans, sans-serif" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+        </Style>
+
+        <Style Selector="TextBlock.h2">
+            <Setter Property="FontSize" Value="19" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+            <Setter Property="Margin" Value="0,22,0,4" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource B.TextMuted}" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.faint">
+            <Setter Property="Foreground" Value="{DynamicResource B.TextFaint}" />
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="TextBlock.sectionlabel">
+            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource B.TextFaint}" />
+            <Setter Property="Margin" Value="2,30,0,8" />
+        </Style>
+        <Style Selector="TextBlock.mono">
+            <Setter Property="FontFamily" Value="Cascadia Mono, DejaVu Sans Mono, monospace" />
+        </Style>
+
+        <!-- Sidebar navigation. A RadioButton, exactly as on Windows, so one is always chosen
+             and the keyboard moves between them. -->
+        <Style Selector="RadioButton.nav">
+            <!-- Transparent rather than unset. A null background is not hit-testable in Avalonia,
+                 so the row swallowed nothing and only the label text itself answered a click -
+                 which is why navigation worked sometimes and not others. -->
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource B.TextMuted}" />
+            <Setter Property="Margin" Value="8,1" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Name="Root" Background="{TemplateBinding Background}"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="RadioButton.nav:pointerover /template/ Border#Root">
+            <Setter Property="Background" Value="{DynamicResource B.SurfaceAlt}" />
+        </Style>
+        <Style Selector="RadioButton.nav:checked /template/ Border#Root">
+            <Setter Property="Background" Value="{DynamicResource B.AccentSoft}" />
+        </Style>
+        <Style Selector="RadioButton.nav:checked">
+            <Setter Property="Foreground" Value="{DynamicResource B.Accent}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="RadioButton.nav Path">
+            <Setter Property="Stroke" Value="{Binding $parent[RadioButton].Foreground}" />
+            <Setter Property="StrokeThickness" Value="1.4" />
+            <Setter Property="Fill" Value="Transparent" />
+            <Setter Property="Width" Value="18" />
+            <Setter Property="Height" Value="18" />
+            <Setter Property="Margin" Value="0,0,11,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="{DynamicResource B.Surface}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource B.Border}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="16" />
+        </Style>
+
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="{DynamicResource B.Accent}" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="18,9" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource B.AccentHover}" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+        </Style>
+        <Style Selector="Button.quiet">
+            <Setter Property="Background" Value="{DynamicResource B.Surface}" />
+            <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource B.BorderStrong}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="12,5" />
+            <Setter Property="FontSize" Value="11.5" />
+        </Style>
+        <Style Selector="Button.caption">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource B.TextMuted}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Width" Value="42" />
+            <Setter Property="Height" Value="42" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style Selector="TextBox">
+            <Setter Property="Background" Value="{DynamicResource B.Surface}" />
+            <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource B.Border}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="FontSize" Value="13.5" />
+        </Style>
+    </Application.Styles>
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- The canonical Mesh Sync palette, the same values the Windows daemon uses.
+                 Avalonia swaps these by theme variant, so the window follows the desktop
+                 rather than needing a theme switch of its own. -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="B.Bg"           Color="#F7F6F3" />
+                    <SolidColorBrush x:Key="B.Surface"      Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="B.SurfaceAlt"   Color="#F1EFEA" />
+                    <SolidColorBrush x:Key="B.Sidebar"      Color="#F1EFEA" />
+                    <SolidColorBrush x:Key="B.Border"       Color="#E5E1DA" />
+                    <SolidColorBrush x:Key="B.BorderStrong" Color="#D3CEC5" />
+                    <SolidColorBrush x:Key="B.Text"         Color="#262523" />
+                    <SolidColorBrush x:Key="B.TextMuted"    Color="#77726A" />
+                    <SolidColorBrush x:Key="B.TextFaint"    Color="#A39D94" />
+                    <SolidColorBrush x:Key="B.Accent"       Color="#2F7A6B" />
+                    <SolidColorBrush x:Key="B.AccentHover"  Color="#28695C" />
+                    <SolidColorBrush x:Key="B.AccentSoft"   Color="#E6F1EE" />
+                    <SolidColorBrush x:Key="B.Warn"         Color="#B0722F" />
+                    <SolidColorBrush x:Key="B.WarnSoft"     Color="#FBF1E3" />
+                    <SolidColorBrush x:Key="B.Danger"       Color="#B0524A" />
+                    <SolidColorBrush x:Key="B.DangerSoft"   Color="#FAEBE9" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="B.Bg"           Color="#17181A" />
+                    <SolidColorBrush x:Key="B.Surface"      Color="#1F2124" />
+                    <SolidColorBrush x:Key="B.SurfaceAlt"   Color="#282B2E" />
+                    <SolidColorBrush x:Key="B.Sidebar"      Color="#141517" />
+                    <SolidColorBrush x:Key="B.Border"       Color="#2E3134" />
+                    <SolidColorBrush x:Key="B.BorderStrong" Color="#3E4246" />
+                    <SolidColorBrush x:Key="B.Text"         Color="#E9E7E3" />
+                    <SolidColorBrush x:Key="B.TextMuted"    Color="#9C978F" />
+                    <SolidColorBrush x:Key="B.TextFaint"    Color="#726E68" />
+                    <SolidColorBrush x:Key="B.Accent"       Color="#4FA894" />
+                    <SolidColorBrush x:Key="B.AccentHover"  Color="#5FBAA5" />
+                    <SolidColorBrush x:Key="B.AccentSoft"   Color="#1C2E2A" />
+                    <SolidColorBrush x:Key="B.Warn"         Color="#D69A5A" />
+                    <SolidColorBrush x:Key="B.WarnSoft"     Color="#2E2620" />
+                    <SolidColorBrush x:Key="B.Danger"       Color="#D4776E" />
+                    <SolidColorBrush x:Key="B.DangerSoft"   Color="#2E2220" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

@@ -1,0 +1,502 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:app="clr-namespace:DesktopShell"
+        x:Class="DesktopShell.MainWindow"
+        Title="Mesh Sync"
+        Width="880" Height="620"
+        MinWidth="700" MinHeight="520"
+        Background="{DynamicResource B.Bg}"
+        Icon="avares://meshsync/Assets/meshsync.png">
+
+  <Grid ColumnDefinitions="196,*">
+
+    <!-- ══════════════════════ SIDEBAR ══════════════════════ -->
+    <Border Grid.Column="0" Background="{DynamicResource B.Sidebar}"
+            BorderBrush="{DynamicResource B.Border}" BorderThickness="0,0,1,0">
+      <Grid RowDefinitions="42,1,*,Auto">
+
+        <!-- Brand. The mark is two rings and the lens where they meet, drawn rather than
+             loaded, so it takes the accent colour and follows the theme. -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+          <Viewbox Width="22" Height="13" VerticalAlignment="Center">
+            <Canvas Width="167" Height="99">
+              <Ellipse Canvas.Left="5.5" Canvas.Top="5.5" Width="88" Height="88"
+                       Stroke="{DynamicResource B.Accent}" StrokeThickness="11" Fill="Transparent" />
+              <Ellipse Canvas.Left="73.5" Canvas.Top="5.5" Width="88" Height="88"
+                       Stroke="{DynamicResource B.Accent}" StrokeThickness="11" Fill="Transparent" />
+              <Path Fill="{DynamicResource B.Accent}"
+                    Data="M 83.5 21.6 A 44 44 0 0 1 83.5 77.4 A 44 44 0 0 1 83.5 21.6 Z" />
+            </Canvas>
+          </Viewbox>
+          <TextBlock Text="MESH SYNC" FontWeight="SemiBold" FontSize="11"
+                     Margin="10,0,0,0" VerticalAlignment="Center"
+                     Foreground="{DynamicResource B.Text}" />
+        </StackPanel>
+
+        <Border Grid.Row="1" Background="{DynamicResource B.Border}" />
+
+        <StackPanel Grid.Row="2" Margin="0,8,0,0">
+          <RadioButton x:Name="NavHome" Classes="nav" GroupName="Nav" Tag="Home" IsChecked="True"
+                       IsCheckedChanged="OnNavChanged">
+            <StackPanel Orientation="Horizontal">
+              <Path Data="M 1,7 L 9,1 L 17,7 L 17,17 L 11,17 L 11,11 L 7,11 L 7,17 L 1,17 Z" />
+              <TextBlock Text="Home" VerticalAlignment="Center" />
+            </StackPanel>
+          </RadioButton>
+
+          <RadioButton x:Name="NavActivity" Classes="nav" GroupName="Nav" Tag="Activity"
+                       IsCheckedChanged="OnNavChanged">
+            <StackPanel Orientation="Horizontal">
+              <Path Data="M 1,11 L 5,11 L 7,5 L 10,15 L 12,9 L 14,11 L 17,11" />
+              <TextBlock Text="Activity" VerticalAlignment="Center" />
+            </StackPanel>
+          </RadioButton>
+
+          <RadioButton x:Name="NavNotifications" Classes="nav" GroupName="Nav" Tag="Notifications"
+                       IsCheckedChanged="OnNavChanged">
+            <StackPanel Orientation="Horizontal">
+              <Path Data="M 9,2 C 6,2 4,4 4,7 L 4,11 L 2,14 L 16,14 L 14,11 L 14,7 C 14,4 12,2 9,2 Z M 7,15 C 7,16.5 8,17 9,17 C 10,17 11,16.5 11,15" />
+              <TextBlock x:Name="NavNotificationsLabel" Text="Notifications" VerticalAlignment="Center" />
+            </StackPanel>
+          </RadioButton>
+
+          <RadioButton x:Name="NavFiles" Classes="nav" GroupName="Nav" Tag="Files"
+                       IsCheckedChanged="OnNavChanged">
+            <StackPanel Orientation="Horizontal">
+              <Path Data="M 2,4 L 7,4 L 9,6 L 16,6 L 16,15 L 2,15 Z" />
+              <TextBlock Text="Files" VerticalAlignment="Center" />
+            </StackPanel>
+          </RadioButton>
+
+          <RadioButton x:Name="NavDevices" Classes="nav" GroupName="Nav" Tag="Devices"
+                       IsCheckedChanged="OnNavChanged">
+            <StackPanel Orientation="Horizontal">
+              <Path Data="M 1,3 L 7,3 L 7,15 L 1,15 Z M 10,6 L 17,6 L 17,13 L 10,13 Z M 9,16 L 18,16" />
+              <TextBlock Text="Devices" VerticalAlignment="Center" />
+            </StackPanel>
+          </RadioButton>
+
+          <RadioButton x:Name="NavSettings" Classes="nav" GroupName="Nav" Tag="Settings"
+                       IsCheckedChanged="OnNavChanged">
+            <StackPanel Orientation="Horizontal">
+              <!-- Hub plus eight spokes: reads as a gear at 17px, where a properly toothed
+                   outline just turns into a blob. -->
+              <Path Data="M 9,5.5 A 3.5,3.5 0 1 1 9,12.5 A 3.5,3.5 0 1 1 9,5.5 Z
+                          M 9,1 L 9,3.2 M 9,14.8 L 9,17 M 1,9 L 3.2,9 M 14.8,9 L 17,9
+                          M 3.3,3.3 L 4.9,4.9 M 13.1,13.1 L 14.7,14.7
+                          M 14.7,3.3 L 13.1,4.9 M 4.9,13.1 L 3.3,14.7" />
+              <TextBlock Text="Settings" VerticalAlignment="Center" />
+            </StackPanel>
+          </RadioButton>
+
+          <RadioButton x:Name="NavAbout" Classes="nav" GroupName="Nav" Tag="About"
+                       IsCheckedChanged="OnNavChanged">
+            <StackPanel Orientation="Horizontal">
+              <Path Data="M 9,1 A 8,8 0 1 1 9,17 A 8,8 0 1 1 9,1 Z M 9,8 L 9,13 M 9,5.2 L 9,5.4" />
+              <TextBlock Text="About" VerticalAlignment="Center" />
+            </StackPanel>
+          </RadioButton>
+        </StackPanel>
+
+        <Border Grid.Row="3" Margin="12,10,12,14" CornerRadius="8" Padding="11,9"
+                Background="{DynamicResource B.Surface}"
+                BorderBrush="{DynamicResource B.Border}" BorderThickness="1">
+          <StackPanel Orientation="Horizontal">
+            <Ellipse x:Name="SidebarDot" Width="8" Height="8" VerticalAlignment="Center"
+                     Fill="{DynamicResource B.Warn}" Margin="0,0,9,0" />
+            <TextBlock x:Name="SidebarStatus" Text="Waiting" FontSize="11.5" VerticalAlignment="Center"
+                       Foreground="{DynamicResource B.TextMuted}" TextTrimming="CharacterEllipsis" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Border>
+
+    <!-- ══════════════════════ CONTENT ══════════════════════ -->
+    <Grid Grid.Column="1" RowDefinitions="42,*">
+
+      <Grid Grid.Row="0" Background="{DynamicResource B.Bg}">
+        <TextBlock x:Name="SectionTitle" Text="Home" FontWeight="SemiBold" FontSize="12.5"
+                   VerticalAlignment="Center" Margin="24,0,0,0" />
+        <Button Classes="caption" HorizontalAlignment="Right" Click="OnHide" ToolTip.Tip="Hide to tray">
+          <Path Data="M 0,0 L 9,9 M 9,0 L 0,9" Stroke="{DynamicResource B.TextMuted}"
+                StrokeThickness="1.2" Width="9" Height="9" />
+        </Button>
+      </Grid>
+
+      <Border x:Name="RingBanner" Grid.Row="1" IsVisible="False" ZIndex="10"
+              VerticalAlignment="Top" Padding="28,12"
+              Background="{DynamicResource B.WarnSoft}"
+              BorderBrush="{DynamicResource B.Warn}" BorderThickness="0,0,0,1">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" VerticalAlignment="Center">
+            <TextBlock Text="This computer is ringing" FontSize="14" FontWeight="SemiBold"
+                       Foreground="{DynamicResource B.Warn}" />
+            <TextBlock x:Name="RingBannerDetail" Classes="muted" FontSize="12" Margin="0,2,0,0" />
+          </StackPanel>
+          <Button Grid.Column="1" Classes="primary" Content="Stop" Padding="20,7"
+                  VerticalAlignment="Center" Click="OnStopRinging" />
+        </Grid>
+      </Border>
+
+      <ScrollViewer Grid.Row="1" Padding="28,4,28,0" HorizontalScrollBarVisibility="Disabled">
+        <Grid>
+
+          <!-- ─────────── HOME ─────────── -->
+          <StackPanel x:Name="PageHome" MaxWidth="460">
+            <Grid Width="112" Height="112" HorizontalAlignment="Center" Margin="0,26,0,0">
+              <Ellipse Width="112" Height="112" Fill="{DynamicResource B.AccentSoft}" />
+              <Ellipse x:Name="StatusRing" Width="86" Height="86"
+                       Stroke="{DynamicResource B.Accent}" StrokeThickness="2.5" Fill="Transparent" />
+              <Path x:Name="IconTick" Data="M 0,8 L 6.5,14.5 L 19,1"
+                    Stroke="{DynamicResource B.Accent}" StrokeThickness="3"
+                    StrokeLineCap="Round" StrokeJoin="Round"
+                    Width="20" Height="16"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" />
+              <Ellipse x:Name="IconSpinner" Width="86" Height="86" IsVisible="False"
+                       Stroke="{DynamicResource B.Warn}" StrokeThickness="2.5"
+                       StrokeDashArray="5,4" RenderTransformOrigin="50%,50%">
+                <Ellipse.Styles>
+                  <Style Selector="Ellipse#IconSpinner">
+                    <Style.Animations>
+                      <Animation Duration="0:0:3" IterationCount="Infinite">
+                        <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0" /></KeyFrame>
+                        <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="360" /></KeyFrame>
+                      </Animation>
+                    </Style.Animations>
+                  </Style>
+                </Ellipse.Styles>
+                <Ellipse.RenderTransform>
+                  <RotateTransform />
+                </Ellipse.RenderTransform>
+              </Ellipse>
+            </Grid>
+
+            <TextBlock x:Name="StatusHeadline" Text="Waiting for a device"
+                       FontSize="26" FontWeight="SemiBold"
+                       Foreground="{DynamicResource B.Warn}"
+                       HorizontalAlignment="Center" TextAlignment="Center"
+                       TextWrapping="Wrap" Margin="0,20,0,0" />
+
+            <TextBlock x:Name="StatusDetail" Classes="muted" FontSize="13.5"
+                       HorizontalAlignment="Center" TextAlignment="Center" Margin="0,7,0,0"
+                       Text="Open Mesh Sync on another device and scan the pairing code." />
+
+            <Button x:Name="BtnPrimary" Classes="primary" Content="Pair a device"
+                    MinWidth="168" HorizontalAlignment="Center" Margin="0,20,0,0"
+                    Click="OnGoToDevices" />
+
+            <TextBlock x:Name="StatusSub" Classes="faint" FontSize="12"
+                       HorizontalAlignment="Center" TextAlignment="Center" Margin="0,12,0,0" />
+
+            <TextBlock Text="SEND SOMETHING" Classes="sectionlabel" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox Grid.Column="0" x:Name="SendBox" PlaceholderText="Text to send to every device" />
+              <Button Grid.Column="1" Classes="primary" Content="Send" Padding="16,8" Click="OnSend" />
+            </Grid>
+            <TextBlock x:Name="ClipboardNote" Classes="faint" Margin="2,8,0,0" />
+            <TextBlock x:Name="FooterHint" Classes="faint" Margin="2,2,0,0" />
+
+            <Border Classes="card" Padding="0" Margin="0,22,0,0">
+              <Grid Height="70" ColumnDefinitions="*,1,*">
+                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                  <TextBlock x:Name="SentCount" Text="0" FontSize="21" FontWeight="SemiBold"
+                             HorizontalAlignment="Center" />
+                  <TextBlock Text="sent" Classes="muted" FontSize="11"
+                             HorizontalAlignment="Center" Margin="0,2,0,0" />
+                </StackPanel>
+                <Rectangle Grid.Column="1" Fill="{DynamicResource B.Border}" Margin="0,16" />
+                <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                  <TextBlock x:Name="ReceivedCount" Text="0" FontSize="21" FontWeight="SemiBold"
+                             HorizontalAlignment="Center" />
+                  <TextBlock Text="received" Classes="muted" FontSize="11"
+                             HorizontalAlignment="Center" Margin="0,2,0,0" />
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <Border Height="28" Background="Transparent" />
+          </StackPanel>
+
+          <!-- ─────────── ACTIVITY ─────────── -->
+          <StackPanel x:Name="PageActivity" IsVisible="False" MaxWidth="620">
+            <TextBlock Text="Recent syncs" Classes="h2" />
+            <TextBlock Classes="muted"
+                       Text="Held in memory only and cleared when Mesh Sync closes. Clipboard contents are never written to disk." />
+
+            <Border Classes="card" Padding="6,4" Margin="0,16,0,0">
+              <StackPanel>
+                <ItemsControl x:Name="ActivityList">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="app:ActivityRow">
+                      <Grid Margin="10,10" ColumnDefinitions="Auto,*,Auto">
+                        <Border Grid.Column="0" Width="28" Height="28" CornerRadius="8"
+                                Background="{DynamicResource B.SurfaceAlt}"
+                                VerticalAlignment="Center" Margin="0,0,12,0">
+                          <TextBlock Text="{Binding Glyph}" FontSize="12.5"
+                                     Foreground="{DynamicResource B.TextMuted}"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Title}" FontSize="13"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Sub}" Classes="muted" FontSize="11"
+                                     Margin="0,2,0,0" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="2" Text="{Binding Age}" Classes="faint" FontSize="11"
+                                   VerticalAlignment="Center" Margin="8,0,2,0" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock x:Name="ActivityEmpty" Classes="muted" Margin="12,16,12,18"
+                           Text="Nothing yet. Copy something on another device, or send text from Home." />
+              </StackPanel>
+            </Border>
+            <Border Height="28" Background="Transparent" />
+          </StackPanel>
+
+          <!-- ─────────── NOTIFICATIONS ─────────── -->
+          <StackPanel x:Name="PageNotifications" IsVisible="False" MaxWidth="620">
+            <Grid ColumnDefinitions="*,Auto" Margin="0,22,0,4">
+              <TextBlock Grid.Column="0" Text="From your phone" FontSize="19" FontWeight="SemiBold"
+                         VerticalAlignment="Center" />
+              <Button Grid.Column="1" Classes="quiet" Content="Clear all" Padding="14,5"
+                      VerticalAlignment="Center" Click="OnClearNotifications" />
+            </Grid>
+            <TextBlock Classes="muted"
+                       Text="Held in memory only and never written to disk. Dismissing one here dismisses it on the phone too." />
+
+            <Border Classes="card" Padding="6,4" Margin="0,16,0,0">
+              <StackPanel>
+                <ItemsControl x:Name="NotificationList">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="app:NotificationRow">
+                      <Grid Margin="10,10" ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Heading}" FontSize="13" FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Body}" Classes="muted" FontSize="12"
+                                     Margin="0,2,0,0" TextWrapping="Wrap" MaxHeight="42" />
+                          <TextBlock Text="{Binding Source}" Classes="faint" FontSize="11"
+                                     Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Classes="quiet" Content="Dismiss" Margin="10,0,0,0"
+                                VerticalAlignment="Center" Tag="{Binding Key}" Click="OnDismissNotification" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock x:Name="NotificationsEmpty" Classes="muted" Margin="10,16,10,18"
+                           Text="Nothing here. Turn on notification mirroring in the phone's settings and choose which apps to include." />
+              </StackPanel>
+            </Border>
+            <Border Height="28" Background="Transparent" />
+          </StackPanel>
+
+          <!-- ─────────── FILES ─────────── -->
+          <StackPanel x:Name="PageFiles" IsVisible="False" MaxWidth="620">
+            <TextBlock Text="Files" Classes="h2" />
+            <TextBlock Classes="muted"
+                       Text="Files go over Wi-Fi and are streamed straight to disk, hashed on both ends so a truncated transfer is a failure rather than a file that looks complete." />
+
+            <Border Classes="card" Margin="0,16,0,0">
+              <StackPanel Spacing="10">
+                <TextBlock Text="Send a file" FontSize="13" FontWeight="SemiBold" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <ComboBox Grid.Column="0" x:Name="FileTargetBox" HorizontalAlignment="Stretch"
+                            PlaceholderText="Choose a connected device" />
+                  <Button Grid.Column="1" Classes="primary" Content="Choose a file"
+                          Padding="16,8" Click="OnSendFile" />
+                </Grid>
+                <TextBlock x:Name="FileSendStatus" Classes="faint" />
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="Received" Classes="h2" Margin="0,26,0,4" />
+            <TextBlock Classes="muted" Text="Everything that has arrived this session. Files land in your Downloads folder." />
+
+            <Border Classes="card" Padding="6,4" Margin="0,12,0,0">
+              <StackPanel>
+                <ItemsControl x:Name="FileList">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="app:FileRow">
+                      <Grid Margin="10,10" ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0">
+                          <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Sub}" Classes="muted" FontSize="11"
+                                     Margin="0,2,0,0" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Classes="quiet" Content="Open folder"
+                                VerticalAlignment="Center" Tag="{Binding Path}" Click="OnOpenFile" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock x:Name="FilesEmpty" Classes="muted" Margin="10,16,10,18"
+                           Text="Nothing has arrived yet." />
+              </StackPanel>
+            </Border>
+            <Border Height="28" Background="Transparent" />
+          </StackPanel>
+
+          <!-- ─────────── DEVICES ─────────── -->
+          <StackPanel x:Name="PageDevices" IsVisible="False" MaxWidth="480">
+            <TextBlock Text="Your mesh" Classes="h2" />
+            <TextBlock Classes="muted"
+                       Text="What to call this set of devices. A device that scans the code below joins under this name." />
+            <TextBox x:Name="MeshNameBox" Margin="0,10,0,0" MaxLength="40" LostFocus="OnMeshNameCommitted" />
+
+            <Border x:Name="PendingCard" IsVisible="False" Margin="0,20,0,0"
+                    Background="{DynamicResource B.WarnSoft}"
+                    BorderBrush="{DynamicResource B.Warn}" BorderThickness="1"
+                    CornerRadius="10" Padding="16,14">
+              <StackPanel>
+                <TextBlock Text="A device wants to join" FontSize="14" FontWeight="SemiBold"
+                           Foreground="{DynamicResource B.Warn}" />
+                <TextBlock Classes="muted" FontSize="12" Margin="0,4,0,0"
+                           Text="Check this code matches the one shown on the other device before you allow it." />
+                <ItemsControl x:Name="PendingList" Margin="0,10,0,0">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="app:PendingRow">
+                      <Grid Margin="0,7" ColumnDefinitions="*,Auto,Auto">
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Fingerprint}" Classes="mono" FontSize="15"
+                                     FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding Heading}" Classes="muted" FontSize="11.5"
+                                     Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Classes="quiet" Content="Reject" Margin="0,0,8,0"
+                                VerticalAlignment="Center" Tag="{Binding Fingerprint}" Click="OnReject" />
+                        <Button Grid.Column="2" Classes="primary" Content="Allow" Padding="14,5"
+                                FontSize="11.5" VerticalAlignment="Center"
+                                Tag="{Binding Fingerprint}" Click="OnConfirm" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="Devices" Classes="h2" Margin="0,26,0,4" />
+            <TextBlock Classes="muted" Text="Everything paired into this mesh." />
+
+            <Border Classes="card" Margin="0,12,0,0" Padding="6">
+              <StackPanel>
+                <ItemsControl x:Name="DeviceList">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="app:DeviceRow">
+                      <Grid Margin="12,11" ColumnDefinitions="Auto,*,Auto,Auto">
+                        <Ellipse Grid.Column="0" Width="9" Height="9" VerticalAlignment="Center"
+                                 Margin="2,0,12,0" Fill="{Binding Dot}" />
+                        <StackPanel Grid.Column="1">
+                          <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Fingerprint}" Classes="mono muted" FontSize="11.5"
+                                     Margin="0,2,0,0" />
+                          <TextBlock Text="{Binding Detail}" Classes="faint" FontSize="11"
+                                     Margin="0,2,0,0" />
+                        </StackPanel>
+                        <Button Grid.Column="2" Classes="quiet" Content="Ring" Margin="10,0,8,0"
+                                VerticalAlignment="Center" IsEnabled="{Binding Connected}"
+                                Tag="{Binding Fingerprint}" Click="OnRing" />
+                        <Button Grid.Column="3" Classes="quiet" Content="Forget"
+                                VerticalAlignment="Center" Tag="{Binding Fingerprint}" Click="OnForget" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock x:Name="DevicesEmpty" Classes="muted" Margin="12,14,12,16"
+                           Text="Nothing paired yet. Scan the code below from another device." />
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="Pairing code" Classes="h2" Margin="0,26,0,4" />
+            <TextBlock Classes="muted"
+                       Text="Scan this from the other device. It will be refused once and ask you to compare fingerprints, which is what stops someone else joining first." />
+
+            <Border Classes="card" Margin="0,12,0,0">
+              <StackPanel>
+                <Border Background="#FFFFFF" CornerRadius="8" Padding="10" HorizontalAlignment="Center">
+                  <Image x:Name="QrImage" Width="208" Height="208" />
+                </Border>
+                <TextBlock x:Name="PairWindowText" Classes="faint" HorizontalAlignment="Center"
+                           Margin="0,10,0,0" />
+                <Button x:Name="CopyUriButton" Classes="quiet" Content="Copy the code"
+                        HorizontalAlignment="Center" Margin="0,10,0,0" Click="OnCopyUri" />
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="JOIN A MESH INSTEAD" Classes="sectionlabel" />
+            <TextBlock Classes="muted" Margin="0,0,0,8"
+                       Text="Paste a code shown by another computer, where neither has a camera." />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox Grid.Column="0" x:Name="JoinBox" PlaceholderText="meshsync://pair?..." />
+              <Button Grid.Column="1" Classes="primary" Content="Join" Padding="16,8" Click="OnJoin" />
+            </Grid>
+            <TextBlock x:Name="JoinResult" Classes="faint" Margin="2,8,0,0" />
+
+            <Border Height="28" Background="Transparent" />
+          </StackPanel>
+
+          <!-- ─────────── SETTINGS ─────────── -->
+          <StackPanel x:Name="PageSettings" IsVisible="False" MaxWidth="560">
+            <TextBlock Text="Settings" Classes="h2" />
+            <TextBlock Classes="muted" Text="What this device is, and where it keeps things." />
+
+            <Border Classes="card" Margin="0,16,0,0">
+              <StackPanel Spacing="12">
+                <StackPanel>
+                  <TextBlock Text="This device" FontSize="13" FontWeight="SemiBold" />
+                  <TextBlock x:Name="SettingsName" Classes="muted" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel>
+                  <TextBlock Text="Fingerprint" FontSize="13" FontWeight="SemiBold" />
+                  <TextBlock x:Name="SettingsFingerprint" Classes="mono muted" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel>
+                  <TextBlock Text="Listening on" FontSize="13" FontWeight="SemiBold" />
+                  <TextBlock x:Name="SettingsAddress" Classes="muted" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel>
+                  <TextBlock Text="Clipboard" FontSize="13" FontWeight="SemiBold" />
+                  <TextBlock x:Name="SettingsClipboard" Classes="muted" Margin="0,3,0,0" />
+                </StackPanel>
+                <CheckBox x:Name="StartupSwitch" Content="Start Mesh Sync when I log in"
+                          IsCheckedChanged="OnStartupChanged" />
+                <StackPanel>
+                  <TextBlock Text="Identity key" FontSize="13" FontWeight="SemiBold" />
+                  <TextBlock x:Name="SettingsKey" Classes="muted" Margin="0,3,0,0" />
+                </StackPanel>
+                <StackPanel>
+                  <TextBlock Text="Data and log" FontSize="13" FontWeight="SemiBold" />
+                  <TextBlock x:Name="SettingsData" Classes="mono muted" FontSize="11.5" Margin="0,3,0,0" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+            <Border Height="28" Background="Transparent" />
+          </StackPanel>
+
+          <!-- ─────────── ABOUT ─────────── -->
+          <StackPanel x:Name="PageAbout" IsVisible="False" MaxWidth="460">
+            <TextBlock Text="Mesh Sync" Classes="h2" />
+            <TextBlock Classes="muted"
+                       Text="A local-first universal clipboard for your own devices. No cloud, no server, no account." />
+
+            <Border Classes="card" Margin="0,16,0,0">
+              <StackPanel Spacing="10">
+                <TextBlock Classes="muted"
+                           Text="This is the Linux and Mac shell. It carries text, images, files, find-my-device and notification mirroring over Wi-Fi. Bluetooth is not wired up on this platform yet, so it is Wi-Fi only for now." />
+                <TextBlock Classes="faint"
+                           Text="Every connection agrees its own key. A paired device cannot read traffic meant for another pair, and traffic captured today cannot be opened later by recovering a key." />
+                <TextBlock x:Name="AboutVersion" Classes="faint" />
+              </StackPanel>
+            </Border>
+            <Border Height="28" Background="Transparent" />
+          </StackPanel>
+
+        </Grid>
+      </ScrollViewer>
+    </Grid>
+  </Grid>
+</Window>

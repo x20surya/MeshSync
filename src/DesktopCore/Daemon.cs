@@ -1,0 +1,903 @@
+using System.Net;
+using System.Text;
+using CoreLib;
+using CoreLib.Diagnostics;
+using CoreLib.Identity;
+using CoreLib.Transport;
+using DesktopCore.Bluetooth;
+using DesktopCore.Clipboard;
+using DesktopCore.Platform;
+
+namespace DesktopCore;
+
+/// <summary>
+/// The running device: an identity, the Wi-Fi links to every paired peer, and the clipboard.
+///
+/// <para><b>What this is not.</b> It is not the Linux client. It is the smallest thing that can
+/// stand on the mesh as a real device, so that CoreLib meets a phone over a real radio from Linux
+/// before a UI is built on top of it. HANDOFF.md records four defects that only hardware found,
+/// none of which any test could have; this exists so the same class of defect in the Linux port
+/// is found in a console app rather than behind a window.</para>
+///
+/// <para><b>Wi-Fi only, deliberately.</b> There is no Bluetooth tier here. The architecture
+/// already treats that as a supported state rather than a broken one - Wi-Fi is raised whenever
+/// Bluetooth is not up - so a TCP-only peer is a degraded device on the mesh, not a special
+/// case. BlueZ is the largest single piece of the port and it should not gate the rest.</para>
+/// </summary>
+public sealed class Daemon : IDisposable
+{
+    private readonly Paths _paths;
+    private readonly EchoSuppressor _echo = new();
+    private readonly ClipboardWatcher _watcher;
+    private readonly SemaphoreSlim _dialNow = new(0, 1);
+    private bool _disposed;
+
+    /// <summary>How often paired devices that are not connected are dialled again.</summary>
+    private static readonly TimeSpan DialInterval = TimeSpan.FromSeconds(15);
+
+    /// <summary>Long enough for a phone on the same LAN, short enough not to stall the loop.</summary>
+    private static readonly TimeSpan DialTimeout = TimeSpan.FromSeconds(6);
+
+    /// <summary>The port this device listens on. Not always the default: two devices on one
+    /// machine cannot share a listening port.</summary>
+    public int Port { get; }
+
+    public string DataDirectory => _paths.DataDirectory;
+
+    /// <summary>The name announced to peers, and shown in their device lists.</summary>
+    public string DeviceName => Mesh.LocalDeviceName;
+
+    public PeerSecurity Security { get; }
+
+    public MeshLinks Mesh { get; }
+
+    public IClipboardBridge ClipboardBridge { get; }
+
+    public SyncActivityLog Activity { get; } = new();
+
+    /// <summary>Sending and receiving whole files, streamed rather than held in memory.</summary>
+    public FileTransferService Files { get; }
+
+    /// <summary>Listing and fetching from a peer's shared folders, and answering theirs.</summary>
+    public BrowseService Browse { get; }
+
+    /// <summary>The alarm, for when this computer is the thing that has been lost.</summary>
+    public Ringer Ringer { get; } = new();
+
+    /// <summary>Mirrored phone notifications. Memory only, by rule.</summary>
+    public MirroredNotifications Notifications { get; } = new();
+
+    /// <summary>The desktop's own notification centre.</summary>
+    public DesktopNotifier Notifier { get; } = new();
+
+    /// <summary>
+    /// The Bluetooth tier, or null where there is no usable radio.
+    ///
+    /// <para>Central only for now: this device scans and connects out, which obliges the peer to
+    /// advertise. <c>BleRoleRules</c> is built for that - a device that cannot advertise is always
+    /// the central - so it is a supported arrangement rather than a missing half.</para>
+    /// </summary>
+    public LinuxBleCentral? Ble { get; private set; }
+
+    /// <summary>The peripheral half, where the adapter can advertise. Null where it cannot.</summary>
+    public LinuxBleServer? BleServer { get; private set; }
+
+    private LinuxBlePeripheral? _peripheral;
+    private BlueZ? _bleBus;
+    private BlueZ? _peripheralBus;
+
+    /// <summary>True when a Bluetooth link is up and has agreed a key, either way round.</summary>
+    public bool IsBluetoothConnected => Ble?.IsConnected == true || BleServer?.IsConnected == true;
+
+    /// <summary>What this machine's radio can do, for the window to say so.</summary>
+    public string BluetoothStatus { get; private set; } = "not started";
+
+    /// <summary>What wraps the device key at rest, or null where nothing can.</summary>
+    public IKeyProtector? KeyProtector { get; }
+
+    /// <summary>How the identity is protected on disk, for the Settings page to say plainly.</summary>
+    public string KeyProtectionStatus => KeyProtector == null
+        ? "not wrapped - readable by anything running as you"
+        : $"wrapped by {KeyProtector.Name}";
+
+    private static IKeyProtector? ResolveProtector()
+    {
+        try
+        {
+            var pending = Task.Run(SecretServiceKeyProtector.TryCreateAsync);
+            return pending.Wait(TimeSpan.FromSeconds(5)) ? pending.Result : null;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Identity", "Could not reach a keyring", ex);
+            return null;
+        }
+    }
+
+    /// <summary>Files that have arrived this session, newest first.</summary>
+    public IReadOnlyList<ReceivedFile> ReceivedFiles { get { lock (_receivedGate) return _received.ToList(); } }
+
+    private readonly object _receivedGate = new();
+    private readonly List<ReceivedFile> _received = new();
+
+    /// <summary>Devices waiting for a human to compare fingerprints, newest last.</summary>
+    public IReadOnlyList<PendingPairing> Pending => Security.PendingPairings;
+
+    /// <summary>
+    /// True while a round of dialling is in flight.
+    ///
+    /// Exists so a UI can say "connecting" rather than "nothing connected" for the several
+    /// seconds a dial takes. Those read identically to a user and mean opposite things.
+    /// </summary>
+    public bool IsDialling { get; private set; }
+
+    public Daemon(Paths paths, int port = TcpTransportConnection.DefaultPort, string? deviceName = null)
+    {
+        _paths = paths;
+        Port = port;
+
+        // Resolved before the identity is loaded, because DeviceIdentity rewrites a plaintext
+        // key wrapped the moment it is handed a protector - so an existing unwrapped key upgrades
+        // itself on this run and costs no re-pair.
+        //
+        // Task.Run keeps it off whatever context is constructing us, and the timeout is because a
+        // locked keyring can sit waiting on a prompt the user may never answer. Falling back to an
+        // unwrapped key is worse than wrapping it and far better than failing to start.
+        KeyProtector = ResolveProtector();
+
+        Security = PeerSecurity.LoadOrCreate(paths.DataDirectory, KeyProtector);
+
+        // Listens where it was told, but dials a bare address on the standard port. Those are
+        // the same number for every real device; they differ only when two of these share a
+        // machine, and then dialling its own port would just reach itself.
+        Mesh = new MeshLinks(Security, port, peerPort: TcpTransportConnection.DefaultPort)
+        {
+            LocalDeviceName = deviceName ?? Environment.MachineName
+        };
+        Mesh.PayloadReceived += OnPayload;
+        Mesh.PeerConnected += OnPeerConnected;
+        Mesh.PeerDisconnected += OnPeerDisconnected;
+
+        Security.PairingRequested += OnPairingRequested;
+
+        Files = new FileTransferService(Path.Combine(paths.IncomingDirectory, "partial"),
+            (fingerprint, contentType, body, token) => Mesh.SendToAsync(fingerprint, contentType, body, token));
+
+        Files.FileReceived += OnFileReceived;
+        Files.FileFailed += (name, reason) => Log.Write("Files", $"{name} did not arrive: {reason}.");
+
+        Browse = new BrowseService
+        {
+            Send = (fingerprint, contentType, body) => Mesh.SendToAsync(fingerprint, contentType, body),
+            SendFile = (fingerprint, path) => Files.SendAsync(fingerprint, path),
+        };
+
+        // Downloads is shared out of the box on both other platforms, so it is here too.
+        string downloads = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        if (Directory.Exists(downloads)) Browse.Shared.Add(downloads, "Downloads");
+
+        ClipboardBridge = ClipboardFactory.Detect();
+        _watcher = new ClipboardWatcher(ClipboardBridge);
+        _watcher.TextChanged += OnLocalClipboardChangedAsync;
+    }
+
+    /// <summary>
+    /// The code a phone scans. Same shape the Windows daemon puts in its QR, because the phone
+    /// parses one format and a second one would be a second thing to keep in step.
+    /// </summary>
+    public string PairingUri
+    {
+        get
+        {
+            string ip = NetworkUtil.GetLocalLanAddress() ?? "0.0.0.0";
+            // The port rides along only when it is not the default, because a peer that reads
+            // a bare address dials 45001 - which is right for every real device and wrong only
+            // for a second one sharing this machine.
+            if (Port != TcpTransportConnection.DefaultPort) ip = $"{ip}:{Port}";
+            string mesh = Security.Peers.MeshName ?? "";
+
+            return $"meshsync://pair?ip={Uri.EscapeDataString(ip)}" +
+                   $"&key={Uri.EscapeDataString(Security.Identity.PublicKey)}" +
+                   (mesh.Length > 0 ? $"&mesh={Uri.EscapeDataString(mesh)}" : "");
+        }
+    }
+
+    // ──────────────────────────────── lifecycle
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(_paths.IncomingDirectory);
+
+        await Mesh.StartListeningAsync(cancellationToken).ConfigureAwait(false);
+        Log.Write("Daemon", $"Listening on {Port}.");
+
+        // A device with nobody to talk to is a device that has just been installed, so the
+        // window opens itself rather than making the first run start with a command.
+        if (Security.Peers.IsEmpty) Security.Pairing.Open();
+
+        await StartBluetoothAsync(cancellationToken).ConfigureAwait(false);
+
+        _ = Task.Run(() => DialLoopAsync(cancellationToken), CancellationToken.None);
+        _ = Task.Run(() => _watcher.RunAsync(cancellationToken), CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Brings up the Bluetooth tier, if this machine has a radio.
+    ///
+    /// Failure here is not fatal and deliberately not loud: a desktop with no Bluetooth is a
+    /// perfectly ordinary desktop, and Wi-Fi carries everything Bluetooth would have.
+    /// </summary>
+    private async Task StartBluetoothAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _bleBus = await BlueZ.TryConnectAsync().ConfigureAwait(false);
+            if (_bleBus == null)
+            {
+                BluetoothStatus = "no Bluetooth on this machine";
+                Log.Write("Ble", "No Bluetooth on this machine; Wi-Fi only.");
+                return;
+            }
+
+            var (present, canAdvertise, adapterPath, detail) =
+                await BlueZCapability.ProbeAsync(_bleBus).ConfigureAwait(false);
+
+            if (!present || adapterPath == null)
+            {
+                BluetoothStatus = detail;
+                Log.Write("Ble", $"Bluetooth unusable: {detail}.");
+                return;
+            }
+
+            Log.Write("Ble", $"{detail}.");
+
+            // Both halves run at once where the adapter allows it, exactly as the Windows daemon
+            // does. Which one carries a given peer is settled per link by BleRoleRules, and a
+            // device that can only scan simply never wins the peripheral half.
+            if (canAdvertise)
+            {
+                // Its own connection. BlueZ closes the bus connection outright when it dislikes
+                // an exported object tree, and that must not take the scanner down with it.
+                _peripheralBus = await BlueZ.TryConnectAsync().ConfigureAwait(false);
+
+                _peripheral = _peripheralBus == null ? null : await LinuxBlePeripheral.TryStartAsync(
+                    _peripheralBus, adapterPath, Mesh.LocalDeviceName).ConfigureAwait(false);
+
+                if (_peripheral != null)
+                {
+                    BleServer = new LinuxBleServer(_peripheral)
+                    {
+                        LocalPublicKey = Security.Identity.PublicKey,
+                        LocalDeviceName = Mesh.LocalDeviceName,
+                        LocalMeshName = Security.Peers.MeshName,
+                        OpenSession = (peerKey, peerName, peerEphemeral, localEphemeral) =>
+                            Security.Authorise(peerKey, peerName)
+                                ? Security.OpenSession(peerKey, localEphemeral, peerEphemeral)
+                                : null,
+                    };
+
+                    BleServer.PayloadReceived += (_, e) => OnRadioPayload(BleServer.Peer, e);
+                    BleServer.PeerIdentified += OnRadioPeerIdentified;
+                    BleServer.WiFiRequested += (_, _) =>
+                        Log.Write("Ble", "A peer asked for Wi-Fi; it is already up here.");
+                }
+            }
+
+            BluetoothStatus = _peripheral != null ? "scanning and advertising" : "scanning";
+
+            Ble = await LinuxBleCentral.TryCreateAsync().ConfigureAwait(false);
+            if (Ble == null) return;
+
+            Ble.LocalPublicKey = Security.Identity.PublicKey;
+            Ble.LocalDeviceName = Mesh.LocalDeviceName;
+            Ble.LocalMeshName = Security.Peers.MeshName;
+
+            Ble.OpenSession = (peerKey, peerName, peerEphemeral, localEphemeral) =>
+                Security.Authorise(peerKey, peerName)
+                    ? Security.OpenSession(peerKey, localEphemeral, peerEphemeral)
+                    : null;
+
+            Ble.PayloadReceived += (_, e) => OnRadioPayload(Ble.Peer, e);
+            Ble.PeerIdentified += OnRadioPeerIdentified;
+
+            // Wi-Fi is already up on a desktop whenever there is a network at all, so there is
+            // nothing to raise. Logged because the peer is telling us it has something large.
+            Ble.WiFiRequested += (_, _) => Log.Write("Ble", "A peer asked for Wi-Fi; it is already up here.");
+
+            _ = Task.Run(() => Ble.RunAsync(adapterPath, cancellationToken), CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Ble", "Bluetooth could not be started", ex);
+        }
+    }
+
+    /// <summary>
+    /// A payload that came over the radio rather than the socket.
+    ///
+    /// Bluetooth carries no hello of the kind TCP has, so the sender is identified by which key
+    /// authenticates the payload - which is the same test the socket path applies anyway.
+    /// </summary>
+    private void OnRadioPeerIdentified(object? sender, PeerIdentifiedEventArgs e)
+    {
+        Security.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName);
+        Security.Peers.AdoptMeshName(e.MeshName);
+        Log.Write("Ble", $"{e.DeviceName} is in range over Bluetooth.");
+    }
+
+    private void OnRadioPayload(PeerSession? session, PayloadReceivedEventArgs e)
+    {
+        if (session == null) return;
+
+        if (!session.TryDecrypt(e.EncryptedPayload, out var decrypted))
+        {
+            Log.Write("Ble", "Dropped a payload that does not authenticate under this link's key.");
+            return;
+        }
+
+        OnPayload(this, new MeshPayloadEventArgs
+        {
+            Peer = decrypted.Peer,
+            ContentType = decrypted.ContentType,
+            Body = decrypted.Body,
+            Via = "Bluetooth",
+        });
+    }
+
+    /// <summary>Dials paired devices that are not connected, and can be nudged to go early.</summary>
+    private async Task DialLoopAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!Security.Peers.IsEmpty)
+                {
+                    IsDialling = true;
+                    try
+                    {
+                        await Mesh.ConnectToAllAsync(DialTimeout, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        IsDialling = false;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                Log.Write("Daemon", "The dial loop failed", ex);
+            }
+
+            try
+            {
+                // Waits out the interval unless something asks for a dial sooner - which
+                // confirming a pairing does, so a freshly confirmed device connects now rather
+                // than after whatever is left of the interval.
+                await _dialNow.WaitAsync(DialInterval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    /// <summary>Asks the dial loop to run now rather than at the next interval.</summary>
+    public void NudgeDial()
+    {
+        try { _dialNow.Release(); }
+        catch (SemaphoreFullException) { /* One pending nudge is as good as several. */ }
+    }
+
+    // ──────────────────────────────── sending
+
+    /// <summary>
+    /// Sends text to every connected device.
+    ///
+    /// Echo suppression is deliberately not consulted: this is what an explicit
+    /// <c>send</c> means, and refusing to send the same string twice would make the command
+    /// useless for exactly the back-to-back testing it exists for.
+    /// </summary>
+    public async Task<int> SendTextAsync(string text, CancellationToken cancellationToken = default)
+    {
+        byte[] body = Encoding.UTF8.GetBytes(text);
+        int sent = await BroadcastAsync(SyncContent.Text, body, cancellationToken).ConfigureAwait(false);
+
+        if (sent > 0) Activity.Record(SyncDirection.Sent, SyncItemKind.Text, body.Length, text);
+        return sent;
+    }
+
+    /// <summary>
+    /// Sends over every tier that is up.
+    ///
+    /// Wi-Fi first because it carries anything; Bluetooth as well when a peer is only reachable
+    /// that way, which is the whole point of holding the radio link open. A peer reachable over
+    /// both gets it once, over the socket.
+    /// </summary>
+    private async Task<int> BroadcastAsync(byte contentType, byte[] body, CancellationToken cancellationToken)
+    {
+        int sent = await Mesh.BroadcastAsync(contentType, body, cancellationToken).ConfigureAwait(false);
+
+        sent += await SendOverRadioAsync(Ble?.Peer, Ble?.RemoteFingerprint,
+            payload => Ble!.SendPayloadAsync(payload, cancellationToken), contentType, body).ConfigureAwait(false);
+
+        sent += await SendOverRadioAsync(BleServer?.Peer, BleServer?.RemoteFingerprint,
+            payload => BleServer!.SendPayloadAsync(payload), contentType, body).ConfigureAwait(false);
+
+        return sent;
+    }
+
+    /// <summary>
+    /// Sends over one radio link, unless the same peer already has a socket.
+    ///
+    /// Skipping a peer reachable both ways is not an optimisation: sending twice would deliver
+    /// the clipboard twice, and the echo suppressor is on the sending side rather than the
+    /// receiving one.
+    /// </summary>
+    private async Task<int> SendOverRadioAsync(PeerSession? session, string? fingerprint,
+                                               Func<byte[], Task> send, byte contentType, byte[] body)
+    {
+        if (session == null || string.IsNullOrEmpty(fingerprint)) return 0;
+        if (Mesh.IsConnectedTo(fingerprint)) return 0;
+
+        try
+        {
+            byte[]? payload = session.Encrypt(contentType, body);
+            if (payload == null) return 0;
+
+            await send(payload).ConfigureAwait(false);
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Ble", "Sending over Bluetooth failed", ex);
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Joins a mesh from a pairing code, which is the other half of showing one.
+    ///
+    /// <para>The Android client does exactly this after a scan, and it has to exist here too or
+    /// laptop-to-laptop is impossible: two devices that can only be joined and never join have
+    /// no way to reach each other. The phone is simply the usual scanner, not the only one.</para>
+    ///
+    /// <para>The key is validated before anything is stored. A code that will not parse is
+    /// refused here rather than producing a link that connects and then fails every
+    /// decryption.</para>
+    /// </summary>
+    public (bool Ok, string Message) Join(string pairingUri)
+    {
+        if (!Uri.TryCreate(pairingUri.Trim(), UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Scheme, "meshsync", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, "That is not a meshsync:// pairing code.");
+        }
+
+        var query = ParseQuery(uri.Query);
+
+        if (!query.TryGetValue("key", out string? key) || !DeviceIdentity.IsValidPublicKey(key))
+        {
+            return (false, "That code carries no usable public key.");
+        }
+
+        query.TryGetValue("ip", out string? address);
+        query.TryGetValue("mesh", out string? mesh);
+
+        // Adopted only if this device has no name of its own, so joining names an unnamed mesh
+        // and re-pairing later cannot silently rename it underneath the user.
+        Security.Peers.AdoptMeshName(mesh);
+
+        if (!Security.Peers.Trust(key!, name: null, address: address))
+        {
+            return (false, "That pairing key is not valid.");
+        }
+
+        // The other end refuses the first attempt and asks a human to compare fingerprints, so
+        // the dial loop is nudged rather than waited out.
+        NudgeDial();
+
+        string fingerprint = DeviceIdentity.FingerprintOf(key!);
+        return (true, $"Trusting {DeviceIdentity.Shorten(fingerprint)}" +
+                      (address != null ? $" at {address}." : ".") +
+                      " Now confirm this device on the other screen.");
+    }
+
+    /// <summary>
+    /// Reads a URI query into a dictionary. Hand-rolled rather than pulling in
+    /// <c>HttpUtility</c> for three keys that this code also generates.
+    /// </summary>
+    private static Dictionary<string, string> ParseQuery(string query)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = pair.IndexOf('=');
+            if (eq <= 0) continue;
+
+            result[Uri.UnescapeDataString(pair[..eq])] = Uri.UnescapeDataString(pair[(eq + 1)..]);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Sends a file to one device. Wi-Fi only, streamed in chunks, and hashed on both ends so a
+    /// truncated transfer is a failure rather than a file that looks complete.
+    /// </summary>
+    public Task<FileSendResult> SendFileAsync(string fingerprint, string path,
+                                              CancellationToken cancellationToken = default) =>
+        Files.SendAsync(fingerprint, path, cancellationToken);
+
+    /// <summary>
+    /// Dismisses a mirrored notification here and on the phone it came from.
+    ///
+    /// Both ways is what makes mirroring feel finished rather than like a second inbox to clear.
+    /// </summary>
+    public async Task DismissNotificationAsync(string namespacedKey)
+    {
+        var (fingerprint, key) = MirroredNotifications.Split(namespacedKey);
+
+        Notifications.RemoveByKey(namespacedKey);
+        await Notifier.CloseAsync(namespacedKey).ConfigureAwait(false);
+
+        if (fingerprint.Length == 0) return;
+
+        await Mesh.SendToAsync(fingerprint, SyncContent.NotificationDismiss,
+            NotificationProtocol.BuildDismiss(key)).ConfigureAwait(false);
+    }
+
+    /// <summary>Clears every mirrored notification, telling each phone as it goes.</summary>
+    public async Task DismissAllNotificationsAsync()
+    {
+        foreach (var entry in Notifications.Snapshot())
+        {
+            await DismissNotificationAsync(entry.Key).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// A file arrived whole and matched its hash. It is moved out of the working directory into
+    /// the user's Downloads, which is where they will go looking for it.
+    /// </summary>
+    private void OnFileReceived(ReceivedFile file)
+    {
+        string finalPath = file.Path;
+
+        try
+        {
+            string downloads = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            Directory.CreateDirectory(downloads);
+
+            // Never overwrite: a second file of the same name is a second file.
+            string name = Path.GetFileName(file.Name);
+            string candidate = Path.Combine(downloads, name);
+            for (int i = 1; File.Exists(candidate); i++)
+            {
+                candidate = Path.Combine(downloads,
+                    $"{Path.GetFileNameWithoutExtension(name)} ({i}){Path.GetExtension(name)}");
+            }
+
+            File.Move(file.Path, candidate);
+            finalPath = candidate;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Files", $"Could not move {file.Name} into Downloads; it is at {file.Path}", ex);
+        }
+
+        lock (_receivedGate) _received.Insert(0, file);
+
+        Activity.Record(SyncDirection.Received, SyncItemKind.File, file.Size, file.Name, finalPath);
+        Log.Write("Files", $"Received \"{file.Name}\", {file.Size} bytes, saved to {finalPath}.");
+
+        _ = Notifier.ShowAsync($"file|{file.Name}", "File received",
+            $"{file.Name} from {file.PeerFingerprint[..Math.Min(9, file.PeerFingerprint.Length)]}");
+    }
+
+    /// <summary>Asks one device to make a noise, or to stop.</summary>
+    public Task<bool> RingAsync(string fingerprint, bool on, CancellationToken cancellationToken = default) =>
+        Mesh.SendToAsync(fingerprint, SyncContent.Ring, [on ? (byte)1 : (byte)0], cancellationToken);
+
+    private async Task OnLocalClipboardChangedAsync(string text)
+    {
+        byte[] body = Encoding.UTF8.GetBytes(text);
+
+        // The one decision point for whether local clipboard content goes out. It catches both
+        // content this device just applied after receiving it, and the repeat notifications a
+        // single copy produces.
+        if (!_echo.ShouldSend(body)) return;
+
+        int sent = await BroadcastAsync(SyncContent.Text, body, CancellationToken.None).ConfigureAwait(false);
+        if (sent == 0) return;
+
+        Activity.Record(SyncDirection.Sent, SyncItemKind.Text, body.Length, text);
+        Log.Write("Daemon", $"Sent {body.Length} bytes of clipboard text to {sent} device(s).");
+    }
+
+    // ──────────────────────────────── receiving
+
+    private void OnPayload(object? sender, MeshPayloadEventArgs e)
+    {
+        string from = e.Peer.Name ?? DeviceIdentity.Shorten(e.Peer.Fingerprint);
+
+        // The file and browse services own their content types outright, and say so by
+        // returning true. Doing this before the switch keeps the type numbers in one place.
+        if (Files.Handle(e.Peer.Fingerprint, e.ContentType, e.Body)) return;
+        if (Browse.Handle(e.Peer.Fingerprint, e.ContentType, e.Body)) return;
+
+        switch (e.ContentType)
+        {
+            case SyncContent.Text:
+                _ = ApplyTextAsync(e.Body, from, e.Via);
+                break;
+
+            case SyncContent.Image:
+                SaveImage(e.Body, from, e.Via);
+                break;
+
+            case SyncContent.Address:
+                NoteAnnouncedAddress(e.Peer.Fingerprint, e.Body, from);
+                break;
+
+            case SyncContent.Ring:
+                // Authenticated by having arrived at all: it opened under this connection's key.
+                if (e.Body.Length > 0 && e.Body[0] != 0)
+                {
+                    Ringer.Start(from);
+                    _ = Notifier.ShowAsync("meshsync-ring", "Mesh Sync",
+                        $"{from} is looking for this computer.", urgent: true);
+                }
+                else
+                {
+                    Ringer.Stop();
+                    _ = Notifier.CloseAsync("meshsync-ring");
+                }
+                break;
+
+            case SyncContent.Notification:
+                // Never written down - not to the activity log, not to disk, and not into a log
+                // line carrying the contents. That it arrived is the most that may be recorded.
+                if (NotificationProtocol.TryParse(e.Body, out var mirrored) && mirrored != null)
+                {
+                    Notifications.Add(e.Peer.Fingerprint, from, mirrored);
+
+                    _ = Notifier.ShowAsync($"{e.Peer.Fingerprint}|{mirrored.Key}",
+                        string.IsNullOrWhiteSpace(mirrored.AppName) ? from : $"{mirrored.AppName} on {from}",
+                        string.IsNullOrWhiteSpace(mirrored.Title) ? mirrored.Text
+                                                                  : $"{mirrored.Title}\n{mirrored.Text}");
+
+                    Log.Write("Daemon", $"Mirrored a notification from {from}.");
+                }
+                break;
+
+            case SyncContent.NotificationDismiss:
+                if (NotificationProtocol.TryParseDismiss(e.Body, out string dismissedKey))
+                {
+                    // Cleared here too, so dismissing on the phone clears the desktop banner.
+                    Notifications.Remove(e.Peer.Fingerprint, dismissedKey);
+                    _ = Notifier.CloseAsync($"{e.Peer.Fingerprint}|{dismissedKey}");
+                }
+                Log.Write("Daemon", $"{from} dismissed a mirrored notification.");
+                break;
+
+            default:
+                // Named rather than swallowed. A content type this build does not handle is a
+                // peer that is ahead of it, and that is worth knowing during a port.
+                Log.Write("Daemon", $"Ignored content type 0x{e.ContentType:X2} from {from} ({e.Body.Length} bytes).");
+                break;
+        }
+    }
+
+    private async Task ApplyTextAsync(byte[] body, string from, string via)
+    {
+        string text = Encoding.UTF8.GetString(body);
+
+        // Recorded before it is applied. Setting the clipboard raises a change notification
+        // that comes straight back through the watcher, and this is what stops it being sent
+        // out again as though the user had copied it.
+        _echo.NoteInbound(body);
+
+        bool applied = await ClipboardBridge.SetTextAsync(text, CancellationToken.None).ConfigureAwait(false);
+
+        Activity.Record(SyncDirection.Received, SyncItemKind.Text, body.Length, text);
+        Log.Write("Daemon", applied
+            ? $"Received text from {from} over {via}, {body.Length} bytes, on the clipboard."
+            : $"Received text from {from} over {via}, {body.Length} bytes; no clipboard to put it on.");
+
+        if (!applied) Console.WriteLine($"  text from {from}: {Preview(text)}");
+    }
+
+    private void SaveImage(byte[] body, string from, string via)
+    {
+        // No UI to show it in, so it lands somewhere findable instead. The clipboard bridges
+        // here are text only; images are a later step and this keeps the payload rather than
+        // dropping it.
+        try
+        {
+            string name = $"clip_{DateTime.Now:yyyyMMdd_HHmmss_fff}.jpg";
+            string path = Path.Combine(_paths.IncomingDirectory, name);
+            File.WriteAllBytes(path, body);
+
+            Activity.Record(SyncDirection.Received, SyncItemKind.Image, body.Length, location: path);
+            Log.Write("Daemon", $"Received an image from {from} over {via}, {body.Length} bytes, saved as {name}.");
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Daemon", $"Could not save an image from {from}", ex);
+        }
+    }
+
+    private void NoteAnnouncedAddress(string fingerprint, byte[] body, string from)
+    {
+        string address = Encoding.UTF8.GetString(body).Trim();
+
+        // Parsed rather than believed, even though it arrived inside an authenticated payload
+        // from a paired device. An address is exactly the sort of thing that must not be taken
+        // on trust, because it decides where the next connection goes.
+        //
+        // Both forms are accepted because MeshLinks already dials either: a bare IP, which is
+        // what every device on the default port announces, and host:port, which is what a
+        // second device sharing a machine has to announce to be reachable at all.
+        if (!IPAddress.TryParse(address, out _) && !IPEndPoint.TryParse(address, out _))
+        {
+            Log.Write("Daemon", $"Ignoring an implausible address announced by {from}.");
+            return;
+        }
+
+        Security.Peers.NoteSeen(fingerprint, address);
+        Log.Write("Daemon", $"{from} is reachable at {address}.");
+    }
+
+    // ──────────────────────────────── peers
+
+    private void OnPeerConnected(PeerRecord peer)
+    {
+        string name = peer.Name ?? DeviceIdentity.Shorten(peer.Fingerprint);
+        Log.Write("Daemon", $"{name} connected.");
+        AnnounceAddress(peer.Fingerprint);
+    }
+
+    private void OnPeerDisconnected(string fingerprint) =>
+        Log.Write("Daemon", $"{DeviceIdentity.Shorten(fingerprint)} disconnected.");
+
+    /// <summary>
+    /// Tells a peer where this device is reachable, so a DHCP lease change cannot strand it.
+    /// Sent on every link that comes up, because this side cannot know what the peer last
+    /// recorded and the payload is a few dozen bytes on a link that is already open.
+    /// </summary>
+    private void AnnounceAddress(string fingerprint)
+    {
+        string? address = NetworkUtil.GetLocalLanAddress();
+        if (string.IsNullOrEmpty(address)) return;
+
+        // A bare address is what every real device announces, and what the Windows and Android
+        // ends expect - they parse it as an IP and drop anything else. The port is appended only
+        // when this device is not on the default, which happens when two of them share a
+        // machine, and in that case the peer is another one of these.
+        if (Port != TcpTransportConnection.DefaultPort) address = $"{address}:{Port}";
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Mesh.SendToAsync(fingerprint, SyncContent.Address,
+                    Encoding.UTF8.GetBytes(address)).ConfigureAwait(false);
+                Log.Write("Daemon", $"Announced this device at {address}.");
+            }
+            catch (Exception ex)
+            {
+                // Informational. A failure costs nothing until the address changes.
+                Log.Write("Daemon", "Could not announce this device's address", ex);
+            }
+        });
+    }
+
+    private void OnPairingRequested(PendingPairing pending)
+    {
+        // Printed rather than logged alone: the whole point is that a human is standing here to
+        // compare it against what the other device is showing.
+        Console.WriteLine();
+        Console.WriteLine($"  {pending.Name ?? "A device"} wants to join.");
+        Console.WriteLine($"  Fingerprint  {pending.ShortFingerprint}");
+        Console.WriteLine($"  Check it matches the other screen, then: confirm {pending.ShortFingerprint.Split('-')[0]}");
+        Console.WriteLine();
+    }
+
+    /// <summary>
+    /// Confirms a device by any unambiguous prefix of its fingerprint, so the whole thing does
+    /// not have to be typed off another screen.
+    /// </summary>
+    public (bool Ok, string Message) Confirm(string prefix)
+    {
+        var matches = Pending
+            .Where(p => Matches(p.Fingerprint, prefix))
+            .ToList();
+
+        if (matches.Count == 0) return (false, "No device waiting with that fingerprint.");
+        if (matches.Count > 1) return (false, $"{matches.Count} devices match that prefix; type more of it.");
+
+        if (!Security.ConfirmPairing(matches[0].Fingerprint))
+        {
+            return (false, "Could not confirm it. The pairing window may have closed - run `pair` again.");
+        }
+
+        // The peer is refused once by design and reconnects on its next retry, so the loop is
+        // nudged rather than waited out.
+        NudgeDial();
+        return (true, $"Paired with {matches[0].ShortFingerprint}.");
+    }
+
+    public (bool Ok, string Message) Reject(string prefix)
+    {
+        var matches = Pending.Where(p => Matches(p.Fingerprint, prefix)).ToList();
+
+        if (matches.Count == 0) return (false, "No device waiting with that fingerprint.");
+        if (matches.Count > 1) return (false, $"{matches.Count} devices match that prefix; type more of it.");
+
+        return Security.RejectPairing(matches[0].Fingerprint)
+            ? (true, $"Turned away {matches[0].ShortFingerprint}.")
+            : (false, "It is no longer waiting.");
+    }
+
+    /// <summary>Finds one paired device by any unambiguous prefix of its fingerprint or name.</summary>
+    public PeerRecord? FindPeer(string prefix)
+    {
+        var byFingerprint = Security.Peers.Peers.Where(p => Matches(p.Fingerprint, prefix)).ToList();
+        if (byFingerprint.Count == 1) return byFingerprint[0];
+        if (byFingerprint.Count > 1) return null;
+
+        var byName = Security.Peers.Peers
+            .Where(p => p.Name != null && p.Name.Contains(prefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return byName.Count == 1 ? byName[0] : null;
+    }
+
+    /// <summary>Compares against the fingerprint with and without its grouping dashes.</summary>
+    private static bool Matches(string fingerprint, string prefix)
+    {
+        if (string.IsNullOrWhiteSpace(prefix)) return false;
+
+        string bare = fingerprint.Replace("-", "");
+        string wanted = prefix.Replace("-", "");
+
+        return bare.StartsWith(wanted, StringComparison.OrdinalIgnoreCase)
+            || DeviceIdentity.Shorten(fingerprint).Replace("-", "")
+                   .StartsWith(wanted, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Preview(string text)
+    {
+        string oneLine = text.ReplaceLineEndings(" ").Trim();
+        return oneLine.Length <= 60 ? oneLine : oneLine[..57] + "...";
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        _watcher.TextChanged -= OnLocalClipboardChangedAsync;
+        _watcher.Dispose();
+
+        Mesh.PayloadReceived -= OnPayload;
+        Mesh.PeerConnected -= OnPeerConnected;
+        Mesh.PeerDisconnected -= OnPeerDisconnected;
+        Mesh.Dispose();
+
+        Security.PairingRequested -= OnPairingRequested;
+        Security.Dispose();
+
+        Files.Dispose();
+        Ringer.Dispose();
+        Ble?.Dispose();
+        BleServer?.Dispose();
+        _peripheral?.Dispose();
+        _peripheralBus?.Dispose();
+        _bleBus?.Dispose();
+        _dialNow.Dispose();
+    }
+}

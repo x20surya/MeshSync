@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- Only for the Wayland clipboard, which has to build an SCM_RIGHTS control message by
+         hand: passing a file descriptor is the one thing .NET's socket API cannot express, and
+         it is exactly how clipboard contents move between a Wayland client and the compositor. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CoreLib\CoreLib.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BlueZ's entire interface is D-Bus, and no .NET Bluetooth package targets Linux at all.
+         This is the same library Avalonia already uses for its own FreeDesktop integration. -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.1" />
+  </ItemGroup>
+
+</Project>
