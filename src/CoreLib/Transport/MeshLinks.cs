@@ -44,6 +44,7 @@ namespace CoreLib.Transport
         private readonly PeerSecurity _security;
         private readonly TcpAcceptor _acceptor;
         private readonly int _port;
+        private readonly int _peerPort;
 
         private readonly object _gate = new();
         private readonly Dictionary<string, TcpTransportConnection> _links = new(StringComparer.OrdinalIgnoreCase);
@@ -63,10 +64,19 @@ namespace CoreLib.Transport
         /// <summary>A device's link went away. Carries the fingerprint, since the record may be gone.</summary>
         public event Action<string>? PeerDisconnected;
 
-        public MeshLinks(PeerSecurity security, int port = TcpTransportConnection.DefaultPort)
+        /// <param name="port">The port this device listens on.</param>
+        /// <param name="peerPort">
+        /// The port to dial when a stored address carries none. Defaults to
+        /// <paramref name="port"/>, which is right for every device in the field because they
+        /// all listen on 45001 - but not for two devices sharing one machine, where each
+        /// listens somewhere different and would otherwise dial a bare address on its own port
+        /// and reach itself.
+        /// </param>
+        public MeshLinks(PeerSecurity security, int port = TcpTransportConnection.DefaultPort, int? peerPort = null)
         {
             _security = security ?? throw new ArgumentNullException(nameof(security));
             _port = port;
+            _peerPort = peerPort ?? port;
             _acceptor = new TcpAcceptor(port);
             _acceptor.Accepted += OnAccepted;
         }
@@ -287,9 +297,9 @@ namespace CoreLib.Transport
             // Unwrapped here too, not only where addresses are recorded: a registry written by
             // an earlier build still holds the mapped form, and it would otherwise keep timing
             // out until the peer happened to announce itself again.
-            if (IPAddress.TryParse(address, out var parsed)) return (Unwrap(parsed), _port);
+            if (IPAddress.TryParse(address, out var parsed)) return (Unwrap(parsed), _peerPort);
 
-            return (address, _port);
+            return (address, _peerPort);
         }
 
         private static string Unwrap(IPAddress address) =>
