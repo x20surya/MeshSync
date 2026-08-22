@@ -52,6 +52,68 @@ jobs:
       - name: Build
         run: dotnet build src/WinDaemon/WinDaemon.csproj -warnaserror
 
+  desktop:
+    name: Linux desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      # The shared core, the headless daemon and the Avalonia shell. All three are plain
+      # net10.0 and need no workload, which is the point of keeping the Linux and Mac heads
+      # off MAUI.
+      - name: Build
+        run: dotnet build src/DesktopShell/DesktopShell.csproj -warnaserror
+
+      - name: Build the headless daemon
+        run: dotnet build src/LinuxDaemon/LinuxDaemon.csproj -warnaserror
+
+  package:
+    name: Linux packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      # Builds the AppImage, the .deb and the tarball. Nothing here needs root, and
+      # appimagetool is run with --appimage-extract-and-run because a CI runner has no FUSE.
+      - name: Build packages
+        run: packaging/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            packaging/out/*.AppImage
+            packaging/out/*.deb
+            packaging/out/*.tar.xz
+          if-no-files-found: error
+
+  macos:
+    name: Mac desktop
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      # Cross-published from Linux during development, but built here on a real Mac so the
+      # Cocoa backend and the osx-arm64 runtime pack are exercised on the platform that has
+      # to run them. Signing and notarising are not done here and still need a certificate.
+      - name: Build
+        run: dotnet build src/DesktopShell/DesktopShell.csproj -r osx-arm64 -warnaserror
+
+      - name: Publish
+        run: dotnet publish src/DesktopShell/DesktopShell.csproj -c Release -r osx-arm64 --self-contained true
+
   android:
     name: Android client
     runs-on: ubuntu-latest

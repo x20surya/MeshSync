@@ -1,0 +1,112 @@
+name: Release
+
+# Everything a release ships is built here rather than on somebody's laptop, because the Windows
+# daemon cannot be built anywhere else and a release assembled from three different machines is a
+# release nobody can reproduce.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build the AppImage, the .deb and the tarball
+        run: packaging/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: packaging/out/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows daemon
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      # Self-contained, so it runs on a machine with no .NET installed - which is what a person
+      # downloading a release has.
+      - name: Publish
+        run: >
+          dotnet publish src/WinDaemon/WinDaemon.csproj -c Release -r win-x64
+          --self-contained true -p:PublishSingleFile=true -p:DebugType=none
+          -o publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: publish/WinDaemon.exe
+          if-no-files-found: error
+
+  android:
+    name: Android client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install the Android workload
+        run: dotnet workload install maui-android
+
+      # Signed with the CI debug key, which is what v0.1.0 shipped. A release key belongs here
+      # the moment there is a store listing to need one.
+      - name: Build
+        run: >
+          dotnet build src/AndroidClient/AndroidClient.csproj
+          -c Release -f net10.0-android -t:SignAndroidPackage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: src/AndroidClient/bin/Release/net10.0-android/*-Signed.apk
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [linux, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Name the files after the tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          mkdir -p out
+          cp artifacts/windows/WinDaemon.exe                 "out/MeshSync-$TAG-windows-x64.exe"
+          cp artifacts/android/*-Signed.apk                  "out/MeshSync-$TAG-android.apk"
+          cp artifacts/linux/*.AppImage                      "out/MeshSync-$TAG-linux-x86_64.AppImage"
+          cp artifacts/linux/*.deb                           "out/MeshSync-$TAG-linux-amd64.deb"
+          cp artifacts/linux/*.tar.xz                        "out/MeshSync-$TAG-linux-x64.tar.xz"
+          ls -lh out
+
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Mesh Sync $TAG" --generate-notes
+          gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
