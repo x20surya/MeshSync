@@ -45,10 +45,13 @@ jobs:
 
       # Self-contained, so it runs on a machine with no .NET installed - which is what a person
       # downloading a release has.
+      # Compressed, or a self-contained WPF single file is well over twice the size it needs
+      # to be - which is the whole download for anyone taking the release.
       - name: Publish
         run: >
           dotnet publish src/WinDaemon/WinDaemon.csproj -c Release -r win-x64
           --self-contained true -p:PublishSingleFile=true -p:DebugType=none
+          -p:EnableCompressionInSingleFile=true
           -o publish
 
       - uses: actions/upload-artifact@v4
