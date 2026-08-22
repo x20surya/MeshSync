@@ -72,6 +72,45 @@ dotnet run --project src/WinDaemon/WinDaemon.csproj
 
 It runs in the tray and enables run-on-startup the first time.
 
+### Linux and macOS
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+The window and the tray icon are Avalonia, so the same build runs on both.
+
+```bash
+dotnet run --project src/DesktopShell/DesktopShell.csproj
+```
+
+There is a headless build too, for a machine with no desktop session:
+
+```bash
+dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj
+```
+
+On Wayland the clipboard needs nothing installed: the app speaks `ext-data-control` to the
+compositor itself, so it is told when the selection changes rather than polling for it.
+X11 sessions fall back to `xclip` or `xsel`, and macOS uses `pbcopy` and `pbpaste`.
+With none of those the desktop still holds links and still sends; it just cannot reach the
+clipboard.
+
+Bluetooth works on Linux, as the central: this device scans for a peer advertising the mesh
+service, connects, and holds the link, so text still crosses with no network at all. It does not
+advertise yet, which means the phone takes the peripheral role - the role rules were built for
+exactly that.
+
+macOS is Wi-Fi only and will stay that way for longer. CoreBluetooth can only be reached from a
+target framework that needs macOS and Xcode to build, so giving the Mac head Bluetooth means
+splitting it out of the shared Linux build. That split is planned rather than done.
+
+### Packages
+
+```bash
+packaging/build.sh
+```
+
+Produces an AppImage that runs on most distributions, a `.deb`, and a plain tarball.
+Nothing there needs root.
+
 ### Android
 
 Requires the .NET 10 SDK with the `maui-android` workload, and a device on Android 8 or newer.
@@ -104,8 +143,8 @@ Clipboard traffic is ephemeral by design.
 It is encrypted for the device it is going to, sent straight there, and never written to disk.
 The activity list lives in memory and dies with the process.
 
-Each device holds a P-256 keypair that never leaves it, wrapped by DPAPI on Windows and by the
-Android Keystore on Android.
+Each device holds a P-256 keypair that never leaves it, wrapped by DPAPI on Windows, by the
+Android Keystore on Android, and by the desktop keyring on Linux.
 Session keys are agreed by ECDH, so no key material crosses the wire.
 
 [SECURITY.md](SECURITY.md) states what that does and does not protect against, including the parts
@@ -119,6 +158,13 @@ it does not.
   and the logging sink.
 - **`src/WinDaemon`** - WPF window with a sidebar and a tray icon.
   Win32 clipboard listener, TCP listener and dialler, Bluetooth GATT server and client.
+- **`src/DesktopCore`** - the running device for Linux and macOS, with no UI.
+  Identity and registry loading, the Wi-Fi links, payload dispatch, the dial loop, pairing, and
+  the clipboard behind an interface so a session with no helper still runs.
+- **`src/DesktopShell`** - Avalonia window and tray icon for Linux and macOS.
+  The same sidebar, palette and type scale as the Windows daemon.
+- **`src/LinuxDaemon`** - the same core with a terminal in front of it, for a headless machine or
+  for driving from a script.
 - **`src/AndroidClient`** - .NET MAUI app with a navigation drawer.
   A `connectedDevice` foreground service holding the links and the screenshot, network and
   screen watchers; a boot receiver; a notification listener; TCP listener and dialler; Bluetooth
@@ -133,10 +179,17 @@ Clipboard, files, find-my-device and notification mirroring are built and covere
 The clipboard tier has been exercised on real hardware; the rest has not been near a phone since
 it was written, which [HANDOFF.md](HANDOFF.md) sets out honestly.
 
-Windows and Android are the platforms today.
-macOS and Linux are planned behind a shared desktop shell; an iOS companion is planned as
-receive-mostly, because iOS does not let any app watch the clipboard in the background and a
-backgrounded iPhone cannot be found over Bluetooth by anything that is not another Apple device.
+Windows and Android are the finished platforms.
+Linux and macOS share a desktop shell that is built and runs.
+Clipboard, files, find my device and notification mirroring all work, mirrored notifications land
+in the desktop's own notification centre, and the clipboard needs nothing installed on Wayland.
+Linux has the Bluetooth tier as a central and wraps its identity key with the desktop keyring.
+macOS has neither, and will be separated from the Linux build when it gets Bluetooth.
+It has been proven between two Linux devices and not yet against a phone.
+
+An iOS companion is planned as receive-mostly, because iOS does not let any app watch the
+clipboard in the background and a backgrounded iPhone cannot be found over Bluetooth by anything
+that is not another Apple device.
 
 See [AGENTS.md](AGENTS.md) for the architecture and the rules, and [HANDOFF.md](HANDOFF.md) for the
 findings behind the current design - most of them are not guessable from the code and cost real

@@ -214,6 +214,18 @@ Downloads is shared out of the box on both sides.
 - **Ringing a phone that is face-down on silent**, which is the case the alarm stream exists for.
 - **The wake frame** carrying a real image: the image that crossed went over a Wi-Fi link that was
   already up.
+- **The Linux and Mac head against a phone.** Two Linux devices on one machine pair, agree a
+  session key and exchange payloads both ways, which is the whole transport proven from Linux -
+  but no phone has been on the other end of it yet.
+- **The keyring on anything but KDE.** The wrap, the unwrap and the in-place upgrade of an
+  existing plaintext key are all exercised against KWallet. gnome-keyring serves the same
+  interface and has not been tried.
+- **The Linux clipboard on X11.** The Wayland path is exercised: two processes round-trip text
+  through the compositor and a copy crosses the mesh. `CommandLineClipboard` and the
+  `wl-paste --watch` framing are the X11 fallback and have compiled without ever running, because
+  no helper is installed on the development machine.
+- **The Mac head running.** It cross-publishes from Linux to a real Mach-O arm64 binary with the
+  Cocoa backend in it, and nothing has launched it.
 
 ### The Bluetooth link churns, and it is not ours
 
@@ -487,6 +499,91 @@ Qualify it as `System.Windows.HorizontalAlignment.Center`.
 code and need qualifying.
 
 ---
+
+### The Linux and Mac port
+
+**`MeshLinks` used one port for two different things, and it reached itself.**
+The constructor took a single `port` and used it both to bind the listener and as the port to
+dial when a stored address carried none.
+Those are the same number for every device in the field, because they all listen on 45001, so
+nothing ever noticed.
+Run two devices on one machine - which is the only way to exercise a third device without a third
+piece of hardware - and the one listening on 45002 dialled its peer's bare address on 45002, which
+is itself, and logged `Refusing a connection from this device's own identity` in a loop.
+There is now a separate `peerPort` that defaults to `port`, so every existing caller is unchanged
+and only the desktop head passes it.
+
+**D-Bus aligns every dict entry and every struct to eight bytes, and nothing here does it for you.**
+This cost most of the keyring work. A hand-rolled `a{ss}` with two pairs is malformed, because the
+second entry needs padding the writer has no API to emit - and dbus-daemon answers a malformed
+message by closing the connection with nothing said. Reading has the same trap in reverse:
+`Secret.Service.GetSecrets` returns `a{o(oayays)}`, whose struct values are 8-aligned, and reading
+the fields one by one lands on the padding and produces an empty object path.
+Both are avoided rather than solved: every dictionary written here holds exactly one entry, with a
+second property set afterwards through the Properties interface, and the secret is read with
+`Secret.Item.GetSecret`, which returns the struct alone at the start of the body where it is
+aligned already.
+
+**A D-Bus message writer is a struct, and handing it to an `Action<T>` throws the body away.**
+Every BlueZ call that carried arguments closed the connection with "connection closed by peer" and
+nothing else - because the header declared a signature while the body was written into a copy of
+the writer that was then discarded, so the message promised bytes it did not have. Calls with no
+arguments worked perfectly, which is what made it look like a marshalling problem in the arguments
+themselves. The fix is a `delegate void MessageArgs(ref MessageWriter)`; the lesson is that a
+silent disconnect from dbus-daemon means malformed, and the first thing to check is whether the
+body was written at all.
+
+**BlueZ rejects the exported GATT tree.** It calls `GetManagedObjects` on the application root and
+closes the connection on the reply. `a{oa{sa{sv}}}` needs every dict entry aligned to eight bytes
+and the writer does not appear to align successive entries. Until that is right the peripheral half
+stands aside and the central half carries the tier.
+
+**Bluetooth is where Linux and macOS have to part.** BlueZ is D-Bus, so plain `net10.0` reaches it.
+CoreBluetooth is reachable only from `net10.0-macos` or `net10.0-maccatalyst`, which need macOS and
+Xcode to build - so the moment the Mac head gets Bluetooth it stops being cross-buildable from
+Linux. Keep `DesktopCore` and `DesktopShell` free of both, and split the Mac head out when its
+radio is built.
+
+**Wayland client object ids must be allocated densely, and freed ids are reissued at once.**
+libwayland keeps client objects in a dense array and `wl_map_insert_at` refuses any id that would
+leave a gap, so ids cannot be picked freely - jumping from 6 to 10 is rejected as
+`invalid arguments for ext_data_control_manager_v1#4.create_data_source`, which reads like a
+malformed request and is not.
+The follow-on is worse: destroying an object to reclaim its id races the compositor reissuing it,
+so a destroy sent from a background thread tore down the *newly issued* offer that had just taken
+that id, and the read came back empty every second time.
+Sources now count upwards and are never destroyed. One id per clipboard write is cheap; the race
+is not.
+
+**Nothing in the compositor's replies is optional to read.**
+`wl_display.error` was being dropped on the floor, so a rejected request looked exactly like a
+request that had worked and then quietly done nothing. Logging it turned a day's guessing into one
+line naming the object and the reason.
+
+**Avalonia has no native Wayland backend, which decides where the clipboard watcher lives.**
+The shell runs through XWayland - its toplevel reports as `Avalonia.X11.X11Window` - and an
+XWayland client cannot speak `ext_data_control_manager_v1`.
+That protocol is the only way to read the clipboard in the background on Wayland; a plain client
+can read it only while focused.
+So Avalonia's clipboard API is right for sending and for applying what arrives, and the watcher
+has to hold its own native Wayland connection.
+KDE Plasma 6.6 advertises `ext_data_control_manager_v1` but not the older wlroots
+`zwlr_data_control_manager_v1`, so target the standardised one.
+
+**Avalonia 12 is not Avalonia 11, and most of what is written about it is 11.**
+`AvaloniaLocator.Current` is gone.
+`TextBox.Watermark` is now `PlaceholderText`.
+The clipboard moved to an `IDataTransfer` model with the text helpers in
+`Avalonia.Input.Platform.ClipboardExtensions`, and it is `TryGetTextAsync`, not `GetTextAsync`.
+`Bitmap.Save(string, int?)` is obsolete in favour of the `BitmapEncoderOptions` overload.
+A window loaded from XAML needs a public parameterless constructor, so the running device is
+handed over by a method rather than through the constructor.
+
+**A screenshot of the shell was showing an app that had never started.**
+The capture path returned before the line that starts the daemon, so the window rendered a device
+with no listener and no links, and the only clue was the absence of `Listening on 45001` in the
+log.
+Worth remembering that a screenshot is evidence of what was drawn, not of what was running.
 
 ## Testing gotchas
 

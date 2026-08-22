@@ -132,6 +132,11 @@ none of its own, which is what stops two devices that disagree overwriting each 
   used to work around this has been removed - UPI and banking apps refuse to run at all while any
   accessibility service is enabled, because that is the route screen-reading fraud takes.
   A clipboard tool that stops you paying for things is not one worth having.
+- **Linux and macOS**: whatever the session offers, behind `IClipboardBridge`. `wl-clipboard` is
+  the only one that can be *told* the selection changed; `xclip`, `xsel` and `pbpaste` are polled,
+  because none of them has a watch mode. Watching in the background on Wayland needs
+  `ext_data_control_manager_v1`, which a client can only speak over a native Wayland connection -
+  so that watcher is a component of its own rather than something the UI toolkit does.
 - So **sending from the phone is user-initiated**, through three routes that each get focus in
   their own way: a Quick Settings tile, the `PROCESS_TEXT` selection menu, and the share sheet.
   Receiving is unaffected - writing to the clipboard has never been restricted.
@@ -180,6 +185,11 @@ made a phone shriek from across the street.
 - **Open source**: COMPLETED. GPL-3.0, `dev.meshsync.app`, CI on all three projects, a threat
   model in SECURITY.md.
 - **File transfer, find my device, notification mirroring**: COMPLETED.
+- **Linux and macOS desktop**: BUILT, Wi-Fi only. `DesktopCore` holds the running device,
+  `DesktopShell` is the Avalonia window and tray for both, and `LinuxDaemon` is the same core with
+  a terminal in front of it. Clipboard, files, find my device and notification mirroring all work;
+  mirrored notifications go into the desktop's own notification centre. No Bluetooth tier and no
+  key protector yet. Packaged as an AppImage, a .deb and a tarball by `packaging/build.sh`.
 - **Per-peer connection state**: PENDING. Both apps still know whether *anything* is reachable
   rather than which peers are.
 - **Password vault**: PENDING and gated. It does not start unless Android autofill and a desktop
@@ -203,11 +213,40 @@ made a phone shriek from across the street.
   rather than which peers are, so a device list can only mark one device connected - and it
   currently guesses which by comparing names, which breaks outright with two devices called the
   same thing.
-- **Nothing since the identity work has run on hardware.** Forward secrecy, the wrapped key on
-  Android, pairing confirmation, file transfer, ringing and notification mirroring have been
-  built and tested over loopback and against their own protocols, but no phone has been attached
-  since. The Windows DPAPI migration is the one exception - that was verified end to end on a
-  real key file.
+- **Bluetooth splits Linux and macOS apart, and macOS is the one that leaves.**
+  They share `DesktopCore` and `DesktopShell` today because Avalonia builds for both from one
+  machine, which is the property that made it the right toolkit. Bluetooth breaks that. BlueZ is
+  D-Bus and reachable from plain `net10.0`; CoreBluetooth is reachable only from `net10.0-macos`
+  or `net10.0-maccatalyst`, and those can only be built on macOS with Xcode. Adding Bluetooth to
+  the Mac head therefore stops it being cross-buildable from Linux and needs a Mac or a
+  `macos-latest` runner for every build.
+  **So the Mac head is to be separated when its Bluetooth is built**, into its own project with
+  its own target framework, keeping `DesktopCore` and `DesktopShell` shared and platform-free.
+  Until then macOS stays Wi-Fi only and stays cross-published from Linux, which costs it nothing
+  it does not already lack.
+- **Linux Bluetooth is the central half only.** The device scans, connects, exchanges the hello
+  and holds the link; it does not yet advertise. BlueZ accepts the scan and rejects the exported
+  GATT tree, so `LinuxBlePeripheral` registers, fails and stands aside. That is a supported
+  arrangement rather than a missing half: `BleRoleRules` is capability first, so a device that
+  cannot advertise is always the central and the peer takes the peripheral role - which is
+  exactly what Android does and what HANDOFF records as never having been exercised.
+- **macOS has no Bluetooth tier at all**, for the reason above.
+- **The Linux identity key is wrapped by the desktop keyring**, through
+  `org.freedesktop.secrets` - KWallet on KDE, gnome-keyring on GNOME. A 32-byte key lives in the
+  keyring and the device key is sealed with it using the project's own AES-256-GCM, so the blob
+  matches what Android writes and `DeviceIdentity` already reads. A machine with no keyring falls
+  back to an unwrapped key rather than refusing to start, and a key written before this existed
+  upgrades itself on the next run without costing a re-pair.
+- **macOS has no key protector.** The Keychain is the equivalent and belongs with the rest of the
+  Mac work.
+- **Clipboard capture on Linux is native on Wayland and needs a helper on X11.** The desktop
+  speaks `ext-data-control` to the compositor directly, so on KDE, wlroots and anything else
+  offering that protocol the clipboard works with nothing installed and is *told* about changes
+  rather than polling. X11 sessions and compositors without the protocol fall back to
+  `wl-clipboard`, `xclip` or `xsel`, and a session with none of those still pairs, holds links
+  and sends - it just cannot reach the clipboard. Avalonia runs through XWayland and an XWayland
+  client cannot speak `ext-data-control`, which is why the watcher holds its own native Wayland
+  connection instead of going through the toolkit.
 - **A file transfer does not resume.** A failure restarts it. Worth saying out loud so it does
   not get half-built.
 

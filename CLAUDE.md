@@ -38,13 +38,44 @@ adb install -r src/AndroidClient/bin/Debug/net10.0-android/dev.meshsync.app-Sign
 adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
 ```
 
+### Build & Run The Linux Desktop
+
+The Avalonia shell is the Linux and Mac head.
+It runs in the tray and holds the links whether or not the window is open.
+
+```bash
+dotnet run --project src/DesktopShell/DesktopShell.csproj
+```
+
+The headless daemon is the same core with a terminal in front of it, which is what to reach for
+when there is no desktop session or when something needs driving from a script.
+
+```bash
+dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj
+```
+
+`--data` and `--port` together run a second device on one machine, which is how the mesh is
+exercised without a second piece of hardware.
+
+```bash
+dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj -- --data ~/dev2 --port 45002
+```
+
+### Build For macOS
+
+Cross-published from Linux. The binary is real; signing and notarising still need a Mac.
+
+```bash
+dotnet publish src/DesktopShell/DesktopShell.csproj -c Release -r osx-arm64 --self-contained true
+```
+
 ### Run Tests
 
 ```powershell
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-205 tests. Both apps hold a zero-warning bar, and an incremental build will not re-report
+252 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
 warnings, so use `-t:Rebuild` when you need to be sure.
 
 `src/CryptoTest` and `src/TransportTest` are console demos kept from early development.
@@ -57,6 +88,10 @@ The daemon is a `WinExe` with no console attached, so anything written there is 
 
 ```powershell
 Get-Content "$env:LOCALAPPDATA\MeshSync\daemon.log" -Wait -Tail 20   # Windows
+```
+
+```bash
+tail -f ~/.local/share/MeshSync/daemon.log                           # Linux and macOS
 adb logcat -s MeshSync                                               # Android
 ```
 
@@ -74,6 +109,12 @@ scratch without `pm clear`.
 adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
 ```
 
+```bash
+# Linux and macOS - $XDG_DATA_HOME/MeshSync when that is set
+~/.local/share/MeshSync/device.key
+~/.local/share/MeshSync/peers.json
+```
+
 ## Project Structure
 
 - `src/CoreLib`: cross-platform logic shared by both apps.
@@ -84,6 +125,15 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
     notification framing.
   - Crypto (AES-256-GCM, Argon2id for the future vault), echo suppression, the in-memory activity
     log, and the logging sink.
+- `src/DesktopCore`: the running device, shared by both Linux and Mac heads.
+  Identity and registry loading, the Wi-Fi links, payload dispatch, the dial loop, pairing and
+  the pluggable clipboard bridge. No UI and no platform assumptions beyond POSIX paths.
+- `src/DesktopShell`: the Avalonia window and tray icon for Linux and macOS.
+  The same sidebar, palette and type scale as the Windows daemon, on a toolkit that builds on
+  either platform. Wi-Fi only for now; there is no Bluetooth tier here yet.
+- `src/LinuxDaemon`: the same core with a terminal in front of it.
+  Exists so the transport can be exercised with no desktop session and no clipboard helper, and
+  so two devices can be run on one machine.
 - `src/WinDaemon`: WPF window with sidebar navigation, a device list, mirrored notifications and a
   file drop target; Win32 clipboard listener, TCP listener and dialler, Bluetooth GATT server and
   client, the ringer, and the tray icon.
