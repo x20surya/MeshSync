@@ -1,0 +1,6 @@
+#!/bin/sh
+# AppImage entry point. Resolves the bundle root however it was mounted, then hands over.
+HERE="$(dirname "$(readlink -f "$0")")"
+export LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"
+export DOTNET_BUNDLE_EXTRACT_BASE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/meshsync-bundle"
+exec "$HERE/usr/bin/meshsync" "$@"

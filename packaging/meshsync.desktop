@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Mesh Sync
+GenericName=Universal Clipboard
+Comment=Local-first universal clipboard for your own devices
+Exec=meshsync
+Icon=meshsync
+Terminal=false
+Categories=Utility;Network;RemoteAccess;
+Keywords=clipboard;sync;phone;android;share;
+StartupWMClass=meshsync

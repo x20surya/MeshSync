@@ -483,3 +483,7 @@ $RECYCLE.BIN/
 
 # Lavish review artifacts (local tooling output, not project source)
 .lavish/
+
+# Packaging output and the cached appimagetool
+packaging/out/
+packaging/.tools/

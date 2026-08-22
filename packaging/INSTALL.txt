@@ -1,0 +1,19 @@
+Mesh Sync - Linux
+
+Run it:
+    ./meshsync
+
+Install it for your user, so it appears in the launcher:
+    mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons
+    cp -r . ~/.local/share/meshsync
+    ln -sf ~/.local/share/meshsync/meshsync ~/.local/bin/meshsync
+    sed 's|Exec=meshsync|Exec='"$HOME"'/.local/bin/meshsync|' meshsync.desktop \
+        > ~/.local/share/applications/meshsync.desktop
+    cp meshsync.svg ~/.local/share/icons/meshsync.svg
+
+Clipboard sync needs a helper:
+    Wayland   wl-clipboard
+    X11       xclip, or xsel
+
+Without one the app still pairs, holds links and sends; it just cannot read or
+write the clipboard by itself.
