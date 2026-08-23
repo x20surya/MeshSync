@@ -7,8 +7,33 @@ Read this alongside [AGENTS.md](AGENTS.md), which describes the architecture and
 
 ## The most recent session, in short
 
+**v0.2.3: eighteen connection defects in the Linux and Mac head, and the shared arbitration that
+replaced them.**
+286 tests, up from 252; every project builds with no warnings.
+
+The Bluetooth tier ran both halves and never asked which one should exist, so two devices in range
+each dialled the other, both links stayed up, and the clipboard crossed twice.
+`BleRoleRules` was named in five comments in `DesktopCore` and called by none of them.
+Windows had gated its scan loop on it all along and Android repaired the collision afterwards; all
+three now go through one `BleLinkArbiter` in `CoreLib`.
+
+The worst of them was not a divergence from Windows at all: awaiting a `Console.In` read stopped
+the entire Bluetooth tier dead while logging nothing.
+See the finding below, which is the one to read first if any of this ever seems to come back.
+
+Six of the eighteen were mechanisms sitting in `src/WinDaemon` with no platform dependency in them
+that the Linux head had reimplemented differently or not at all, so `LinkState`, `TransportSettings`
+and `BleLinkArbiter` moved into `CoreLib` and the Windows copies were deleted.
+Verified against a phone over Bluetooth with no network between the two, and by 34 new tests
+covering rules the old suite could not reach.
+
+An earlier session is summarised below, and the findings from every session are in **Hard-won
+findings**.
+
+### The session before that
+
 The whole plan in `.lavish/mesh-sync-plan.html` was executed as far as phase 5.
-205 tests, up from 138; both apps build with no warnings.
+205 tests at the time; both apps build with no warnings.
 
 **Committed the tree first.** Everything below the identity work had been sitting uncommitted -
 about 3,600 insertions including the entire `Identity` tree - while the two most recent commits
@@ -52,7 +77,7 @@ What is still open is Doze survival overnight, which only time can answer.
 ## Where things stand
 
 The whole plan in `.lavish/ble-standby-build-order.html` is implemented.
-The solution builds with **0 warnings** and passes **205 tests**, up from 57 when this began.
+The solution builds with **0 warnings** and passes **286 tests**, up from 57 when this began.
 
 The shape of the project changed completely.
 It was a phone that dialled one hardcoded laptop, both sharing a single key baked into the source.
@@ -736,7 +761,7 @@ src/AndroidClient/    MAUI app with a navigation drawer: Home, Activity, Devices
                       network and screen watchers; boot receiver; notification listener; ringer;
                       GATT client and server; Quick Settings tile, PROCESS_TEXT and share targets
 src/assets/           brand handoff: SVG, PNG, style sheet
-tests/CoreLib.Tests/  205 tests: crypto, key agreement, identity, key storage, the registry,
+tests/CoreLib.Tests/  286 tests: crypto, key agreement, identity, key storage, the registry,
                       and mesh links over real loopback sockets
 ```
 

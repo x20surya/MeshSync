@@ -75,6 +75,12 @@ These are real and stated deliberately.
   everything you copy. There is no partial trust and no per-device permission.
 - **Denial of service.** Anything within Bluetooth range can occupy the GATT server or make
   connection attempts. Nothing rate-limits that.
+- **Your device name and mesh name, to anything in Bluetooth range running this app.**
+  Every install advertises the same service UUID, so a scan finds every Mesh Sync device nearby and not only the ones in your mesh.
+  The Bluetooth handshake sends a hello - public key, device name, mesh name - before either end has authorised the other, so two meshes in one room learn each other's names.
+  Nothing is let in and nothing you copy crosses, but the names are disclosed.
+  Closing it means the connecting device waits for the other's hello, checks whether that key is paired, and answers only if it is.
+  That changes the handshake on all three platforms, so it is a protocol decision rather than a fix, and HANDOFF.md records it as an open one.
 
 ## Pairing, and the thing it used to get wrong
 

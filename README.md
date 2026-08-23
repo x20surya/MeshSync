@@ -48,6 +48,7 @@ already open, and its peer raises Wi-Fi in response.
 | **Files** | Send a file from the share sheet, the tray, or by dropping it on the window |
 | **Find my device** | Make a device sound an alarm, through silent mode, with no network |
 | **Notifications** | Mirror the apps you choose from your phone, and dismiss them from either end |
+| **Connection** | Choose Wi-Fi and Bluetooth, Wi-Fi only, or Bluetooth only - it takes effect at once and is remembered |
 
 Everything except files works with no network at all.
 Files need Wi-Fi, and asking for one raises it automatically.
@@ -184,10 +185,10 @@ Linux and macOS share a desktop shell that is built and runs.
 Clipboard, files, find my device and notification mirroring all work, mirrored notifications land
 in the desktop's own notification centre, and the clipboard needs nothing installed on Wayland.
 Linux has the Bluetooth tier as a central and wraps its identity key with the desktop keyring.
-Devices from another mesh are found by any scan, because the service is the same everywhere; they
-are refused and then left alone.
+Devices from another mesh are found by any scan, because the service is the same everywhere; they are refused, remembered, and then left alone.
+Which device dials and which advertises is settled by the same rule on all three platforms, so two devices in range no longer each open a link to the other.
 macOS has neither, and will be separated from the Linux build when it gets Bluetooth.
-It has been proven between two Linux devices and not yet against a phone.
+The Linux head has been proven against a phone over Bluetooth with no network between the two, as well as between two Linux devices.
 
 An iOS companion is planned as receive-mostly, because iOS does not let any app watch the
 clipboard in the background and a backgrounded iPhone cannot be found over Bluetooth by anything

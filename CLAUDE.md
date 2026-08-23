@@ -54,6 +54,10 @@ when there is no desktop session or when something needs driving from a script.
 dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj
 ```
 
+Its shell takes `pair`, `join`, `confirm`, `send`, `peers`, `ring`, `bt` and `transport`.
+`transport` shows or sets which links this device offers - `both`, `wifi` or `ble` - and applies it without a restart.
+`--no-shell` holds the links open with nobody to take commands from, which is what a service manager wants and what to reach for when driving it from a script.
+
 `--data` and `--port` together run a second device on one machine, which is how the mesh is
 exercised without a second piece of hardware.
 
@@ -75,7 +79,7 @@ dotnet publish src/DesktopShell/DesktopShell.csproj -c Release -r osx-arm64 --se
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-252 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
+286 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
 warnings, so use `-t:Rebuild` when you need to be sure.
 
 `src/CryptoTest` and `src/TransportTest` are console demos kept from early development.
@@ -123,14 +127,18 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
   - `Transport/`: the TCP acceptor and framed session, the per-peer mesh link table, Bluetooth
     fragmentation, protocol constants and role negotiation, content types, file transfer and
     notification framing.
+    Also the three things every head shares rather than answers for itself: `LinkState` (is anything reachable and over which link, Wi-Fi winning when both are up), `TransportSettings` with `ITransportPreferenceStore` (which links a device may offer, kept in the registry on Windows and in a file elsewhere), and `BleLinkArbiter` (should this device be scanning at all, and which of two links to one peer dies).
   - Crypto (AES-256-GCM, Argon2id for the future vault), echo suppression, the in-memory activity
     log, and the logging sink.
 - `src/DesktopCore`: the running device, shared by both Linux and Mac heads.
   Identity and registry loading, the Wi-Fi links, payload dispatch, the dial loop, pairing and
-  the pluggable clipboard bridge. No UI and no platform assumptions beyond POSIX paths.
+  the pluggable clipboard bridge.
+  On Linux it also holds the Bluetooth tier over BlueZ, gated by `BleLinkArbiter` so it never dials a peer it should be advertising to.
+  No UI and no platform assumptions beyond POSIX paths.
 - `src/DesktopShell`: the Avalonia window and tray icon for Linux and macOS.
   The same sidebar, palette and type scale as the Windows daemon, on a toolkit that builds on
-  either platform. Wi-Fi only for now; there is no Bluetooth tier here yet.
+  either platform.
+  Both tiers on Linux, Wi-Fi only on macOS, and a connection preference in Settings offering the same three modes as the Windows window.
 - `src/LinuxDaemon`: the same core with a terminal in front of it.
   Exists so the transport can be exercised with no desktop session and no clipboard helper, and
   so two devices can be run on one machine.
@@ -143,4 +151,4 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
   and dialler, Bluetooth GATT client and server, the ringer, and the Quick Settings tile,
   `PROCESS_TEXT` and share targets.
 - `src/assets`: brand handoff, the source of truth for the mark, palette and illustrations.
-- `tests/CoreLib.Tests`: 205 tests, including transport tests over real loopback sockets.
+- `tests/CoreLib.Tests`: 286 tests, including transport tests over real loopback sockets, the link-state and transport-preference rules, and the arbitration that stops two devices opening two Bluetooth links to each other.

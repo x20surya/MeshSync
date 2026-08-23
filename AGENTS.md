@@ -185,13 +185,16 @@ made a phone shriek from across the street.
 - **Open source**: COMPLETED. GPL-3.0, `dev.meshsync.app`, CI on all three projects, a threat
   model in SECURITY.md.
 - **File transfer, find my device, notification mirroring**: COMPLETED.
-- **Linux and macOS desktop**: BUILT, Wi-Fi only. `DesktopCore` holds the running device,
-  `DesktopShell` is the Avalonia window and tray for both, and `LinuxDaemon` is the same core with
-  a terminal in front of it. Clipboard, files, find my device and notification mirroring all work;
-  mirrored notifications go into the desktop's own notification centre. No Bluetooth tier and no
-  key protector yet. Packaged as an AppImage, a .deb and a tarball by `packaging/build.sh`.
-- **Per-peer connection state**: PENDING. Both apps still know whether *anything* is reachable
-  rather than which peers are.
+- **Linux and macOS desktop**: BUILT.
+`DesktopCore` holds the running device, `DesktopShell` is the Avalonia window and tray for both, and `LinuxDaemon` is the same core with a terminal in front of it.
+Clipboard, files, find my device and notification mirroring all work, and mirrored notifications go into the desktop's own notification centre.
+Linux has both tiers and wraps its identity key with the desktop keyring; macOS has neither, for the reason in the gaps below.
+Packaged as an AppImage, a .deb and a tarball by `packaging/build.sh`.
+- **One shared answer for link state**: COMPLETED for the desktop head, PENDING for Windows.
+`LinkState`, `TransportSettings` and `BleLinkArbiter` live in `CoreLib` and every head calls them, so a rule is written once and a platform supplies only storage.
+The desktop head answers per peer as well; Windows still answers per app, so it can mark only one device connected and guesses which by name.
+- **A transport preference**: COMPLETED on Windows and the desktop head.
+Both offer Wi-Fi and Bluetooth, Wi-Fi only, or Bluetooth only, applied without a restart and remembered between runs.
 - **Password vault**: PENDING and gated. It does not start unless Android autofill and a desktop
   browser extension are also being built, because without those it is not a password manager.
 
@@ -234,7 +237,9 @@ And the cheapest refusal is not scanning at all: ask `BleLinkArbiter` first, bec
   GATT tree, so `LinuxBlePeripheral` registers, fails and stands aside. That is a supported
   arrangement rather than a missing half: `BleRoleRules` is capability first, so a device that
   cannot advertise is always the central and the peer takes the peripheral role - which is
-  exactly what Android does and what HANDOFF records as never having been exercised.
+  exactly what Android does.
+Exercised against a phone on 2026-08-23: the link comes up, a session is agreed, the address crosses the radio and text arrives once.
+The capability must be reported from whether the peripheral *started*, not from what the adapter claimed, or the arbiter answers "you advertise" to a device that cannot and it neither advertises nor scans.
 - **macOS has no Bluetooth tier at all**, for the reason above.
 - **The Linux identity key is wrapped by the desktop keyring**, through
   `org.freedesktop.secrets` - KWallet on KDE, gnome-keyring on GNOME. A 32-byte key lives in the
