@@ -63,6 +63,12 @@ namespace WinDaemon
         /// <summary>What this device calls the mesh, so a peer with no name of its own can adopt it.</summary>
         public string? LocalMeshName { get; set; }
 
+        /// <summary>
+        /// What this machine's radio can do, announced rather than left for the peer to assume.
+        /// This half is running, so it can certainly advertise.
+        /// </summary>
+        public BleCapability LocalCapability { get; set; } = BleCapability.Both;
+
         /// <summary>Name the peer announced, or null if it has not said.</summary>
         public string? RemoteDeviceName { get; private set; }
 
@@ -174,6 +180,22 @@ namespace WinDaemon
             bool had = _hasSubscriber;
             int count = sender.SubscribedClients.Count;
             _hasSubscriber = count > 0;
+
+            // Said out loud, because this server holds one reassembler, one ephemeral keypair and
+            // one session. A second central subscribing does not merely go unserved: its writes
+            // land in the same reassembler, so a sequence gap from one discards the other's
+            // in-flight message and neither peer is told. Until this half is genuinely per
+            // subscriber, an honest log line beats silent corruption.
+            //
+            // It costs nothing in practice yet: capability-first arbitration makes a peer that
+            // can advertise take the peripheral half, so two centrals choosing this machine at
+            // once is the uncommon case rather than the normal one.
+            if (count > 1)
+            {
+                Log.Write("BleServer",
+                    $"{count} centrals are subscribed and this server serves one at a time. " +
+                    "The others will not be answered until it drops.");
+            }
 
             if (_hasSubscriber && !had)
             {
@@ -466,7 +488,8 @@ namespace WinDaemon
             }
 
             if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName,
-                                                  out string peerMesh, out string peerEphemeral) ||
+                                                  out string peerMesh, out string peerEphemeral,
+                                                  out var peerCapability) ||
                 !DeviceIdentity.IsValidPublicKey(publicKey))
             {
                 Log.Write("BleServer", "The peer announced something that is not a public key.");
@@ -519,7 +542,8 @@ namespace WinDaemon
                     PublicKey = publicKey,
                     Fingerprint = RemoteFingerprint,
                     DeviceName = RemoteDeviceName ?? "",
-                    MeshName = peerMesh
+                    MeshName = peerMesh,
+                    Capability = peerCapability,
                 });
             }
             catch (Exception ex) { Log.Write("BleServer", "PeerIdentified handler threw", ex); }
@@ -532,7 +556,8 @@ namespace WinDaemon
             if (string.IsNullOrWhiteSpace(key) || _outbox == null) return;
 
             var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
-                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey));
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey,
+                                              LocalCapability));
 
             // A hello is written whole rather than fragmented, because an extended control
             // frame is told apart by a leading zero and a fragment starts with its message id.

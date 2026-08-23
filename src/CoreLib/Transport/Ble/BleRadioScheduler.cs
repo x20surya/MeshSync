@@ -80,6 +80,15 @@ namespace CoreLib.Transport.Ble
         /// </summary>
         public Func<BleCandidate, bool> BeaconFilter { get; set; } = _ => true;
 
+        /// <summary>
+        /// How to order what a round found: a verified beacon before a silent advertisement.
+        ///
+        /// <para>Signal strength alone put a foreign phone sitting closer than your own at the
+        /// front of every round. Ranking by mesh first means a device that has proved which mesh
+        /// it is in is tried before one that has not, whatever the RSSI.</para>
+        /// </summary>
+        public Func<BleCandidate, int> BeaconRank { get; set; } = _ => 0;
+
         public long Rounds => Interlocked.Read(ref _rounds);
 
         /// <summary>What the last round saw, for the health surface: "4 seen, 1 ours".</summary>
@@ -226,7 +235,8 @@ namespace CoreLib.Transport.Ble
                 .Where(c => c.IsPresent)
                 .Where(c => !_cooldowns.ShouldSkip(c))
                 .Where(c => BeaconFilter(c))
-                .OrderByDescending(c => c.Rssi)
+                .OrderBy(c => BeaconRank(c))
+                .ThenByDescending(c => c.Rssi)
                 .ToList();
 
             lock (_gate)

@@ -461,6 +461,7 @@ public sealed class Daemon : IDisposable
                 // before this one behaved. Once there is one, a device from another mesh costs a
                 // comparison instead of a connect, an MTU exchange and a hello.
                 BeaconFilter = _discovery.Accepts,
+                BeaconRank = _discovery.RankOf,
             };
 
             Fabric.AddProvider(_scheduler.CentralRoutes);

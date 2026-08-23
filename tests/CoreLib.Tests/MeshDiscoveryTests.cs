@@ -50,23 +50,50 @@ public class MeshDiscoveryTests
 
         Assert.True(discovery.Accepts(Candidate(ours)));
         Assert.False(discovery.Accepts(Candidate(theirs)));
+        Assert.Equal(MeshDiscovery.MeshMatch.Ours, discovery.Match(Candidate(ours)));
     }
 
     /// <summary>
-    /// Once this device knows which mesh it is in, a device that says nothing is somebody else's
-    /// business. Before that it is worth trying, because it may simply predate the beacon.
+    /// <b>A missing beacon is never a refusal.</b>
+    ///
+    /// <para>Not every stack gives up room in the advertisement for one: Android and BlueZ let a
+    /// caller put manufacturer data beside the service UUID, and a Windows GATT service provider
+    /// advertises what it likes. If silence meant "not ours", one platform failing to publish a
+    /// beacon would partition the mesh - a far worse failure than the one the beacon fixes.</para>
+    ///
+    /// <para>So it is a fast path, not a gate. Silence is tried after anything that verified.</para>
     /// </summary>
     [Fact]
-    public void A_silent_advertisement_is_tried_only_while_this_device_has_no_key()
+    public void A_silent_advertisement_is_still_tried_just_not_first()
     {
-        var (discovery, security, _) = Rig();
+        var (discovery, security, clock) = Rig();
         Pair(security);
+        var key = discovery.MintIfDue()!;
 
-        Assert.True(discovery.Accepts(Candidate(null)));
+        var silent = Candidate(null);
+        var ours = Candidate(MeshBeacon.Build(key, clock.UtcNow));
 
+        Assert.True(discovery.Accepts(silent));
+        Assert.Equal(MeshDiscovery.MeshMatch.Unknown, discovery.Match(silent));
+
+        Assert.True(discovery.RankOf(ours) < discovery.RankOf(silent));
+    }
+
+    /// <summary>
+    /// A beacon that is present and does not verify is the one case worth refusing outright, and
+    /// the only one that costs nothing to refuse.
+    /// </summary>
+    [Fact]
+    public void Only_a_beacon_that_is_someone_elses_is_refused()
+    {
+        var (discovery, security, clock) = Rig();
+        Pair(security);
         discovery.MintIfDue();
 
-        Assert.False(discovery.Accepts(Candidate(null)));
+        var theirs = Candidate(MeshBeacon.Build(Enumerable.Repeat((byte)0x33, MeshBeacon.KeyLength).ToArray(), clock.UtcNow));
+
+        Assert.Equal(MeshDiscovery.MeshMatch.Foreign, discovery.Match(theirs));
+        Assert.False(discovery.Accepts(theirs));
     }
 
     [Fact]

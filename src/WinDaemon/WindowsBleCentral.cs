@@ -9,6 +9,7 @@ using Windows.Storage.Streams;
 using CoreLib.Diagnostics;
 using CoreLib.Identity;
 using CoreLib.Transport;
+using CoreLib.Transport.Fabric;
 
 namespace WinDaemon
 {
@@ -26,19 +27,22 @@ namespace WinDaemon
     /// Windows central talks to an Android peripheral using exactly the frames an Android
     /// central sends to a Windows peripheral.</para>
     /// </summary>
-    public sealed class WindowsBleCentral : ITransportConnection
+    public sealed class WindowsBleCentral : IPeerRoute
     {
         private readonly BleReassembler _reassembler = new(BleProtocol.MaxPayloadBytes);
         private readonly SemaphoreSlim _sendLock = new(1, 1);
         private readonly object _gate = new();
 
-        private BluetoothLEAdvertisementWatcher? _watcher;
         private BluetoothLEDevice? _device;
         private GattSession? _session;
         private GattCharacteristic? _inbox;
         private GattCharacteristic? _outbox;
-        private TaskCompletionSource<ulong>? _found;
         private TaskCompletionSource<bool>? _pong;
+
+        private readonly ILinkClock _clock;
+        private RouteState _state;
+        private string? _lastFailure;
+        private int _closed;
 
         private int _usablePayload = BleFragmenter.MinimumMtuPayload;
         private byte _messageId;
@@ -47,16 +51,46 @@ namespace WinDaemon
         private volatile bool _ready;
         private bool _disposed;
 
-        public event EventHandler<PayloadReceivedEventArgs>? PayloadReceived;
-        public event EventHandler? ConnectionClosed;
+        public event Action<IPeerRoute, RouteState, RouteState>? StateChanged;
+        public event Action<IPeerRoute, RoutePayload>? PayloadReceived;
 
-        /// <summary>Raised once the peer has said which device it is.</summary>
-        public event EventHandler<PeerIdentifiedEventArgs>? PeerIdentified;
+        /// <summary>Raised with the peer's hello, so the registry can note its name and capability.</summary>
+        public event Action<WindowsBleCentral, PeerIdentifiedEventArgs>? Identified;
 
         /// <summary>The peer has something Bluetooth cannot carry and is asking for Wi-Fi.</summary>
-        public event EventHandler? WiFiRequested;
+        public event Action<WindowsBleCentral>? WiFiRequested;
 
-        public bool IsConnected => _ready;
+        public WindowsBleCentral(ILinkClock? clock = null)
+        {
+            _clock = clock ?? SystemClock.Instance;
+            _state = RouteState.Connecting;
+            StateSinceUtc = _clock.UtcNow;
+        }
+
+        public RouteKind Kind => RouteKind.BleCentral;
+
+        /// <summary>This machine scanned and connected out, so the link is always outbound.</summary>
+        public bool IsOutbound => true;
+
+        public RouteState State { get { lock (_gate) return _state; } }
+
+        public DateTime StateSinceUtc { get; private set; }
+
+        public string PeerFingerprint => RemoteFingerprint;
+
+        public PeerSession? Session => Peer;
+
+        public string? LastFailure { get { lock (_gate) return _lastFailure; } }
+
+        public DateTime RetryAtUtc { get; private set; }
+
+        public int MaxPayloadBytes => BleProtocol.MaxPayloadBytes;
+
+        /// <summary>A radio link is proof the peer is nearby, which a socket can never say.</summary>
+        public bool CarriesPresence => true;
+
+        /// <summary>What this machine's radio can do, announced rather than assumed.</summary>
+        public BleCapability LocalCapability { get; set; } = BleCapability.Both;
 
         /// <summary>This device's base64 public key, announced over the link.</summary>
         public string? LocalPublicKey { get; set; }
@@ -91,82 +125,15 @@ namespace WinDaemon
 
         public string RemoteFingerprint { get; private set; } = string.Empty;
 
-        // ──────────────────────────────── finding a peer
-
         /// <summary>
-        /// Scans until a device advertising the Mesh Sync service turns up.
+        /// Connects to a peer the radio found. The id is the Bluetooth address in hex, matching
+        /// what the scanner reports.
         ///
-        /// Matching on the service rather than on a Bluetooth address is what lets pairing
-        /// carry a public key and nothing else - the same reason the phone's scanner does it
-        /// that way.
-        /// </summary>
-        public async Task<ulong?> FindPeerAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
-        {
-            ThrowIfDisposed();
-
-            var found = new TaskCompletionSource<ulong>(TaskCreationOptions.RunContinuationsAsynchronously);
-            lock (_gate) _found = found;
-
-            var watcher = new BluetoothLEAdvertisementWatcher
-            {
-                // Active, so the scan response is collected too. A service UUID that does not
-                // fit in the advertisement itself is carried there instead.
-                ScanningMode = BluetoothLEScanningMode.Active
-            };
-
-            watcher.AdvertisementFilter.Advertisement.ServiceUuids.Add(BleProtocol.ServiceUuid);
-            watcher.Received += OnAdvertisementReceived;
-
-            lock (_gate) _watcher = watcher;
-
-            try
-            {
-                watcher.Start();
-                Log.Write("BleCentral", "Scanning for the Mesh Sync service.");
-
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                linked.CancelAfter(timeout);
-                using var registration = linked.Token.Register(() => found.TrySetResult(0));
-
-                ulong address = await found.Task.ConfigureAwait(false);
-                return address == 0 ? null : address;
-            }
-            catch (Exception ex)
-            {
-                Log.Write("BleCentral", "Scanning failed", ex);
-                return null;
-            }
-            finally
-            {
-                try
-                {
-                    watcher.Received -= OnAdvertisementReceived;
-                    watcher.Stop();
-                }
-                catch { }
-
-                lock (_gate)
-                {
-                    _watcher = null;
-                    _found = null;
-                }
-            }
-        }
-
-        private void OnAdvertisementReceived(BluetoothLEAdvertisementWatcher sender,
-                                             BluetoothLEAdvertisementReceivedEventArgs args)
-        {
-            TaskCompletionSource<ulong>? found;
-            lock (_gate) found = _found;
-
-            found?.TrySetResult(args.BluetoothAddress);
-        }
-
-        // ──────────────────────────────── connecting
-
-        /// <summary>
-        /// Connects to a peer found by <see cref="FindPeerAsync"/>. The id is the Bluetooth
-        /// address in hex, matching what the scanner reports.
+        /// <para>Returns once the link carries traffic and the hello has gone out. The peer's own
+        /// hello arrives afterwards, and until it does this route sits in
+        /// <see cref="RouteState.Handshaking"/> - which is the state the shared deadline watches,
+        /// and the reason a device that answers pings and never identifies itself can no longer
+        /// hold this machine's standing link.</para>
         /// </summary>
         public async Task ConnectAsync(string deviceId, CancellationToken cancellationToken = default)
         {
@@ -229,6 +196,7 @@ namespace WinDaemon
 
             _ready = true;
             _lastInboundUtc = DateTime.UtcNow;
+            Move(RouteState.Handshaking);
 
             Log.Write("BleCentral", $"Link ready. Usable payload {_usablePayload} bytes per write.");
 
@@ -238,6 +206,7 @@ namespace WinDaemon
             if (!await ExchangeGreetingAsync(cancellationToken).ConfigureAwait(false))
             {
                 _ready = false;
+                Fail("the peer accepted the connection and did not answer; its service is stale");
                 throw new InvalidOperationException(
                     "The peer accepted the connection but did not answer; its Bluetooth service is stale.");
             }
@@ -262,7 +231,7 @@ namespace WinDaemon
             if (sender.ConnectionStatus != BluetoothConnectionStatus.Disconnected) return;
 
             Log.Write("BleCentral", "Peer disconnected.");
-            Drop();
+            OnDisconnected();
         }
 
         // ──────────────────────────────── receiving
@@ -310,7 +279,7 @@ namespace WinDaemon
                             }
 
                             Log.Write("BleCentral", "The peer asked for Wi-Fi.");
-                            WiFiRequested?.Invoke(this, EventArgs.Empty);
+                            WiFiRequested?.Invoke(this);
                             break;
 
                         default:
@@ -333,11 +302,26 @@ namespace WinDaemon
                 byte[]? payload = _reassembler.Accept(chunk);
                 if (payload == null) return;
 
-                Log.Write("BleCentral", $"Reassembled a {payload.Length} byte payload.");
-                PayloadReceived?.Invoke(this, new PayloadReceivedEventArgs
+                var session = Peer;
+                if (session == null)
                 {
-                    EncryptedPayload = payload,
-                    Fingerprint = RemoteFingerprint
+                    Log.Write("BleCentral", "Dropped a payload that arrived before a key was agreed.");
+                    return;
+                }
+
+                if (!session.TryDecrypt(payload, out var decrypted))
+                {
+                    Log.Write("BleCentral", "Dropped a payload that does not authenticate under this link's key.");
+                    return;
+                }
+
+                Log.Write("BleCentral", $"Reassembled a {payload.Length} byte payload.");
+                PayloadReceived?.Invoke(this, new RoutePayload
+                {
+                    Peer = decrypted.Peer,
+                    ContentType = decrypted.ContentType,
+                    Body = decrypted.Body,
+                    Via = RouteKind.BleCentral,
                 });
             }
             catch (Exception ex)
@@ -355,7 +339,8 @@ namespace WinDaemon
             }
 
             if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName,
-                                                  out string peerMesh, out string peerEphemeral) ||
+                                                  out string peerMesh, out string peerEphemeral,
+                                                  out var peerCapability) ||
                 !DeviceIdentity.IsValidPublicKey(publicKey))
             {
                 Log.Write("BleCentral", "The peer announced something that is not a public key.");
@@ -373,7 +358,7 @@ namespace WinDaemon
                     Log.Write("BleCentral", peerEphemeral.Length == 0
                         ? "The peer offered no ephemeral key; it is running an older build - dropping the link."
                         : "The peer is not a device this one has paired with - dropping the link.");
-                    Drop();
+                    Fail("not a paired device");
                     return;
                 }
 
@@ -387,28 +372,38 @@ namespace WinDaemon
 
             try
             {
-                PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs
+                Identified?.Invoke(this, new PeerIdentifiedEventArgs
                 {
                     PublicKey = publicKey,
                     Fingerprint = RemoteFingerprint,
                     DeviceName = RemoteDeviceName ?? "",
-                    MeshName = peerMesh
+                    MeshName = peerMesh,
+                    Capability = peerCapability,
                 });
             }
-            catch (Exception ex) { Log.Write("BleCentral", "PeerIdentified handler threw", ex); }
+            catch (Exception ex) { Log.Write("BleCentral", "An Identified handler threw", ex); }
+
+            Move(RouteState.Established);
         }
 
         // ──────────────────────────────── sending
 
-        public async Task SendPayloadAsync(byte[] encryptedPayload, CancellationToken cancellationToken = default)
+        public async Task<bool> SendAsync(byte contentType, byte[] body, CancellationToken cancellationToken = default)
         {
-            if (encryptedPayload == null) throw new ArgumentNullException(nameof(encryptedPayload));
-            if (!_ready) throw new InvalidOperationException("The BLE link is not ready.");
+            if (State != RouteState.Established) return false;
+
+            var session = Peer;
+            if (session == null) return false;
+
+            byte[]? encryptedPayload = session.Encrypt(contentType, body);
+            if (encryptedPayload == null) return false;
 
             if (encryptedPayload.Length > BleProtocol.MaxPayloadBytes)
-                throw new ArgumentException(
-                    $"Payload of {encryptedPayload.Length} bytes is too large for BLE; use Wi-Fi for this.",
-                    nameof(encryptedPayload));
+            {
+                Log.Write("BleCentral",
+                    $"{encryptedPayload.Length} bytes is over the Bluetooth ceiling; Wi-Fi is needed.");
+                return false;
+            }
 
             await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -423,6 +418,12 @@ namespace WinDaemon
                 }
 
                 Log.Write("BleCentral", $"Sent {encryptedPayload.Length} bytes as {chunks.Count} chunks of at most {_usablePayload}.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("BleCentral", "Sending over Bluetooth failed", ex);
+                return false;
             }
             finally
             {
@@ -462,7 +463,7 @@ namespace WinDaemon
         /// <summary>Asks the peer to bring Wi-Fi up, for something Bluetooth cannot carry.</summary>
         public async Task<bool> RequestWiFiAsync()
         {
-            if (!_ready) return false;
+            if (State != RouteState.Established) return false;
 
             try
             {
@@ -483,7 +484,8 @@ namespace WinDaemon
             if (string.IsNullOrWhiteSpace(key)) return;
 
             var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
-                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey));
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey,
+                                              LocalCapability));
 
             // Written whole rather than fragmented - see BuildHelloPayload for why the two
             // shapes cannot be mixed - so an oversized one is reported rather than silently lost.
@@ -556,7 +558,7 @@ namespace WinDaemon
                     {
                         Log.Write("BleCentral",
                             $"No answer from the peer for {BleProtocol.PeerTimeout.TotalSeconds:F0}s - dropping the link.");
-                        Drop();
+                        Fail("the peer stopped answering");
                         return;
                     }
 
@@ -564,7 +566,7 @@ namespace WinDaemon
                     catch (Exception ex)
                     {
                         Log.Write("BleCentral", "Heartbeat write failed - dropping the link", ex);
-                        Drop();
+                        Fail("a heartbeat write failed");
                         return;
                     }
                 }
@@ -574,10 +576,12 @@ namespace WinDaemon
 
         // ──────────────────────────────── lifetime
 
-        /// <summary>Marks the link dead and tells the owner once.</summary>
-        private void Drop()
+        private void OnDisconnected() => Fail("the peer disconnected");
+
+        /// <summary>Marks the link failed and tells the owner once, through the state machine.</summary>
+        private void Fail(string reason)
         {
-            if (!_ready) return;
+            lock (_gate) _lastFailure = reason;
 
             _ready = false;
             _reassembler.Reset();
@@ -585,11 +589,43 @@ namespace WinDaemon
             // Destroyed with the link, which is what makes what crossed it unrecoverable.
             try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
 
-            try { ConnectionClosed?.Invoke(this, EventArgs.Empty); }
-            catch (Exception ex) { Log.Write("BleCentral", "ConnectionClosed handler threw", ex); }
+            Move(RouteState.Backoff);
         }
 
-        public Task DisconnectAsync()
+        private void Move(RouteState to)
+        {
+            RouteState from;
+            lock (_gate)
+            {
+                from = _state;
+                if (from == to) return;
+
+                // Idle is terminal: a disposed link does not come back, and a resurrection would
+                // leave the owning PeerLink holding something dead.
+                if (from == RouteState.Idle) return;
+
+                _state = to;
+                StateSinceUtc = _clock.UtcNow;
+            }
+
+            try { StateChanged?.Invoke(this, from, to); }
+            catch (Exception ex) { Log.Write("BleCentral", "A StateChanged handler threw", ex); }
+        }
+
+        public Task CloseAsync(string reason)
+        {
+            if (Interlocked.Exchange(ref _closed, 1) != 0) return Task.CompletedTask;
+
+            lock (_gate) _lastFailure ??= reason;
+            Move(RouteState.Draining);
+
+            Teardown();
+
+            Move(RouteState.Idle);
+            return Task.CompletedTask;
+        }
+
+        private void Teardown()
         {
             _ready = false;
 
@@ -628,35 +664,22 @@ namespace WinDaemon
                 try { device.Dispose(); } catch { }
             }
 
-            return Task.CompletedTask;
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
         }
 
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
             if (_disposed) return;
             _disposed = true;
 
-            try { DisconnectAsync().GetAwaiter().GetResult(); } catch { }
+            await CloseAsync("this device is shutting down").ConfigureAwait(false);
 
-            try
-            {
-                BluetoothLEAdvertisementWatcher? watcher;
-                lock (_gate) watcher = _watcher;
-
-                if (watcher != null)
-                {
-                    watcher.Received -= OnAdvertisementReceived;
-                    watcher.Stop();
-                }
-            }
-            catch { }
-
-            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
             try { _ephemeral.Dispose(); } catch { }
+            try { _sendLock.Dispose(); } catch { }
 
+            StateChanged = null;
             PayloadReceived = null;
-            ConnectionClosed = null;
-            PeerIdentified = null;
+            Identified = null;
             WiFiRequested = null;
         }
 

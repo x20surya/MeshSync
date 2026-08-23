@@ -58,34 +58,64 @@ namespace CoreLib.Transport.Ble
         }
 
         /// <summary>
-        /// True when a candidate is worth opening a connection to.
+        /// How confident this device is that a candidate belongs to its own mesh.
         ///
-        /// <para>The saving is the whole point: a device from another mesh costs one comparison
-        /// instead of a connect, an MTU exchange, a hello, and this device's name and mesh name
-        /// given away to a stranger before either end has authorised anything.</para>
+        /// <para><b>Three answers, not two, and the reason is a real platform limit.</b> A beacon
+        /// needs room in the advertisement, and not every stack gives it up: Android and BlueZ let
+        /// a caller put manufacturer data beside the service UUID, and a Windows GATT service
+        /// provider advertises what it likes. If a missing beacon meant "not ours", one platform
+        /// failing to publish one would partition the mesh - which is a far worse failure than the
+        /// one this exists to fix.</para>
+        ///
+        /// <para>So a beacon is a fast path and a privacy win, never a gate. Verified means try
+        /// first; silent means try after, exactly as every build before this did; and a beacon
+        /// that is present and does not verify means somebody else's mesh, which is the one case
+        /// worth refusing outright and the only one that costs nothing to refuse.</para>
         /// </summary>
-        public bool Accepts(BleCandidate candidate)
+        public enum MeshMatch
+        {
+            /// <summary>The beacon verified. This is one of ours.</summary>
+            Ours,
+
+            /// <summary>No beacon at all. Worth a try, after anything that did verify.</summary>
+            Unknown,
+
+            /// <summary>A beacon that is not ours. Never connect; it costs nothing to skip.</summary>
+            Foreign,
+        }
+
+        /// <summary>Which mesh a candidate looks like it belongs to.</summary>
+        public MeshMatch Match(BleCandidate candidate)
         {
             var key = _security.Peers.MeshKey;
 
-            // Nothing to check against yet. Accepting everything is what every build before this
-            // did, and the handshake grace still bounds what a stranger costs.
-            if (key == null && !_security.Pairing.IsOpen) return true;
+            if (candidate.Beacon is not { Length: > 0 } beacon) return MeshMatch.Unknown;
 
-            if (candidate.Beacon is not { Length: > 0 } beacon)
-            {
-                // A device that publishes no beacon is either older than this or not ours. While
-                // this device has no key of its own it is worth trying; once it has one, a silent
-                // advertisement is somebody else's business.
-                return key == null;
-            }
+            if (key != null && MeshBeacon.Verify(key, beacon, _clock.UtcNow, out _)) return MeshMatch.Ours;
 
-            if (key != null && MeshBeacon.Verify(key, beacon, _clock.UtcNow, out _)) return true;
+            if (_security.Pairing.IsOpen && AcceptsAsPairingTarget(beacon)) return MeshMatch.Ours;
 
-            if (_security.Pairing.IsOpen && AcceptsAsPairingTarget(beacon)) return true;
+            // A joiner knows exactly which device it wants: it scanned that device's code a moment
+            // ago. Anything else advertising a pairing beacon in the same room is somebody else's
+            // pairing screen, and connecting to it would be the one thing this step must not do.
+            if (InvitedPublicKey != null) return MeshMatch.Foreign;
 
-            return false;
+            // A beacon this device cannot open is a device advertising for a mesh it is not in.
+            // Refusing it here is the whole saving: no connect, no MTU exchange, no hello, and no
+            // device or mesh name handed to a stranger before either end has authorised anything.
+            return key == null ? MeshMatch.Unknown : MeshMatch.Foreign;
         }
+
+        /// <summary>True when a candidate is worth opening a connection to at all.</summary>
+        public bool Accepts(BleCandidate candidate) => Match(candidate) != MeshMatch.Foreign;
+
+        /// <summary>Verified first, then unknown. Used to rank a scan round.</summary>
+        public int RankOf(BleCandidate candidate) => Match(candidate) switch
+        {
+            MeshMatch.Ours => 0,
+            MeshMatch.Unknown => 1,
+            _ => 2,
+        };
 
         /// <summary>
         /// True when this beacon is the device whose pairing code was scanned.

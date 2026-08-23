@@ -213,6 +213,29 @@ public class BleRadioSchedulerTests
         Assert.Equal((2, 1), scheduler.LastRound);
     }
 
+    /// <summary>
+    /// A device that has proved which mesh it is in is tried before one that has not, whatever
+    /// the signal strength. Ranking by RSSI alone put a foreign phone sitting closer than your
+    /// own at the front of every round.
+    /// </summary>
+    [Fact]
+    public async Task A_verified_beacon_outranks_a_stronger_silent_advertisement()
+    {
+        var (scheduler, radio, _) = Rig();
+        await using var _s = scheduler;
+
+        scheduler.BeaconRank = c => c.Beacon is { Length: > 0 } ? 0 : 1;
+
+        radio.Place("silent-but-close", rssi: -20);
+        radio.Place("ours-but-far", rssi: -85, beacon: new byte[] { 0x01 });
+        scheduler.SetWanted(new HashSet<string> { Fingerprint(), Fingerprint() });
+
+        await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Equal("ours-but-far", radio.ConnectAttempts[0].Address);
+        Assert.Equal("silent-but-close", radio.ConnectAttempts[1].Address);
+    }
+
     // ── advertising ──────────────────────────────────────────────────────────
 
     /// <summary>
