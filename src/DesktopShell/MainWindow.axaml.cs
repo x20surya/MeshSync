@@ -43,6 +43,24 @@ public sealed class NotificationRow
     public required string Heading { get; init; }
     public required string Body { get; init; }
     public required string Source { get; init; }
+
+    /// <summary>Whether the app that posted it offered a reply action. The sender's answer.</summary>
+    public required bool CanReply { get; init; }
+
+    /// <summary>The app's own word for the button - "Reply" on most of them.</summary>
+    public required string ReplyLabel { get; init; }
+
+    public required string ReplyPlaceholder { get; init; }
+
+    /// <summary>
+    /// What has been typed but not sent. Settable and kept across refreshes, because the list
+    /// redraws on a timer and losing half a sentence to a two-second tick is unforgivable.
+    /// </summary>
+    public string Draft { get; set; } = "";
+
+    public string ReplyStatus { get; set; } = "";
+
+    public bool HasReplyStatus => ReplyStatus.Length > 0;
 }
 
 /// <summary>One file that has arrived this session.</summary>
@@ -98,6 +116,16 @@ public partial class MainWindow : Window
     private string _pendingSignature = "";
     private string _activitySignature = "";
     private string _filesSignature = "";
+    private string _notificationsSignature = "";
+
+    /// <summary>
+    /// Half-typed replies, by notification key.
+    ///
+    /// <para>The rows are rebuilt whenever the set of notifications changes, and a reply being
+    /// composed must survive that - a message arriving from someone else is exactly when the
+    /// list changes and exactly when you are most likely to be mid-sentence.</para>
+    /// </summary>
+    private readonly Dictionary<string, string> _drafts = new(StringComparer.Ordinal);
 
     /// <summary>For the XAML loader. <see cref="Attach"/> is what wires up a running device.</summary>
     public MainWindow() => InitializeComponent();
@@ -622,13 +650,31 @@ public partial class MainWindow : Window
     {
         var entries = _daemon.Notifications.Snapshot();
 
-        NotificationList.ItemsSource = entries.Select(e => new NotificationRow
+        // Rebuilt only when the set actually moves. It used to be rebuilt on every tick, which
+        // was harmless until a row grew a text box in it.
+        string signature = string.Join("|", entries.Select(e => $"{e.Key}:{e.Age}"));
+
+        if (signature != _notificationsSignature)
         {
-            Key = e.Key,
-            Heading = string.IsNullOrWhiteSpace(e.Title) ? e.AppName : e.Title,
-            Body = e.Text,
-            Source = $"{e.AppName} on {e.From} \u00B7 {e.Age}",
-        }).ToList();
+            _notificationsSignature = signature;
+
+            // Drafts for notifications that have gone are dropped rather than left to
+            // accumulate against keys nothing will ever answer to.
+            var live = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
+            foreach (string stale in _drafts.Keys.Where(k => !live.Contains(k)).ToList()) _drafts.Remove(stale);
+
+            NotificationList.ItemsSource = entries.Select(e => new NotificationRow
+            {
+                Key = e.Key,
+                Heading = string.IsNullOrWhiteSpace(e.Title) ? e.AppName : e.Title,
+                Body = e.Text,
+                Source = $"{e.AppName} on {e.From} \u00B7 {e.Age}",
+                CanReply = e.CanReply,
+                ReplyLabel = string.IsNullOrWhiteSpace(e.ReplyLabel) ? "Reply" : e.ReplyLabel,
+                ReplyPlaceholder = $"Reply to {(string.IsNullOrWhiteSpace(e.Title) ? e.AppName : e.Title)}\u2026",
+                Draft = _drafts.TryGetValue(e.Key, out string? draft) ? draft : "",
+            }).ToList();
+        }
 
         NotificationsEmpty.IsVisible = entries.Count == 0;
 
@@ -697,6 +743,66 @@ public partial class MainWindow : Window
     }
 
     private void OnStopRinging(object? sender, RoutedEventArgs e) => _daemon.Ringer.Stop();
+
+    /// <summary>
+    /// Sends what is in the box, through the app that posted the notification.
+    ///
+    /// <para>Nothing here talks to WhatsApp. The phone pulls the reply action the notification
+    /// already carried, which is what the notification shade does. The outcome is reported on the
+    /// row rather than in a dialog, because a reply that did not go is worth seeing next to the
+    /// text that did not go with it.</para>
+    /// </summary>
+    private async void OnReply(object? sender, RoutedEventArgs e)
+    {
+        string key = TagOf(sender) ?? "";
+        if (key.Length == 0) return;
+
+        var rows = NotificationList.ItemsSource as IReadOnlyList<NotificationRow>;
+        var row = rows?.FirstOrDefault(r => r.Key == key);
+        if (row == null) return;
+
+        string text = (row.Draft ?? "").Trim();
+        if (text.Length == 0) return;
+
+        var (ok, message) = await _daemon.ReplyToNotificationAsync(key, text).ConfigureAwait(true);
+
+        row.ReplyStatus = message;
+
+        if (ok)
+        {
+            row.Draft = "";
+            _drafts.Remove(key);
+        }
+        else
+        {
+            _drafts[key] = text;
+        }
+
+        // The row objects are plain and do not notify, so the list is rebuilt to show the
+        // outcome. Cheap: there are only ever a handful of these.
+        _notificationsSignature = "";
+        var kept = rows!.ToList();
+        NotificationList.ItemsSource = null;
+        NotificationList.ItemsSource = kept;
+    }
+
+    /// <summary>Enter sends, because that is what a reply box does everywhere else.</summary>
+    private void OnReplyKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Return && e.Key != Key.Enter) return;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
+
+        e.Handled = true;
+
+        if (sender is TextBox box && box.Tag is string key)
+        {
+            var rows = NotificationList.ItemsSource as IReadOnlyList<NotificationRow>;
+            var row = rows?.FirstOrDefault(r => r.Key == key);
+            if (row != null) row.Draft = box.Text ?? "";
+
+            OnReply(box, new RoutedEventArgs());
+        }
+    }
 
     private async void OnClearNotifications(object? sender, RoutedEventArgs e)
     {
@@ -786,7 +892,38 @@ public partial class MainWindow : Window
 
     private void OnHide(object? sender, RoutedEventArgs e) => Hide();
 
-    private void OnGoToDevices(object? sender, RoutedEventArgs e) => SelectView(2);
+    // 4, not 2. Two is Notifications, and this is the Home page's primary "Pair a device"
+    // button - so it used to land on the one page that cannot pair. ShowPage opens the pairing
+    // window only for "Devices", which is why the miss was silent: the phone knocked forever
+    // against "not a paired device, and pairing is not open" and nothing here looked wrong.
+    private void OnGoToDevices(object? sender, RoutedEventArgs e) => SelectView(4);
+
+    /// <summary>
+    /// Drags the window by its caption, and maximises on a double click.
+    ///
+    /// <para>The desktop's title bar is gone - this window draws its own at 42px, the same bar
+    /// the Windows daemon draws through <c>WindowChrome</c> - so moving and maximising stopped
+    /// being the window manager's job and have to happen here.</para>
+    ///
+    /// <para>Caption buttons are unaffected: Avalonia's Button marks the pointer press handled,
+    /// so it never reaches this and a click on Minimise cannot start a drag.</para>
+    /// </summary>
+    private void OnCaptionPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+        if (e.ClickCount == 2)
+        {
+            WindowState = WindowState == WindowState.Maximized
+                ? WindowState.Normal
+                : WindowState.Maximized;
+            return;
+        }
+
+        BeginMoveDrag(e);
+    }
+
+    private void OnMinimise(object? sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
     private async void OnSend(object? sender, RoutedEventArgs e)
     {

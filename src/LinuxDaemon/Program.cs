@@ -1,5 +1,7 @@
 using CoreLib.Diagnostics;
 using DesktopCore;
+using DesktopCore.Ipc;
+using DesktopCore.Tray;
 using CoreLib.Transport;
 
 namespace LinuxDaemon;
@@ -61,6 +63,18 @@ public static class Program
             Console.Error.WriteLine($"Could not start: {ex.Message}");
             return 1;
         }
+
+        // The same bus surface the windowed head publishes. A machine with a panel but no
+        // desktop session still wants a widget and a tray icon, and this is the head that runs
+        // there. Losing the name to a device already running is expected, not an error.
+        using var bus = await MeshBus.TryStartAsync(daemon, quit: stopping.Cancel).ConfigureAwait(false);
+
+        // And a tray icon, on a machine that has a panel but no desktop session to run a window
+        // in. This head has never had one; there was nowhere for it to come from until the item
+        // stopped being the toolkit's.
+        using var tray = await TrayItem.TryStartAsync(daemon, quit: stopping.Cancel).ConfigureAwait(false);
+
+        DesktopCore.Platform.WidgetInstaller.EnsureInstalled(paths.DataDirectory);
 
         Shell.PrintBanner(daemon);
 

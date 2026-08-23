@@ -96,6 +96,27 @@ public sealed class Daemon : IDisposable
     public DesktopNotifier Notifier { get; } = new();
 
     /// <summary>
+    /// Whether this device draws its own tray icon.
+    ///
+    /// <para>Off is for the person who has put the Plasma widget in the system tray and does not
+    /// want the same mark twice. See <see cref="TraySettings"/>.</para>
+    /// </summary>
+    public bool TrayIconVisible
+    {
+        get => TraySettings.IsVisible(_paths.DataDirectory);
+        set
+        {
+            if (value == TrayIconVisible) return;
+
+            TraySettings.SetVisible(_paths.DataDirectory, value);
+            TrayIconVisibleChanged?.Invoke(value);
+        }
+    }
+
+    /// <summary>Raised when the tray icon is turned on or off, so it can appear or go.</summary>
+    public event Action<bool>? TrayIconVisibleChanged;
+
+    /// <summary>
     /// The Bluetooth tier, or null where there is no usable radio.
     ///
     /// <para>Central only for now: this device scans and connects out, which obliges the peer to
@@ -877,6 +898,132 @@ public sealed class Daemon : IDisposable
 
         await Mesh.SendToAsync(fingerprint, SyncContent.NotificationDismiss,
             NotificationProtocol.BuildDismiss(key)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sends whatever is on this machine's clipboard right now.
+    ///
+    /// <para>The watcher already sends a copy the moment it happens, so this is not how the
+    /// clipboard normally travels. It exists for the two cases the watcher cannot serve: a
+    /// session where the clipboard cannot be watched in the background and is polled or not read
+    /// at all, and a deliberate resend of something copied before a device came back.</para>
+    ///
+    /// <para>The echo suppressor is not consulted. A person asking for this a second time means
+    /// it, and refusing on the grounds that it was already sent is the app arguing with them.</para>
+    /// </summary>
+    public async Task<(bool Ok, string Message)> SendClipboardAsync(CancellationToken cancellationToken = default)
+    {
+        if (!ClipboardBridge.IsAvailable) return (false, "There is no clipboard on this session.");
+
+        string? text;
+        try
+        {
+            text = await ClipboardBridge.GetTextAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Clipboard", "Could not read the clipboard to send it", ex);
+            return (false, "The clipboard could not be read.");
+        }
+
+        if (string.IsNullOrEmpty(text)) return (false, "The clipboard is empty.");
+
+        int sent = await SendTextAsync(text, cancellationToken).ConfigureAwait(false);
+
+        return sent > 0
+            ? (true, $"Sent to {sent} device(s).")
+            : (false, "Nothing is reachable, so nothing was sent.");
+    }
+
+    /// <summary>
+    /// Answers a mirrored notification, in the app that posted it, on the device it came from.
+    ///
+    /// <para><b>What actually happens.</b> Nothing here talks to WhatsApp or to Messages. The
+    /// phone pulls the reply action the notification already carried - the same action the
+    /// notification shade offers - with this text filled into its <c>RemoteInput</c>. The message
+    /// goes out through the app, from the account signed in there. That is the whole mechanism,
+    /// and it is why this needs no credential and automates no app from the outside.</para>
+    ///
+    /// <para><b>Over either tier.</b> Two short strings fit a Bluetooth frame, and answering a
+    /// message when there is no network is the case this feature is for. So it is not the Wi-Fi
+    /// only path a dismissal takes.</para>
+    ///
+    /// <para>The reply is not recorded. It is a message the user wrote, which makes it at least
+    /// as private as the notification that prompted it.</para>
+    /// </summary>
+    public async Task<(bool Ok, string Message)> ReplyToNotificationAsync(
+        string namespacedKey, string text, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return (false, "There is nothing to send.");
+
+        var (fingerprint, key) = MirroredNotifications.Split(namespacedKey);
+        if (fingerprint.Length == 0 || key.Length == 0) return (false, "That notification is not one of ours.");
+
+        var entry = Notifications.Snapshot()
+            .FirstOrDefault(e => string.Equals(e.Key, namespacedKey, StringComparison.Ordinal));
+
+        if (entry == null) return (false, "That notification has already gone.");
+        if (!entry.CanReply) return (false, $"{entry.AppName} did not offer a reply to that one.");
+
+        byte[] body = NotificationProtocol.BuildReply(key, text);
+
+        if (!await SendToPeerAsync(fingerprint, SyncContent.NotificationReply, body, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return (false, $"{entry.From} is not reachable right now.");
+        }
+
+        // The app name and the device, never the text. A reply is a message.
+        Log.Write("Daemon", $"Replied to a {entry.AppName} notification on {entry.From}.");
+        return (true, $"Replied on {entry.From}.");
+    }
+
+    /// <summary>
+    /// Sends one payload to one peer over whichever tier is holding it.
+    ///
+    /// <para>Wi-Fi first because it carries anything, then whichever radio half has that peer.
+    /// <c>Mesh.SendToAsync</c> alone would silently do nothing for a device that is only on
+    /// Bluetooth, which is exactly the device a reply is most wanted for.</para>
+    /// </summary>
+    private async Task<bool> SendToPeerAsync(string fingerprint, byte contentType, byte[] body,
+                                             CancellationToken cancellationToken = default)
+    {
+        if (Mesh.IsConnectedTo(fingerprint) &&
+            await Mesh.SendToAsync(fingerprint, contentType, body, cancellationToken).ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        if (await SendOneOverRadioAsync(Ble?.Peer, Ble?.RemoteFingerprint, fingerprint, contentType, body,
+                payload => Ble!.SendPayloadAsync(payload, cancellationToken)).ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        return await SendOneOverRadioAsync(BleServer?.Peer, BleServer?.RemoteFingerprint, fingerprint,
+            contentType, body, payload => BleServer!.SendPayloadAsync(payload)).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> SendOneOverRadioAsync(PeerSession? session, string? linkFingerprint,
+                                                          string wanted, byte contentType, byte[] body,
+                                                          Func<byte[], Task> send)
+    {
+        if (session == null || string.IsNullOrEmpty(linkFingerprint)) return false;
+        if (!string.Equals(linkFingerprint, wanted, StringComparison.OrdinalIgnoreCase)) return false;
+
+        try
+        {
+            byte[]? payload = session.Encrypt(contentType, body);
+            if (payload == null) return false;
+
+            await send(payload).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Ble", "Sending over Bluetooth failed", ex);
+            return false;
+        }
     }
 
     /// <summary>Clears every mirrored notification, telling each phone as it goes.</summary>

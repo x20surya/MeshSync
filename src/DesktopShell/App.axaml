@@ -117,6 +117,10 @@
             <Setter Property="Padding" Value="12,5" />
             <Setter Property="FontSize" Value="11.5" />
         </Style>
+        <!-- Caption buttons. The window draws its own title bar now, so these are the only
+             minimise and close it has, and they have to feel like a title bar's rather than
+             like the app's other buttons: full-height, square, no radius, and a hover fill
+             that reaches the top edge. Close goes red, the way every desktop's does. -->
         <Style Selector="Button.caption">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource B.TextMuted}" />
@@ -126,6 +130,27 @@
             <Setter Property="CornerRadius" Value="0" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <!-- Bound to the button's own Foreground rather than set on the Path, so the glyph
+             follows the hover states below instead of staying muted under a red fill. -->
+        <Style Selector="Button.caption Path">
+            <Setter Property="Stroke" Value="{Binding $parent[Button].Foreground}" />
+            <Setter Property="StrokeThickness" Value="1.2" />
+            <Setter Property="Fill" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.caption:pointerover">
+            <Setter Property="Foreground" Value="{DynamicResource B.Text}" />
+        </Style>
+        <Style Selector="Button.caption:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource B.SurfaceAlt}" />
+            <Setter Property="CornerRadius" Value="0" />
+        </Style>
+        <Style Selector="Button.caption.close:pointerover">
+            <Setter Property="Foreground" Value="#FFFFFF" />
+        </Style>
+        <Style Selector="Button.caption.close:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource B.Danger}" />
+            <Setter Property="CornerRadius" Value="0" />
         </Style>
 
         <Style Selector="TextBox">

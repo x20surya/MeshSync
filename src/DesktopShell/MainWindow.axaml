@@ -6,8 +6,13 @@
         Width="880" Height="620"
         MinWidth="700" MinHeight="520"
         Background="{DynamicResource B.Bg}"
-        Icon="avares://meshsync/Assets/meshsync.png">
+        Icon="avares://meshsync/Assets/meshsync.png"
 
+        WindowDecorations="BorderOnly">
+
+  <!-- The window draws its own edge, because there is no longer a desktop frame drawing one.
+       The Windows daemon does the same thing for the same reason. -->
+  <Border BorderBrush="{DynamicResource B.Border}" BorderThickness="1">
   <Grid ColumnDefinitions="196,*">
 
     <!-- ══════════════════════ SIDEBAR ══════════════════════ -->
@@ -16,8 +21,11 @@
       <Grid RowDefinitions="42,1,*,Auto">
 
         <!-- Brand. The mark is two rings and the lens where they meet, drawn rather than
-             loaded, so it takes the accent colour and follows the theme. -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+             loaded, so it takes the accent colour and follows the theme.
+             The Border is here to be dragged: this half of the 42px row is caption too, and a
+             StackPanel with no background is not hit-testable in Avalonia. -->
+        <Border Grid.Row="0" Background="Transparent" PointerPressed="OnCaptionPressed">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
           <Viewbox Width="22" Height="13" VerticalAlignment="Center">
             <Canvas Width="167" Height="99">
               <Ellipse Canvas.Left="5.5" Canvas.Top="5.5" Width="88" Height="88"
@@ -32,6 +40,7 @@
                      Margin="10,0,0,0" VerticalAlignment="Center"
                      Foreground="{DynamicResource B.Text}" />
         </StackPanel>
+        </Border>
 
         <Border Grid.Row="1" Background="{DynamicResource B.Border}" />
 
@@ -114,13 +123,21 @@
     <!-- ══════════════════════ CONTENT ══════════════════════ -->
     <Grid Grid.Column="1" RowDefinitions="42,*">
 
-      <Grid Grid.Row="0" Background="{DynamicResource B.Bg}">
+      <!-- The caption. Same 42px bar the Windows daemon draws through WindowChrome, on the same
+           row, so there is one title bar rather than an app header sitting under a desktop one.
+           Minimise and close, in that order, because that is what the Windows daemon offers -
+           and close hides to the tray rather than quitting, since quitting would stop syncing. -->
+      <Grid Grid.Row="0" Background="{DynamicResource B.Bg}" PointerPressed="OnCaptionPressed">
         <TextBlock x:Name="SectionTitle" Text="Home" FontWeight="SemiBold" FontSize="12.5"
                    VerticalAlignment="Center" Margin="24,0,0,0" />
-        <Button Classes="caption" HorizontalAlignment="Right" Click="OnHide" ToolTip.Tip="Hide to tray">
-          <Path Data="M 0,0 L 9,9 M 9,0 L 0,9" Stroke="{DynamicResource B.TextMuted}"
-                StrokeThickness="1.2" Width="9" Height="9" />
-        </Button>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button Classes="caption" Click="OnMinimise" ToolTip.Tip="Minimise">
+            <Path Data="M 0,0 L 10,0" Width="10" Height="1" />
+          </Button>
+          <Button Classes="caption close" Click="OnHide" ToolTip.Tip="Hide to tray">
+            <Path Data="M 0,0 L 9,9 M 9,0 L 0,9" Width="9" Height="9" />
+          </Button>
+        </StackPanel>
       </Grid>
 
       <Border x:Name="RingBanner" Grid.Row="1" IsVisible="False" ZIndex="10"
@@ -264,15 +281,15 @@
                       VerticalAlignment="Center" Click="OnClearNotifications" />
             </Grid>
             <TextBlock Classes="muted"
-                       Text="Held in memory only and never written to disk. Dismissing one here dismisses it on the phone too." />
+                       Text="Held in memory only and never written to disk. Dismissing one here dismisses it on the phone too, and a reply goes out through the app that posted it." />
 
             <Border Classes="card" Padding="6,4" Margin="0,16,0,0">
               <StackPanel>
                 <ItemsControl x:Name="NotificationList">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="app:NotificationRow">
-                      <Grid Margin="10,10" ColumnDefinitions="*,Auto">
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                      <Grid Margin="10,10" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
+                        <StackPanel Grid.Row="0" Grid.Column="0" VerticalAlignment="Center">
                           <TextBlock Text="{Binding Heading}" FontSize="13" FontWeight="SemiBold"
                                      TextTrimming="CharacterEllipsis" />
                           <TextBlock Text="{Binding Body}" Classes="muted" FontSize="12"
@@ -280,7 +297,27 @@
                           <TextBlock Text="{Binding Source}" Classes="faint" FontSize="11"
                                      Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
-                        <Button Grid.Column="1" Classes="quiet" Content="Dismiss" Margin="10,0,0,0"
+
+                        <!-- Only on notifications whose app actually offered a reply action.
+                             Showing a box on one that did not is a message the user believes
+                             they sent. -->
+                        <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                              ColumnDefinitions="*,Auto" Margin="0,9,0,0"
+                              IsVisible="{Binding CanReply}">
+                          <TextBox Grid.Column="0" Text="{Binding Draft, Mode=TwoWay}"
+                                   Tag="{Binding Key}" KeyDown="OnReplyKeyDown"
+                                   PlaceholderText="{Binding ReplyPlaceholder}"
+                                   FontSize="12.5" Padding="9,6" />
+                          <Button Grid.Column="1" Classes="primary" Content="{Binding ReplyLabel}"
+                                  Padding="14,6" Margin="8,0,0,0" FontSize="12"
+                                  Tag="{Binding Key}" Click="OnReply" />
+                        </Grid>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                                   Text="{Binding ReplyStatus}" Classes="faint" FontSize="11"
+                                   Margin="0,6,0,0" TextWrapping="Wrap"
+                                   IsVisible="{Binding HasReplyStatus}" />
+                        <Button Grid.Row="0" Grid.Column="1" Classes="quiet" Content="Dismiss" Margin="10,0,0,0"
                                 VerticalAlignment="Center" Tag="{Binding Key}" Click="OnDismissNotification" />
                       </Grid>
                     </DataTemplate>
@@ -511,4 +548,5 @@
       </ScrollViewer>
     </Grid>
   </Grid>
+  </Border>
 </Window>

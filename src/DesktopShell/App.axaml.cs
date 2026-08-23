@@ -3,14 +3,19 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using CoreLib.Diagnostics;
 using DesktopCore;
+using DesktopCore.Ipc;
+using DesktopCore.Tray;
 
 namespace DesktopShell;
 
 public partial class App : Application
 {
     private Daemon? _daemon;
+    private MeshBus? _bus;
+    private TrayItem? _tray;
     private MainWindow? _window;
     private CancellationTokenSource? _stopping;
 
@@ -55,9 +60,18 @@ public partial class App : Application
                 return;
             }
 
-            BuildTray();
+            // Only where our own StatusNotifierItem cannot go. On Linux TrayItem owns the icon;
+            // building both would put two identical icons in the panel.
+            if (!OperatingSystem.IsLinux()) BuildTray();
 
-            desktop.ShutdownRequested += (_, _) => Shutdown();
+            // Logged, because a quit that leaves no line is a quit nobody can explain afterwards.
+            // This one fires when the session manager asks, which is not the same as the tray's
+            // Quit and used to be indistinguishable from it in the log.
+            desktop.ShutdownRequested += (_, _) =>
+            {
+                Log.Write("Shell", "The session asked Mesh Sync to stop.");
+                Shutdown();
+            };
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -131,6 +145,25 @@ public partial class App : Application
         try
         {
             await _daemon!.StartAsync(_stopping!.Token).ConfigureAwait(false);
+
+            // After the daemon, not before: the first thing a client does is read properties,
+            // and answering them from a device that has not started yet would report a mesh with
+            // no listener as though that were its resting state.
+            _bus = await MeshBus.TryStartAsync(_daemon, ShowPage, QuitFromBus).ConfigureAwait(false);
+
+            // The tray item is ours rather than Avalonia's, so it can carry a themed icon, a
+            // tooltip, and a NeedsAttention state when a device is asking to join. On macOS
+            // there is no StatusNotifier host and this returns null, which is why the Avalonia
+            // one is still built there.
+            _tray = await TrayItem.TryStartAsync(_daemon, ShowPage, QuitFromBus).ConfigureAwait(false);
+
+            if (_tray == null && OperatingSystem.IsLinux())
+                Log.Write("Shell", "No status area took the tray icon; the window is the only way in.");
+
+            // The widget ships with the app but Plasma reads it from a fixed place, and an
+            // AppImage cannot put anything there. Once, quietly, and never on a desktop that
+            // has no use for it.
+            DesktopCore.Platform.WidgetInstaller.EnsureInstalled(_daemon.DataDirectory);
         }
         catch (Exception ex)
         {
@@ -139,10 +172,46 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// The tray icon, which on Linux is a StatusNotifierItem over D-Bus and on macOS is an
-    /// NSStatusItem. Avalonia hides the difference; what it cannot hide is that a desktop with
-    /// no status area shows nothing at all, which is why quitting is also possible from the
-    /// window itself.
+    /// Raises the window on a named page, for anything holding the bus.
+    ///
+    /// <para>The widget's "Open Mesh Sync" comes through here, and so will a second launch of the
+    /// app once it hands over rather than racing for the port. Names rather than indices, because
+    /// an index is exactly the kind of thing that goes wrong quietly - the Home page's pairing
+    /// button spent its life opening Notifications for precisely that reason.</para>
+    /// </summary>
+    private void ShowPage(string page)
+    {
+        int view = page.Trim().ToLowerInvariant() switch
+        {
+            "activity" => 1,
+            "notifications" => 2,
+            "files" => 3,
+            "devices" => 4,
+            "settings" => 5,
+            "about" => 6,
+            _ => 0,
+        };
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            ShowWindow();
+            _window?.SelectView(view);
+        });
+    }
+
+    private void QuitFromBus() => Dispatcher.UIThread.Post(() =>
+    {
+        Log.Write("Shell", "Quit was asked for over the bus.");
+        Shutdown();
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown();
+    });
+
+    /// <summary>
+    /// The macOS tray icon, an NSStatusItem by way of Avalonia.
+    ///
+    /// <para>Linux does not come through here any more: <c>DesktopCore.Tray.TrayItem</c> owns the
+    /// StatusNotifierItem there, because Avalonia's cannot express an icon name, a tooltip or an
+    /// attention state. macOS has no StatusNotifierWatcher, so this stays for the Mac head.</para>
     /// </summary>
     private void BuildTray()
     {
@@ -188,7 +257,18 @@ public partial class App : Application
 
     private void Shutdown()
     {
+        if (_daemon != null) Log.Write("Shell", "Mesh Sync is stopping.");
+
         try { _stopping?.Cancel(); } catch { }
+
+        // Before the daemon: the bus is subscribed to the daemon's events, and a disposed daemon
+        // raising one into a disposed connection is a fault on a thread nobody is watching.
+        _bus?.Dispose();
+        _bus = null;
+
+        _tray?.Dispose();
+        _tray = null;
+
         _daemon?.Dispose();
         _daemon = null;
     }
