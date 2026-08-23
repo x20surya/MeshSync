@@ -443,20 +443,26 @@ public sealed class Daemon : IDisposable
         if (!Transports.AllowsBle) return false;
         if (Ble?.IsConnected == true || BleServer?.IsConnected == true) return false;
 
-        bool dial = BleLinkArbiter.ShouldDialAnyPeer(
-            Security.Identity.Fingerprint,
-            _bleCapability,
-            Security.Peers.Peers.Select(peer => peer.Fingerprint));
+        var peers = Security.Peers.Peers.Select(peer => peer.Fingerprint).ToList();
+
+        bool dial = BleLinkArbiter.ShouldDialAnyPeer(Security.Identity.Fingerprint, _bleCapability, peers);
 
         // Said once per change of mind, not once per round. A device that has decided not to scan
         // looks exactly like a device whose Bluetooth is broken, and the whole reason this gate
         // was missing for so long is that nothing anywhere said which of the two was happening.
+        //
+        // The two silent cases are kept apart deliberately. "Not scanning because nothing is
+        // paired" and "not scanning because the peer is the one that dials" produce identical
+        // silence and are very different problems, and saying the second when the first is true
+        // sends a reader looking for an arbitration bug that is not there.
         if (dial != _loggedDialDecision)
         {
             _loggedDialDecision = dial;
-            Log.Write("Ble", dial
-                ? $"This device takes the central half ({_bleCapability}); scanning."
-                : $"This device takes the peripheral half for every paired device ({_bleCapability}); waiting to be connected to rather than scanning.");
+
+            Log.Write("Ble",
+                dial ? $"This device takes the central half ({_bleCapability}); scanning."
+                : peers.Count == 0 ? "Nothing is paired yet, so there is nothing to scan for."
+                : $"The peer opens the link for every paired device ({_bleCapability}); waiting to be connected to rather than scanning.");
         }
 
         return dial;
