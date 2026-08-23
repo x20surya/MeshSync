@@ -224,6 +224,10 @@ made a phone shriek from across the street.
   its own target framework, keeping `DesktopCore` and `DesktopShell` shared and platform-free.
   Until then macOS stays Wi-Fi only and stays cross-published from Linux, which costs it nothing
   it does not already lack.
+- **The BLE service UUID is shared by every install**, so a scan finds every Mesh Sync device in
+  range and not only the ones in this mesh. Refusing them is not enough on its own: a refusal that
+  is not remembered is a reconnection four seconds later. Anything that scans must drop a link that
+  does not produce a session and then leave that device alone for a while.
 - **Linux Bluetooth is the central half only.** The device scans, connects, exchanges the hello
   and holds the link; it does not yet advertise. BlueZ accepts the scan and rejects the exported
   GATT tree, so `LinuxBlePeripheral` registers, fails and stands aside. That is a supported

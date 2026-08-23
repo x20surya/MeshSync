@@ -184,6 +184,8 @@ Linux and macOS share a desktop shell that is built and runs.
 Clipboard, files, find my device and notification mirroring all work, mirrored notifications land
 in the desktop's own notification centre, and the clipboard needs nothing installed on Wayland.
 Linux has the Bluetooth tier as a central and wraps its identity key with the desktop keyring.
+Devices from another mesh are found by any scan, because the service is the same everywhere; they
+are refused and then left alone.
 macOS has neither, and will be separated from the Linux build when it gets Bluetooth.
 It has been proven between two Linux devices and not yet against a phone.
 

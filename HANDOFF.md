@@ -513,6 +513,24 @@ is itself, and logged `Refusing a connection from this device's own identity` in
 There is now a separate `peerPort` that defaults to `port`, so every existing caller is unchanged
 and only the desktop head passes it.
 
+**Every install shares one BLE service UUID, so a scan finds other people's meshes.**
+Two meshes in one room is not a hypothetical: a laptop here held a Bluetooth link to a phone in
+somebody else's mesh for as long as both were in range. The session was refused correctly - the
+phone is not paired and never became so - but the link was reported as up the moment the GATT
+characteristics resolved, the timeout only covered a peer that had gone quiet rather than one that
+had never spoken, and a device that refused outright was retried four seconds later, forever.
+
+A link now has twelve seconds to produce a session or it is dropped, and a device that refuses is
+ignored for five minutes. Eleven connect attempts in ninety seconds became one. The asymmetry that
+made it obvious is worth remembering: the Android end refused and stayed refused, so only the
+desktop looked wrong.
+
+**BlueZ keeps a device object for every LE address it has ever seen.**
+A phone rotates its LE address for privacy, so most of those objects are ghosts that still carry
+the service UUID they advertised at the time, and dialling one connects to an address that stopped
+existing minutes ago. RSSI is the discriminator: BlueZ publishes it only while a device is being
+seen in the current discovery session and drops it when the device goes away.
+
 **D-Bus aligns every dict entry and every struct to eight bytes, and nothing here does it for you.**
 This cost most of the keyring work. A hand-rolled `a{ss}` with two pairs is malformed, because the
 second entry needs padding the writer has no API to emit - and dbus-daemon answers a malformed
@@ -616,6 +634,14 @@ are already gone. `--noredact` and reading `android.title` for the live record w
 ---
 
 ## Open decisions
+
+**The central announces itself before it knows who it is talking to.**
+The Bluetooth handshake has the central connect, subscribe and send its hello - public key, device
+name and mesh name - and only then does either end authorise. So two meshes in range learn each
+other's device and mesh names, even though nothing is let in and nothing readable crosses. Closing
+it means the central waits for the peripheral's hello, checks whether that key is paired, and only
+answers if it is. Strictly better, and it changes the handshake on all three platforms, so it is a
+protocol decision rather than a fix.
 
 **The app name.**
 "Mesh Sync" throughout, including the brand assets, and it has grown more apt: it really is a mesh
