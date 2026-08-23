@@ -305,6 +305,10 @@ public sealed class Daemon : IDisposable
             // nothing to raise. Logged because the peer is telling us it has something large.
             Ble.WiFiRequested += (_, _) => Log.Write("Ble", "A peer asked for Wi-Fi; it is already up here.");
 
+            // A device refused for not being paired is the same device being paired seconds
+            // later, and it must not sit out its cooldown after that.
+            Security.Peers.Changed += () => Ble?.ForgetRejections();
+
             _ = Task.Run(() => Ble.RunAsync(adapterPath, cancellationToken), CancellationToken.None);
         }
         catch (Exception ex)

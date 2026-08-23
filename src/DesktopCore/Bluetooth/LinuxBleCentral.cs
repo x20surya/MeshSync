@@ -263,6 +263,23 @@ public sealed class LinuxBleCentral : ITransportConnection
         }
     }
 
+    /// <summary>
+    /// Forgets every refusal.
+    ///
+    /// <para>Called when the set of paired devices changes. A device that was refused a moment ago
+    /// because it had not been confirmed yet is exactly the device being confirmed now, and
+    /// leaving it in cooldown means waiting out five minutes for a link that should come straight
+    /// up. Clearing the lot is right: a device from another mesh will simply be refused again on
+    /// the next sweep and cost one connection.</para>
+    /// </summary>
+    public void ForgetRejections()
+    {
+        if (_rejected.Count == 0) return;
+
+        _rejected.Clear();
+        Log.Write("BleCentral", "The paired devices changed; giving every device another try.");
+    }
+
     private bool InCooldown(string path)
     {
         if (!_rejected.TryGetValue(path, out var until)) return false;
