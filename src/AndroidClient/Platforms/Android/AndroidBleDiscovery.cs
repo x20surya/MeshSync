@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Android.Bluetooth;
@@ -8,6 +9,7 @@ using Android.Content;
 using Android.OS;
 using CoreLib.Diagnostics;
 using CoreLib.Transport;
+using CoreLib.Transport.Ble;
 using Java.Util;
 
 namespace AndroidClient.Platforms.Android
@@ -27,6 +29,9 @@ namespace AndroidClient.Platforms.Android
         private readonly object _gate = new();
         private readonly Dictionary<string, DateTime> _seen = new(StringComparer.OrdinalIgnoreCase);
         private static readonly TimeSpan RediscoverAfter = TimeSpan.FromSeconds(30);
+
+        /// <summary>Everything a round has seen, keyed by address, with the strongest reading kept.</summary>
+        private readonly Dictionary<string, BleCandidate> _round = new(StringComparer.OrdinalIgnoreCase);
 
         private BluetoothLeScanner? _scanner;
         private bool _scanning;
@@ -99,30 +104,34 @@ namespace AndroidClient.Platforms.Android
             return Task.CompletedTask;
         }
 
-        /// <summary>Scans until a peer turns up or the timeout expires. Returns its address.</summary>
-        public async Task<string?> FindPeerAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// One scan window, returning everything it saw.
+        ///
+        /// <para><b>This used to resolve on the first advertisement and stop.</b> Every install
+        /// advertises the same service UUID, so the first packet is whoever happened to be
+        /// nearest - and a foreign phone sitting closer than your own therefore won every round,
+        /// was refused, and the round was over. Six minutes of scans found a stranger's phone
+        /// over and over and the paired one not once, on the platform where this was fixed first.
+        /// Collecting the whole window and letting the scheduler rank it is the fix.</para>
+        /// </summary>
+        public async Task<IReadOnlyList<BleCandidate>> ScanAsync(TimeSpan window, CancellationToken cancellationToken = default)
         {
-            var found = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_gate) _round.Clear();
 
-            void OnFound(object? sender, DeviceDiscoveredEventArgs e) => found.TrySetResult(e.DeviceId);
-
-            DeviceDiscovered += OnFound;
             try
             {
                 await StartScanningAsync().ConfigureAwait(false);
 
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                linked.CancelAfter(timeout);
-                using var registration = linked.Token.Register(() => found.TrySetResult(string.Empty));
-
-                string address = await found.Task.ConfigureAwait(false);
-                return string.IsNullOrEmpty(address) ? null : address;
+                // Fully qualified: Android.OS defines an OperationCanceledException too.
+                try { await Task.Delay(window, cancellationToken).ConfigureAwait(false); }
+                catch (System.OperationCanceledException) { }
             }
             finally
             {
-                DeviceDiscovered -= OnFound;
                 await StopScanningAsync().ConfigureAwait(false);
             }
+
+            lock (_gate) return _round.Values.ToList();
         }
 
         public override void OnScanResult(ScanCallbackType callbackType, ScanResult? result)
@@ -133,9 +142,29 @@ namespace AndroidClient.Platforms.Android
             string? address = device?.Address;
             if (string.IsNullOrEmpty(address)) return;
 
-            // The scanner reports the same peer many times a second while it is in range.
+            // Kept for the whole window, with the strongest reading of each device winning. The
+            // scanner reports the same peer many times a second while it is in range, so this is
+            // a merge rather than a stream.
             lock (_gate)
             {
+                bool first = !_round.ContainsKey(address!);
+
+                if (!first && _round[address!].Rssi >= (result?.Rssi ?? short.MinValue)) return;
+
+                _round[address!] = new BleCandidate
+                {
+                    Address = address!,
+                    Name = device?.Name,
+                    Rssi = result?.Rssi ?? short.MinValue,
+                    Beacon = BeaconOf(result),
+
+                    // An advertisement only arrives while the device is being seen, so anything
+                    // reported here is present by definition.
+                    IsPresent = true,
+                };
+
+                if (!first) return;
+
                 var now = DateTime.UtcNow;
                 if (_seen.TryGetValue(address!, out var last) && now - last < RediscoverAfter) return;
                 _seen[address!] = now;
@@ -149,6 +178,21 @@ namespace AndroidClient.Platforms.Android
                 DeviceName = device?.Name ?? "Mesh Sync",
                 PublicIdentifer = Array.Empty<byte>()
             });
+        }
+
+        /// <summary>Pulls the mesh beacon out of an advertisement, if it carried one.</summary>
+        private static byte[]? BeaconOf(ScanResult? result)
+        {
+            try
+            {
+                var data = result?.ScanRecord?.GetManufacturerSpecificData(MeshBeacon.CompanyId);
+                return data != null && data.Length == MeshBeacon.Length ? data : null;
+            }
+            catch
+            {
+                // An advertisement this build does not understand is simply not one of ours.
+                return null;
+            }
         }
 
         public override void OnScanFailed(ScanFailure errorCode)

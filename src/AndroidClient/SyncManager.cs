@@ -1,10 +1,12 @@
-﻿using System;
+﻿﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using CoreLib;
 using CoreLib.Diagnostics;
 using CoreLib.Identity;
 using CoreLib.Transport;
+using CoreLib.Transport.Ble;
+using CoreLib.Transport.Fabric;
 
 #if ANDROID
 using Android.App;
@@ -48,7 +50,6 @@ namespace AndroidClient
         private const string PrefPaused = "UserPaused";
 
         /// <summary>How long to wait for a Wi-Fi socket before giving up on the attempt.</summary>
-        private static readonly TimeSpan TcpConnectTimeout = TimeSpan.FromSeconds(5);
 
         /// <summary>
         /// How long the pairing screen waits before saying it did not work.
@@ -79,7 +80,6 @@ namespace AndroidClient
         /// Upper bound on the Bluetooth retry gap while the user is present, so the standing
         /// link is re-established promptly rather than after a full backoff.
         /// </summary>
-        private static readonly TimeSpan BleRetryCeilingActive = TimeSpan.FromSeconds(8);
 
         /// <summary>
         /// Upper bound with the screen off. Scanning is the expensive part of the Bluetooth
@@ -89,28 +89,28 @@ namespace AndroidClient
         /// so a slower rescan costs nothing that matters, and screen-on signals both loops
         /// immediately anyway.
         /// </summary>
-        private static readonly TimeSpan BleRetryCeilingIdle = TimeSpan.FromSeconds(60);
 
-        private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(1);
-        private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
 
         private static readonly object _loopGate = new();
         private static readonly object _securityGate = new();
 
         /// <summary>One wake-up signal per loop, so a Bluetooth event cannot spin the Wi-Fi loop.</summary>
-        private static readonly SemaphoreSlim _bleSignal = new(0);
-
-        private static readonly SemaphoreSlim _wifiSignal = new(0);
-
+        
+        
         private static readonly EchoSuppressor _echo = new(TimeSpan.FromSeconds(10));
-        private static readonly Random _jitter = new();
-
+        
         // ── links ───────────────────────────────────────────────────────────────────────
         // Two fields, not one. Each is owned exclusively by its own loop; everything else
         // signals rather than connecting, so there is no gate to hold across a round trip.
 
-        /// <summary>The Bluetooth link this device opened, as the central.</summary>
-        private static ITransportConnection? _bleLink;
+        /// <summary>Scans, connects and rotates on one adapter. Null until the radio starts.</summary>
+        private static Platforms.Android.AndroidBleRadio? _radio;
+
+        private static BleRadioScheduler? _scheduler;
+
+        private static MeshDiscovery? _discovery;
+
+        private static LinkSupervisor? _supervisor;
 
         /// <summary>
         /// The Bluetooth link a peer opened to this device, as the central to our peripheral.
@@ -120,9 +120,12 @@ namespace AndroidClient
         /// central, so its peer has to be the one advertising. Two phones would otherwise both
         /// sit scanning for something neither was broadcasting.
         /// </summary>
-        private static ITransportConnection? _blePeripheralLink;
+        private static Platforms.Android.AndroidBlePeripheralRoute? _inbound;
 
         private static int _peripheralStarted;
+
+        /// <summary>What this phone's radio can do, taken from what actually started.</summary>
+        private static BleCapability _bleCapability = BleCapability.Central;
 
         /// <summary>
         /// The Wi-Fi tier: one link per paired device, and this phone both listens and dials.
@@ -131,21 +134,21 @@ namespace AndroidClient
         /// which made phone-to-phone impossible and meant a second device could only be reached
         /// by dropping the first.
         /// </summary>
-        private static MeshLinks? _mesh;
+        private static MeshFabric? _fabric;
+        private static WiFiRouteProvider? _wifi;
 
         private static CancellationTokenSource? _loopCts;
-        private static Task? _bleLoopTask;
-        private static Task? _wifiLoopTask;
+        private static Task? _supervisorTask;
+        private static Task? _schedulerTask;
+
+        /// <summary>Peers with a send in flight that needs a socket, and peers that asked for one.</summary>
+        private static readonly HashSet<string> _wifiHolds = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, DateTime> _wifiWake = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly object _demandGate = new();
 
         // ── Wi-Fi demand ────────────────────────────────────────────────────────────────
 
         private static volatile bool _screenOn = true;
-        private static int _wifiHolds;
-        private static long _wifiWakeUntilTicks;
-        private static volatile bool _networkHintPending;
-
-        /// <summary>Stops the "no network" line repeating once per retry while there is none.</summary>
-        private static volatile bool _reportedNoNetwork;
 
         private static PeerSecurity? _security;
         private static string? _lastPeerName;
@@ -215,38 +218,29 @@ namespace AndroidClient
 
         public enum TransportKind { None, WiFi, Ble }
 
-        public static bool BleConnected =>
-            _bleLink?.IsConnected == true || _blePeripheralLink?.IsConnected == true;
-
-        /// <summary>Whichever Bluetooth link is live, preferring the one this device opened.</summary>
-        private static ITransportConnection? LiveBleLink =>
-            _bleLink?.IsConnected == true ? _bleLink :
-            _blePeripheralLink?.IsConnected == true ? _blePeripheralLink :
-            null;
-
         /// <summary>
-        /// The agreed key of whichever Bluetooth link is live.
+        /// True when anything at all is reachable over the radio.
         ///
-        /// Null until that link's hello has crossed, because the key is now per connection
-        /// rather than derived from the peer's identity and known in advance.
+        /// <para><b>This used to be the whole of the standby logic and it was the bug.</b> It read
+        /// <c>_bleLink?.IsConnected</c>, and a central link stayed <c>IsConnected</c> after a
+        /// failed key agreement - so a device from somebody else's mesh answering pings made this
+        /// true, parked the Bluetooth loop on a semaphore with no timeout, and made
+        /// <c>WiFiWanted()</c> conclude Wi-Fi was unnecessary. A phone with no working link to
+        /// anything, indefinitely, saying "Connected over Bluetooth".</para>
+        ///
+        /// <para>It reads the fabric now, where a route reaches <c>Established</c> only through a
+        /// session and <c>Handshaking</c> has a deadline.</para>
         /// </summary>
-        private static PeerSession? LiveBleSession => SessionOf(LiveBleLink);
+        public static bool BleConnected =>
+            _fabric?.Links.Any(l => l.LiveRoutes.Any(r => r.Kind != RouteKind.WiFi)) == true;
 
-        /// <summary>The agreed key held by a Bluetooth transport, whichever half it is.</summary>
-        private static PeerSession? SessionOf(object? link)
-        {
-#if ANDROID
-            return link switch
-            {
-                Platforms.Android.AndroidBleTransport central => central.Peer,
-                Platforms.Android.AndroidBlePeripheral peripheral => peripheral.Peer,
-                _ => null
-            };
-#else
-            _ = link;
-            return null;
-#endif
-        }
+        /// <summary>True when this peer is reachable over the radio specifically.</summary>
+        public static bool BleConnectedTo(string fingerprint) =>
+            _fabric?.LinkTo(fingerprint)?.LiveRoutes.Any(r => r.Kind != RouteKind.WiFi) == true;
+
+        /// <summary>True when this peer has a socket, as opposed to any link at all.</summary>
+        public static bool WiFiConnectedTo(string fingerprint) =>
+            _fabric?.LinkTo(fingerprint)?.RouteOf(RouteKind.WiFi)?.State == RouteState.Established;
 
         /// <summary>
         /// Authorises a Bluetooth peer and agrees this link's key in one step. Both halves of
@@ -259,7 +253,17 @@ namespace AndroidClient
                 ? Security.OpenSession(peerPublicKey, localEphemeral, peerEphemeral)
                 : null;
 
-        public static bool WiFiConnected => _mesh?.IsConnectedToAny == true;
+        public static bool WiFiConnected =>
+            _fabric?.Links.Any(l => l.RouteOf(RouteKind.WiFi)?.State == RouteState.Established) == true;
+
+        /// <summary>Everything about reachability, for a diagnostics view or a log line.</summary>
+        public static MeshHealth? Health => _fabric == null || _supervisor == null ? null : MeshHealth.Of(
+            _fabric, CoreLib.Transport.Fabric.SystemClock.Instance,
+            _supervisor.LastPassUtc, _supervisor.Passes, _supervisor.Restarts,
+            _radio?.Status ?? "no adapter", _scheduler?.LiveCentralLinks ?? 0,
+            _scheduler == null ? 0 : _fabric.Timings.MaxBleCentralLinks,
+            _scheduler?.IsAdvertising ?? false, _scheduler?.LastRound ?? default,
+            RoutePolicy.Plan(Security.Peers.Peers, CurrentConditions(), DateTime.UtcNow).Routes);
 
         public static bool IsConnected => BleConnected || WiFiConnected;
 
@@ -287,12 +291,12 @@ namespace AndroidClient
         {
             get
             {
-                var mesh = _mesh;
-                if (mesh != null)
+                var fabric = _fabric;
+                if (fabric != null)
                 {
-                    foreach (var fingerprint in mesh.ConnectedPeers)
+                    foreach (var fingerprint in fabric.ConnectedPeers)
                     {
-                        string? name = mesh.NameOf(fingerprint);
+                        string? name = fabric.LinkTo(fingerprint)?.Peer.Name;
                         if (!string.IsNullOrWhiteSpace(name)) return name;
                     }
                 }
@@ -341,7 +345,7 @@ namespace AndroidClient
                     var created = new BrowseService
                     {
                         Send = (fingerprint, contentType, body) =>
-                            Mesh.SendToAsync(fingerprint, contentType, body),
+                            Fabric.SendToAsync(fingerprint, contentType, body),
                         SendFile = async (fingerprint, path) =>
                             await Files.SendAsync(fingerprint, path).ConfigureAwait(false)
                     };
@@ -381,7 +385,7 @@ namespace AndroidClient
                     var created = new FileTransferService(
                         System.IO.Path.Combine(StorageDirectory(), "incoming"),
                         (fingerprint, contentType, body, token) =>
-                            Mesh.SendToAsync(fingerprint, contentType, body, token));
+                            Fabric.SendToAsync(fingerprint, contentType, body, token));
 
                     created.FileReceived += SaveReceivedFile;
                     created.FileFailed += (name, reason) =>
@@ -397,27 +401,110 @@ namespace AndroidClient
         }
 
         /// <summary>The mesh, created on first use so the identity is loaded before it.</summary>
-        private static MeshLinks Mesh
+        /// <summary>
+        /// Every way this phone can reach every device it is paired with.
+        ///
+        /// <para>Replaces a <c>MeshLinks</c> holding the sockets and two nullable radio fields
+        /// beside it. One route table, so "is this peer reachable, and over what" has one answer -
+        /// which is what lets Wi-Fi demand be asked per peer instead of for the whole phone.</para>
+        /// </summary>
+        private static MeshFabric Fabric
         {
             get
             {
-                var existing = Volatile.Read(ref _mesh);
+                var existing = Volatile.Read(ref _fabric);
                 if (existing != null) return existing;
 
                 lock (_securityGate)
                 {
-                    existing = Volatile.Read(ref _mesh);
+                    existing = Volatile.Read(ref _fabric);
                     if (existing != null) return existing;
 
-                    var created = new MeshLinks(Security) { LocalDeviceName = LocalDeviceName };
-                    created.PayloadReceived += Mesh_PayloadReceived;
-                    created.PeerConnected += Mesh_PeerConnected;
-                    created.PeerDisconnected += Mesh_PeerDisconnected;
+                    var created = new MeshFabric(Security, () => _bleCapability);
+                    created.PayloadReceived += Fabric_PayloadReceived;
+                    created.PeerConnected += Fabric_PeerConnected;
+                    created.PeerDisconnected += Fabric_PeerDisconnected;
 
-                    Volatile.Write(ref _mesh, created);
+                    _wifi = new WiFiRouteProvider(Security)
+                    {
+                        LocalDeviceName = LocalDeviceName,
+                        LocalCapability = () => _bleCapability,
+                    };
+                    created.AddProvider(_wifi);
+
+                    _discovery = new MeshDiscovery(Security);
+
+                    _supervisor = new LinkSupervisor(created, CurrentConditions)
+                    {
+                        WantedCentralPeersChanged = peers => _scheduler?.SetWanted(peers),
+                        AdvertisingWanted = wanted => _ = ApplyAdvertisingAsync(wanted),
+                    };
+
+                    // A device refused a moment ago for not being paired is the same device being
+                    // confirmed now, and it must not sit out a cooldown after that.
+                    Security.Peers.Changed += () =>
+                    {
+                        _scheduler?.Cooldowns.Clear();
+
+                        // Minted here as well as at startup: a fresh install has nothing paired
+                        // when it starts, and there is no point advertising a beacon for a mesh
+                        // of one. The first pairing is the moment this phone becomes a mesh.
+                        if (_discovery?.MintIfDue() != null) _ = ApplyAdvertisingAsync(_scheduler?.IsAdvertising ?? false);
+
+                        _supervisor?.Signal();
+                    };
+
+                    Volatile.Write(ref _fabric, created);
                     return created;
                 }
             }
+        }
+
+        /// <summary>
+        /// Everything about this phone that decides which routes it wants.
+        ///
+        /// <para>Gathered here and handed to <c>RoutePolicy</c> whole. Every one of these used to
+        /// be a condition inside <c>WiFiWanted()</c> or one of the two loops, and none of them
+        /// could be asserted on without a radio in the room.</para>
+        /// </summary>
+        private static LocalConditions CurrentConditions()
+        {
+            Dictionary<string, DateTime> wake;
+            HashSet<string> holds;
+
+            lock (_demandGate)
+            {
+                wake = new Dictionary<string, DateTime>(_wifiWake, StringComparer.OrdinalIgnoreCase);
+                holds = new HashSet<string>(_wifiHolds, StringComparer.OrdinalIgnoreCase);
+            }
+
+            return new LocalConditions
+            {
+                LocalFingerprint = Security.Identity.Fingerprint,
+                ScreenOn = _screenOn,
+                HasUsableNetwork = HasUsableNetwork(),
+                Transport = TransportPreference.Both,
+                LocalCapability = _bleCapability,
+                PeerCapabilities = Security.Peers.Capabilities,
+                WiFiHolds = holds,
+                WiFiWakeUntilUtc = wake,
+                PairingOpen = Security.Pairing.IsOpen,
+            };
+        }
+
+        /// <summary>Publishes or withdraws the service, and refreshes the beacon as its epoch turns.</summary>
+        private static async Task ApplyAdvertisingAsync(bool wanted)
+        {
+            var scheduler = _scheduler;
+            var discovery = _discovery;
+            if (scheduler == null || discovery == null) return;
+
+            try
+            {
+                await scheduler.SetAdvertisingAsync(wanted, discovery.CurrentAdvertisement(_bleCapability))
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) { Log.Write("Sync", "Applying the advertisement failed", ex); }
         }
 
         /// <summary>True once a device has been paired by scanning a code or entering it by hand.</summary>
@@ -643,7 +730,11 @@ namespace AndroidClient
             // A file needs the tier that can carry it. Holding a lease keeps Wi-Fi up for the
             // whole transfer even if the screen goes off partway through, which for anything
             // larger than a photograph it very well might.
-            Interlocked.Increment(ref _wifiHolds);
+            //
+            // Held for every paired device, because a file is fanned out to all of them. Per peer
+            // is still the shape: the holds are a set, and dropping one does not drop the rest.
+            var held = Security.Peers.Peers.Select(peer => peer.Fingerprint).ToList();
+            lock (_demandGate) foreach (string fingerprint in held) _wifiHolds.Add(fingerprint);
             try
             {
                 if (!WiFiConnected && !await WaitForWiFiAsync(WiFiOnDemandTimeout).ConfigureAwait(false))
@@ -653,7 +744,7 @@ namespace AndroidClient
                     return false;
                 }
 
-                var targets = Mesh.ConnectedPeers;
+                var targets = Fabric.ConnectedPeers;
                 if (targets.Count == 0)
                 {
                     Report("No devices in range");
@@ -690,12 +781,12 @@ namespace AndroidClient
             }
             finally
             {
-                Interlocked.Decrement(ref _wifiHolds);
+                lock (_demandGate) foreach (string fingerprint in held) _wifiHolds.Remove(fingerprint);
                 SignalWiFi();
             }
         }
 
-        /// <summary>Stops both loops and tears the links down. Pairing details are kept.</summary>
+        /// <summary>Stops the supervisor and the radio, and tears the links down. Pairing is kept.</summary>
         public static async Task DisconnectAsync()
         {
             CancellationTokenSource? cts;
@@ -705,11 +796,11 @@ namespace AndroidClient
             lock (_loopGate)
             {
                 cts = _loopCts;
-                ble = _bleLoopTask;
-                wifi = _wifiLoopTask;
+                ble = _schedulerTask;
+                wifi = _supervisorTask;
                 _loopCts = null;
-                _bleLoopTask = null;
-                _wifiLoopTask = null;
+                _schedulerTask = null;
+                _supervisorTask = null;
             }
 
             try { cts?.Cancel(); } catch { }
@@ -728,7 +819,7 @@ namespace AndroidClient
 
             // Listening stops too. Dropping the links but staying reachable would let a peer
             // dial straight back in and quietly undo an explicit Stop.
-            try { _mesh?.StopListening(); }
+            try { _wifi?.StopListening(); }
             catch (Exception ex) { Log.Write("Sync", "Could not stop listening", ex); }
 
             _echo.Clear();
@@ -787,7 +878,6 @@ namespace AndroidClient
         public static void NotifyNetworkAvailable()
         {
             Log.Write("Sync", "Network became available - retrying now.");
-            _networkHintPending = true;
             SignalWiFi();
         }
 
@@ -827,18 +917,15 @@ namespace AndroidClient
                 ? System.Text.Encoding.UTF8.GetString(body)
                 : null;
 
-            // Fanned out, not sent: one ciphertext per peer, because the key is per pair.
-            // Bluetooth is skipped for any device Wi-Fi already reached, or a phone holding
-            // both links would receive every copy twice.
-            int sent = WiFiConnected ? await Mesh.BroadcastAsync(contentType, payload).ConfigureAwait(false) : 0;
-            sent += await SendOverBluetoothAsync(contentType, payload).ConfigureAwait(false);
+            // Once per peer, not once per link, and it is structural now: a peer reachable over
+            // both tiers has one PeerLink, which picks the route - Wi-Fi first because it carries
+            // anything, the radio when that is what exists. Skipping Bluetooth for a peer Wi-Fi
+            // already reached used to be a check that had to be remembered.
+            int sent = await Fabric.BroadcastAsync(contentType, payload).ConfigureAwait(false);
 
-            if (sent == 0)
-            {
-                // Nothing was open, or what was open could not carry it. Raising Wi-Fi is the
-                // one remaining option, and is what an image always needs.
-                sent = await SendByRaisingWiFiAsync(contentType, payload).ConfigureAwait(false);
-            }
+            // Whatever no live route could carry - an image, at 6.7 KB/s over the radio - asks
+            // its peer for Wi-Fi and follows up over that.
+            sent += await SendByRaisingWiFiAsync(contentType, payload).ConfigureAwait(false);
 
             if (sent == 0)
             {
@@ -854,43 +941,6 @@ namespace AndroidClient
         }
 
         /// <summary>
-        /// Sends over Bluetooth, to devices Wi-Fi did not already reach and only when the
-        /// payload fits inside the tier's ceiling.
-        /// </summary>
-        private static async Task<int> SendOverBluetoothAsync(byte contentType, byte[] payload)
-        {
-            var ble = LiveBleLink;
-            if (ble == null) return 0;
-
-            // Sealed with the key this link agreed, so there is nothing left to infer about who
-            // the peer is. A link with no session has not finished its handshake and is skipped.
-            var session = SessionOf(ble);
-            if (session == null) return 0;
-
-            if (_mesh?.IsConnectedTo(session.Fingerprint) == true) return 0;
-
-            byte[]? encrypted = session.Encrypt(contentType, payload);
-            if (encrypted == null) return 0;
-
-            if (encrypted.Length > BleProtocol.MaxPayloadBytes)
-            {
-                Log.Write("Sync", $"{encrypted.Length} bytes exceeds the Bluetooth ceiling; Wi-Fi is needed.");
-                return 0;
-            }
-
-            try
-            {
-                await ble.SendPayloadAsync(encrypted).ConfigureAwait(false);
-                return 1;
-            }
-            catch (Exception ex)
-            {
-                Log.Write("Sync", "Send over Bluetooth failed", ex);
-                return 0;
-            }
-        }
-
-        /// <summary>
         /// Raises Wi-Fi and waits for it rather than refusing outright the way the fallback
         /// arrangement had to. The hold keeps the link up across the transfer even if the
         /// screen goes off midway through it.
@@ -899,23 +949,71 @@ namespace AndroidClient
         {
             if (!CouldRaiseWiFi()) return 0;
 
-            Interlocked.Increment(ref _wifiHolds);
+            // Per peer, and that is the change. A peer whose only live route cannot carry this
+            // asks for a socket - for itself. The hold used to be one counter for the phone, so
+            // one peer needing Wi-Fi held it up for every peer, and one peer no longer needing
+            // it dropped the socket to all of them.
+            var needing = Fabric.NeedingWiFiFor(payload.Length).Select(l => l.Fingerprint).ToList();
+            if (needing.Count == 0) return 0;
+
+            lock (_demandGate) foreach (string fingerprint in needing) _wifiHolds.Add(fingerprint);
+
             try
             {
-                if (!await WaitForWiFiAsync(WiFiOnDemandTimeout).ConfigureAwait(false))
+                foreach (string fingerprint in needing) await AskPeerForWiFiAsync(fingerprint).ConfigureAwait(false);
+
+                _supervisor?.Signal();
+
+                var deadline = DateTime.UtcNow + WiFiOnDemandTimeout;
+                while (DateTime.UtcNow < deadline && needing.Any(f => !WiFiConnectedTo(f)))
                 {
-                    Log.Write("Sync", "Could not raise Wi-Fi; the item needs it.");
-                    return 0;
+                    await Task.Delay(200).ConfigureAwait(false);
                 }
 
-                return await Mesh.BroadcastAsync(contentType, payload).ConfigureAwait(false);
+                int sent = 0;
+
+                foreach (string fingerprint in needing)
+                {
+                    if (!WiFiConnectedTo(fingerprint))
+                    {
+                        Log.Write("Sync",
+                            $"{DeviceIdentity.Shorten(fingerprint)} did not come up on Wi-Fi; the item was dropped for it.");
+                        continue;
+                    }
+
+                    if (await Fabric.SendToAsync(fingerprint, contentType, payload).ConfigureAwait(false)) sent++;
+                }
+
+                return sent;
             }
             finally
             {
-                Interlocked.Decrement(ref _wifiHolds);
-                // Re-evaluate: with the hold gone the link may no longer be wanted.
-                SignalWiFi();
+                lock (_demandGate) foreach (string fingerprint in needing) _wifiHolds.Remove(fingerprint);
+
+                // Re-evaluate: with the holds gone the sockets may no longer be wanted.
+                _supervisor?.Signal();
             }
+        }
+
+        /// <summary>Asks one peer, over whichever radio half is carrying it, to raise Wi-Fi.</summary>
+        private static async Task AskPeerForWiFiAsync(string fingerprint)
+        {
+#if ANDROID
+            var link = _fabric?.LinkTo(fingerprint);
+            if (link == null) return;
+
+            foreach (var route in link.LiveRoutes)
+            {
+                if (route is Platforms.Android.AndroidBleTransport central)
+                {
+                    await central.RequestWiFiAsync().ConfigureAwait(false);
+                    return;
+                }
+            }
+#else
+            await Task.CompletedTask;
+            _ = fingerprint;
+#endif
         }
 
         /// <summary>
@@ -928,7 +1026,7 @@ namespace AndroidClient
         {
             lock (_loopGate)
             {
-                if (_wifiLoopTask == null) return false;
+                if (_supervisorTask == null) return false;
             }
 
             return IsPaired;
@@ -938,6 +1036,28 @@ namespace AndroidClient
         /// Asks the Wi-Fi loop for a link and waits for it. The caller must already hold a
         /// Wi-Fi lease, or the loop may decide the link is unwanted and drop it mid-wait.
         /// </summary>
+        /// <summary>
+        /// Takes a mesh discovery key a peer offered, if it should win.
+        ///
+        /// Lowest key wins, so two halves of a mesh that minted separately converge in one
+        /// exchange - and a device that adopts a new one re-advertises within an epoch.
+        /// </summary>
+        private static void AdoptMeshKey(PeerRecord peer, byte[] body)
+        {
+            if (_discovery?.Adopt(body) != true) return;
+
+            Log.Write("Sync", $"Adopted the mesh discovery key {peer.Name ?? "a peer"} offered.");
+            _ = ApplyAdvertisingAsync(_scheduler?.IsAdvertising ?? false);
+
+            // Everyone else this phone can reach has to hear about it too, or a mesh of three
+            // converges only as far as the two that happened to meet first.
+            foreach (string other in Fabric.ConnectedPeers)
+            {
+                if (!string.Equals(other, peer.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                    OfferMeshKey(other);
+            }
+        }
+
         private static async Task<bool> WaitForWiFiAsync(TimeSpan timeout)
         {
             if (WiFiConnected) return true;
@@ -1016,6 +1136,7 @@ namespace AndroidClient
                 else if (contentType == SyncContent.NotificationDismiss) ApplyNotificationDismiss(body);
                 else if (contentType == SyncContent.NotificationReply) ApplyNotificationReply(body);
                 else if (contentType == SyncContent.Notification) ApplyNotification(peer, body);
+                else if (contentType == SyncContent.MeshKeyOffer) AdoptMeshKey(peer, body);
                 else Log.Write("Sync", $"Ignoring unknown content type {contentType}.");
             }
             catch (Exception ex)
@@ -1170,8 +1291,9 @@ namespace AndroidClient
 
             byte[] body = NotificationProtocol.Build(notification);
 
-            if (WiFiConnected) await Mesh.BroadcastAsync(SyncContent.Notification, body).ConfigureAwait(false);
-            else await SendOverBluetoothAsync(SyncContent.Notification, body).ConfigureAwait(false);
+            // One call for both tiers: the peer link picks the route, so a notification reaches
+            // a device on the radio alone without this having to know that.
+            await Fabric.BroadcastAsync(SyncContent.Notification, body).ConfigureAwait(false);
         }
 
         /// <summary>Tells the mesh a notification has gone, so it goes there too.</summary>
@@ -1181,8 +1303,7 @@ namespace AndroidClient
 
             byte[] body = NotificationProtocol.BuildDismiss(key);
 
-            if (WiFiConnected) await Mesh.BroadcastAsync(SyncContent.NotificationDismiss, body).ConfigureAwait(false);
-            else await SendOverBluetoothAsync(SyncContent.NotificationDismiss, body).ConfigureAwait(false);
+            await Fabric.BroadcastAsync(SyncContent.NotificationDismiss, body).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -1192,38 +1313,8 @@ namespace AndroidClient
         /// is the point: the moment you most want to find a device is the moment it is not on
         /// any network.
         /// </summary>
-        public static async Task<bool> RingAsync(string fingerprint, bool on)
-        {
-            byte[] body = { on ? (byte)1 : (byte)0 };
-
-            if (_mesh?.IsConnectedTo(fingerprint) == true &&
-                await Mesh.SendToAsync(fingerprint, SyncContent.Ring, body).ConfigureAwait(false))
-            {
-                return true;
-            }
-
-            var ble = LiveBleLink;
-            var session = SessionOf(ble);
-            if (ble == null || session == null ||
-                !string.Equals(session.Fingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            byte[]? sealed_ = session.Encrypt(SyncContent.Ring, body);
-            if (sealed_ == null) return false;
-
-            try
-            {
-                await ble.SendPayloadAsync(sealed_).ConfigureAwait(false);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log.Write("Sync", "Could not ask the device to ring", ex);
-                return false;
-            }
-        }
+        public static Task<bool> RingAsync(string fingerprint, bool on) =>
+            Fabric.SendToAsync(fingerprint, SyncContent.Ring, [on ? (byte)1 : (byte)0]);
 
         private static void ApplyText(byte[] body)
         {
@@ -1386,17 +1477,26 @@ namespace AndroidClient
 
         // ---------------------------------------------------------------- loops
 
+        /// <summary>
+        /// Brings up the fabric, the supervisor and the radio.
+        ///
+        /// <para><b>What this replaces.</b> Two loops signalling each other through semaphores -
+        /// one holding the radio, one raising and dropping Wi-Fi - each correct about its own
+        /// slice and neither able to see the whole. That is how a radio link to one peer came to
+        /// drop the socket to every other, and how the phone came to park on a link to a device
+        /// from somebody else's mesh.</para>
+        /// </summary>
         private static void StartLoops()
         {
-            // A plain lock, not a connect gate: this is called from the UI thread and must
-            // never block on anything that touches the network.
+            // A plain lock, not a connect gate: this is called from the UI thread and must never
+            // block on anything that touches the network.
             lock (_loopGate)
             {
-                bool bleAlive = _bleLoopTask != null && !_bleLoopTask.IsCompleted;
-                bool wifiAlive = _wifiLoopTask != null && !_wifiLoopTask.IsCompleted;
-                if (bleAlive && wifiAlive) return;
+                bool supervising = _supervisorTask != null && !_supervisorTask.IsCompleted;
+                bool scanning = _schedulerTask != null && !_schedulerTask.IsCompleted;
+                if (supervising && scanning) return;
 
-                if (!bleAlive && !wifiAlive)
+                if (!supervising && !scanning)
                 {
                     _loopCts?.Dispose();
                     _loopCts = new CancellationTokenSource();
@@ -1404,8 +1504,114 @@ namespace AndroidClient
 
                 var token = _loopCts!.Token;
 
-                if (!bleAlive) _bleLoopTask = Task.Run(() => BleLoopAsync(token));
-                if (!wifiAlive) _wifiLoopTask = Task.Run(() => WiFiLoopAsync(token));
+                // Touching Fabric builds the supervisor and the providers on first use.
+                _ = Fabric;
+
+                StartRadioIfCapable();
+
+                // Minted on the first run that has peers and no key, then offered over the links
+                // that already exist - which is what makes the upgrade cost no re-pair.
+                _discovery?.MintIfDue();
+
+                if (!supervising) _supervisorTask = Task.Run(() => _supervisor!.RunAsync(token));
+                if (!scanning && _scheduler != null) _schedulerTask = Task.Run(() => _scheduler.RunAsync(token));
+
+                _ = Task.Run(() => InboundHeartbeatAsync(token));
+            }
+        }
+
+        /// <summary>
+        /// Starts the radio, and reports honestly what it can do.
+        ///
+        /// <para>Advertising is a hardware capability on Android and scanning is not, and
+        /// declaring <c>BLUETOOTH_ADVERTISE</c> is not requesting it - it is a runtime grant on
+        /// Android 12+ and the failure is quiet. So the capability handed to the arbiter comes
+        /// from whether the peripheral half actually started.</para>
+        /// </summary>
+        private static void StartRadioIfCapable()
+        {
+#if ANDROID
+            if (_scheduler != null) return;
+
+            var radio = new Platforms.Android.AndroidBleRadio { Prepare = PrepareLink };
+
+            StartPeripheralIfCapable(radio);
+
+            radio.Capability = _bleCapability;
+
+            _radio = radio;
+            _scheduler = new BleRadioScheduler(radio)
+            {
+                // Before there is a mesh key this accepts everything, which is how every build
+                // before this one behaved. A beacon that verifies is a fast path; a beacon that
+                // is somebody else's is the one case worth refusing outright.
+                BeaconFilter = _discovery!.Accepts,
+                BeaconRank = _discovery.RankOf,
+            };
+
+            Fabric.AddProvider(_scheduler.CentralRoutes);
+            Fabric.AddProvider(_scheduler.InboundRoutes);
+#endif
+        }
+
+        /// <summary>Gives a new outbound radio link its identity, its key agreement and its handlers.</summary>
+        private static void PrepareLink(Platforms.Android.AndroidBleTransport link)
+        {
+#if ANDROID
+            link.LocalPublicKey = Security.Identity.PublicKey;
+            link.LocalDeviceName = LocalDeviceName;
+            link.LocalMeshName = Security.Peers.MeshName;
+            link.LocalCapability = _bleCapability;
+            link.OpenSession = OpenBleSession;
+
+            link.Identified += (_, e) => OnRadioIdentified(e);
+            link.WiFiRequested += l => RaiseWiFiFor(l.PeerFingerprint);
+#endif
+        }
+
+        /// <summary>A peer proved who it is over the radio.</summary>
+        private static void OnRadioIdentified(PeerIdentifiedEventArgs e)
+        {
+            if (!string.IsNullOrWhiteSpace(e.DeviceName)) _lastPeerName = e.DeviceName;
+
+            Security.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName, e.Capability);
+
+            // Adopted only when this phone has no name of its own, which is what stops two
+            // devices that disagree overwriting each other on every reconnect.
+            Security.Peers.AdoptMeshName(e.MeshName);
+
+            ReportLinkState();
+            _supervisor?.Signal();
+        }
+
+        /// <summary>
+        /// A peer has something Bluetooth cannot carry, so raise Wi-Fi for it.
+        ///
+        /// <para><b>Per peer.</b> The window used to be a single timestamp for the whole phone,
+        /// so one peer asking held Wi-Fi up for every peer.</para>
+        /// </summary>
+        private static void RaiseWiFiFor(string fingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(fingerprint)) return;
+
+            lock (_demandGate) _wifiWake[fingerprint] = DateTime.UtcNow.Add(WiFiWakeWindow);
+
+            Log.Write("Sync",
+                $"{DeviceIdentity.Shorten(fingerprint)} asked for Wi-Fi; holding it up for {WiFiWakeWindow.TotalSeconds:F0}s.");
+
+            _supervisor?.Signal();
+        }
+
+        /// <summary>Runs the inbound half's liveness check, which has no loop of its own.</summary>
+        private static async Task InboundHeartbeatAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try { _inbound?.CheckHeartbeat(); }
+                catch (Exception ex) { Log.Write("Sync", "The inbound liveness check failed", ex); }
+
+                try { await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
             }
         }
 
@@ -1414,239 +1620,12 @@ namespace AndroidClient
             lock (_loopGate) return _loopCts?.Token ?? new CancellationToken(canceled: true);
         }
 
-        private static void SignalBle()
-        {
-            try { _bleSignal.Release(); } catch (SemaphoreFullException) { }
-        }
+        /// <summary>Asks the supervisor to reconcile now rather than at the next interval.</summary>
+        private static void SignalBle() => _supervisor?.Signal();
 
-        private static void SignalWiFi()
-        {
-            try { _wifiSignal.Release(); } catch (SemaphoreFullException) { }
-        }
+        /// <summary>Asks the supervisor to reconcile now rather than at the next interval.</summary>
+        private static void SignalWiFi() => _supervisor?.Signal();
 
-        /// <summary>Discards queued wake-ups so a burst of them cannot spin a loop.</summary>
-        private static void Drain(SemaphoreSlim signal)
-        {
-            while (signal.CurrentCount > 0)
-            {
-                if (!signal.Wait(0)) break;
-            }
-        }
-
-        // ── Bluetooth: the standing link ────────────────────────────────────────────────
-
-        /// <summary>
-        /// Holds a Bluetooth link to the computer whenever one can be had.
-        ///
-        /// This is the inversion at the heart of standby. Bluetooth used to be attempted only
-        /// once Wi-Fi had failed; now it is held continuously and Wi-Fi is the one that comes
-        /// and goes. A connection interval of a second or two costs microamps between events,
-        /// which is what makes holding it viable at all.
-        /// </summary>
-        private static async Task BleLoopAsync(CancellationToken token)
-        {
-            int failures = 0;
-
-            // Advertising costs nothing while nobody connects, and it is the only way a peer
-            // that cannot advertise itself will ever find this phone. Started once, and only
-            // when the radio can actually do it.
-            StartPeripheralIfCapable();
-
-            while (!token.IsCancellationRequested)
-            {
-                if (!IsPairedStill(token)) return;
-
-                if (BleConnected)
-                {
-                    failures = 0;
-                    Drain(_bleSignal);
-
-                    // Park until the link drops. No polling, so a healthy standing link
-                    // costs nothing on this side at all.
-                    try { await _bleSignal.WaitAsync(token).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
-                    continue;
-                }
-
-                bool connected = await TryConnectOverBleAsync(token).ConfigureAwait(false);
-
-                if (connected)
-                {
-                    failures = 0;
-                    ReportLinkState();
-
-                    // Wi-Fi may no longer be needed now that Bluetooth carries presence.
-                    SignalWiFi();
-                    continue;
-                }
-
-                failures++;
-                ReportLinkState();
-
-                // Wi-Fi has to cover for the missing standing link, so tell it promptly.
-                SignalWiFi();
-
-                var ceiling = _screenOn ? BleRetryCeilingActive : BleRetryCeilingIdle;
-                var delay = BackoffFor(failures);
-                if (delay > ceiling) delay = ceiling;
-
-                try { await _bleSignal.WaitAsync(delay, token).ConfigureAwait(false); }
-                catch (OperationCanceledException) { break; }
-            }
-
-            Log.Write("Sync", "Bluetooth loop stopped.");
-        }
-
-        // ── Wi-Fi: raised on demand ─────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Wi-Fi is wanted when the screen is on, when a send is holding it, when the computer
-        /// has asked for it, or when Bluetooth is not carrying presence.
-        /// </summary>
-        private static bool WiFiWanted()
-        {
-            if (_screenOn) return true;
-            if (Volatile.Read(ref _wifiHolds) > 0) return true;
-            if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _wifiWakeUntilTicks)) return true;
-
-            // The link of last resort. Without this, losing Bluetooth would leave the phone
-            // with nothing, which would make standby a regression rather than an improvement.
-            return !BleConnected;
-        }
-
-        private static async Task WiFiLoopAsync(CancellationToken token)
-        {
-            int failures = 0;
-
-            while (!token.IsCancellationRequested)
-            {
-                if (!IsPairedStill(token)) return;
-
-                bool wanted = WiFiWanted();
-                bool up = WiFiConnected;
-
-                if (!wanted && up)
-                {
-                    Log.Write("Sync", "Wi-Fi is no longer wanted - dropping it. Bluetooth holds presence.");
-                    Mesh.DisconnectAll();
-                    ReportLinkState();
-                    up = false;
-                }
-
-                if (wanted && !up)
-                {
-                    if (!HasUsableNetwork())
-                    {
-                        // Asking the OS costs nothing; finding out by timing out costs five
-                        // seconds, and on cellular it would never have worked anyway.
-                        //
-                        // Said once per spell rather than once per attempt: with no network at
-                        // all the loop keeps retrying on a backoff, and repeating it buries
-                        // everything else in the log during exactly the case Bluetooth covers.
-                        if (!_reportedNoNetwork)
-                        {
-                            _reportedNoNetwork = true;
-                            Log.Write("Sync", "Wi-Fi wanted but no Wi-Fi or Ethernet transport exists.");
-                        }
-
-                        failures++;
-                    }
-                    else
-                    {
-                        _reportedNoNetwork = false;
-                        // Listening as well as dialling: with symmetric roles a peer may reach
-                        // us first, and a phone that only ever dialled could never be found by
-                        // another phone.
-                        try { await Mesh.StartListeningAsync(token).ConfigureAwait(false); }
-                        catch (Exception ex) { Log.Write("Sync", "Could not listen for peers", ex); }
-
-                        int connected = await Mesh.ConnectToAllAsync(TcpConnectTimeout, token).ConfigureAwait(false);
-
-                        if (connected > 0 || WiFiConnected)
-                        {
-                            failures = 0;
-                            _networkHintPending = false;
-                            up = true;
-                        }
-                        else
-                        {
-                            failures++;
-                        }
-
-                        ReportLinkState();
-                    }
-
-                    if (_networkHintPending)
-                    {
-                        // Connectivity just changed; do not punish the next attempt.
-                        _networkHintPending = false;
-                        failures = 0;
-                    }
-                }
-
-                if (wanted && !up)
-                {
-                    var delay = BackoffFor(failures);
-                    try { await _wifiSignal.WaitAsync(delay, token).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
-                    continue;
-                }
-
-                Drain(_wifiSignal);
-
-                // Park until something changes. The only state that lapses on its own is the
-                // peer's wake window, so that is the one case that needs a bounded wait -
-                // everything else raises a signal, and an idle phone does no work at all.
-                TimeSpan wait = Timeout.InfiniteTimeSpan;
-                if (up && !_screenOn && Volatile.Read(ref _wifiHolds) == 0)
-                {
-                    long until = Interlocked.Read(ref _wifiWakeUntilTicks);
-                    var remaining = new DateTime(until, DateTimeKind.Utc) - DateTime.UtcNow;
-                    if (remaining > TimeSpan.Zero) wait = remaining + TimeSpan.FromMilliseconds(200);
-                }
-
-                try
-                {
-                    if (wait == Timeout.InfiniteTimeSpan) await _wifiSignal.WaitAsync(token).ConfigureAwait(false);
-                    else await _wifiSignal.WaitAsync(wait, token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) { break; }
-            }
-
-            Log.Write("Sync", "Wi-Fi loop stopped.");
-        }
-
-        private static bool IsPairedStill(CancellationToken token)
-        {
-            if (token.IsCancellationRequested) return false;
-
-            if (IsPaired) return true;
-
-            // Logged, not just reported: a silent exit here looks identical to a hung loop
-            // when reading the device log.
-            Log.Write("Sync", "Loop stopping: no paired host saved.");
-            Report("Not paired yet.");
-            return false;
-        }
-
-        /// <summary>
-        /// Exponential backoff capped at a minute, with jitter so a phone and a laptop
-        /// waking together do not retry in lockstep. The old fixed 3 second retry ran all
-        /// night whenever the laptop was off, which is exactly the battery drain the
-        /// project guidelines call out.
-        /// </summary>
-        private static TimeSpan BackoffFor(int failures)
-        {
-            if (failures <= 0) return MinBackoff;
-
-            double seconds = MinBackoff.TotalSeconds * Math.Pow(2, Math.Min(failures - 1, 6));
-            seconds = Math.Min(seconds, MaxBackoff.TotalSeconds);
-
-            double jitter;
-            lock (_jitter) jitter = 0.8 + _jitter.NextDouble() * 0.4;
-
-            return TimeSpan.FromSeconds(seconds * jitter);
-        }
 
         // ---------------------------------------------------------------- connecting
 
@@ -1757,49 +1736,44 @@ namespace AndroidClient
         }
 #endif
 
-        private static DateTime _lastBleScanUtc = DateTime.MinValue;
-
-        /// <summary>
-        /// Android silently throttles an app that starts and stops BLE scans more than about
-        /// five times in thirty seconds - the scan simply returns nothing, with no error. The
-        /// loop retries far more often than that, which is why Bluetooth appeared to connect
-        /// only by luck, or only after the service was restarted. One long scan, spaced out,
-        /// stays under the limit. Holding the link rather than rebuilding it per use keeps the
-        /// scan rate down further.
-        /// </summary>
-        private static readonly TimeSpan BleScanCooldown = TimeSpan.FromSeconds(12);
-
-        private static readonly TimeSpan BleScanWindow = TimeSpan.FromSeconds(25);
-
         /// <summary>
         /// Tries advertising again, after a permission grant that arrived too late.
         ///
         /// Advertising is attempted once per run. Android 12 made BLUETOOTH_ADVERTISE a runtime
         /// grant, so on the launch where the user first allows it the attempt has already been
-        /// made and refused - and without this the phone would stay unfindable until it was
-        /// next started.
+        /// made and refused - and without this the phone would stay unfindable until it was next
+        /// started.
         /// </summary>
         public static void RetryBluetoothPeripheral()
         {
-            if (_blePeripheralLink != null) return;
+#if ANDROID
+            if (_radio?.Peripheral != null) return;
 
             Interlocked.Exchange(ref _peripheralStarted, 0);
-            StartPeripheralIfCapable();
+            if (_radio != null) StartPeripheralIfCapable(_radio);
+
+            _radio!.Capability = _bleCapability;
+            _supervisor?.Signal();
+#endif
         }
 
         /// <summary>
         /// Publishes the Mesh Sync service so a peer can connect to this phone.
         ///
-        /// Deliberately additive and deliberately best-effort: a failure here leaves the phone
-        /// exactly as it was, scanning and connecting out, which is how Bluetooth worked before
-        /// either role could be taken. Only the peer that needed us to advertise loses out.
+        /// <para>Deliberately additive and deliberately best-effort: a failure here leaves the
+        /// phone exactly as it was, scanning and connecting out, which is how Bluetooth worked
+        /// before either role could be taken. Only the peer that needed us to advertise loses
+        /// out - and capability-first arbitration then correctly makes this phone the central
+        /// for every peer, so nothing deadlocks.</para>
         /// </summary>
-        private static void StartPeripheralIfCapable()
+        private static void StartPeripheralIfCapable(Platforms.Android.AndroidBleRadio radio)
         {
 #if ANDROID
             if (Interlocked.Exchange(ref _peripheralStarted, 1) != 0) return;
 
             var capability = Platforms.Android.BleCapabilities.Detect();
+            _bleCapability = capability;
+
             if (!capability.HasFlag(BleCapability.Peripheral))
             {
                 Log.Write("Sync", "This phone cannot advertise, so it can only ever be the Bluetooth central.");
@@ -1813,272 +1787,135 @@ namespace AndroidClient
                     LocalPublicKey = Security.Identity.PublicKey,
                     LocalDeviceName = LocalDeviceName,
                     LocalMeshName = Security.Peers.MeshName,
-                    OpenSession = OpenBleSession
+                    LocalCapability = capability,
+                    OpenSession = OpenBleSession,
                 };
 
-                peripheral.PayloadReceived += Transport_PayloadReceived;
-                peripheral.ConnectionClosed += Ble_ConnectionClosed;
-                peripheral.WiFiRequested += Ble_WiFiRequested;
-                peripheral.PeerIdentified += Ble_PeerIdentified;
                 peripheral.ClientConnected += (_, _) =>
                 {
+                    // A route, not a connection. It sits in Handshaking until the hello crosses,
+                    // and is closed on the shared deadline if it never does.
+                    var route = new Platforms.Android.AndroidBlePeripheralRoute(peripheral);
+                    route.Identified += (_, e) => OnRadioIdentified(e);
+
+                    _inbound = route;
                     Log.Write("Sync", "A peer connected to this phone over Bluetooth.");
-                    ReportLinkState();
-                    SignalWiFi();
+                    radio.PublishInbound(route);
                 };
 
-                _blePeripheralLink = peripheral;
+                peripheral.WiFiRequested += (_, _) => RaiseWiFiFor(peripheral.RemoteFingerprint);
+
+                radio.Peripheral = peripheral;
                 _ = peripheral.StartListeningAsync();
             }
             catch (Exception ex)
             {
+                // Honest rather than optimistic: a peripheral that did not start must not be
+                // reported to the arbiter as one that did, or this phone would be told to
+                // advertise, would not, and would not scan either.
                 Log.Write("Sync", "Could not start advertising over Bluetooth", ex);
-                _blePeripheralLink = null;
+                _bleCapability = BleCapability.Central;
+                radio.Peripheral = null;
             }
 #endif
         }
 
-        private static async Task<bool> TryConnectOverBleAsync(CancellationToken token)
+        /// <summary>Retires the radio and the fabric's routes with it.</summary>
+        private static void RetireBle()
         {
-#if ANDROID
-            var sinceLastScan = DateTime.UtcNow - _lastBleScanUtc;
-            if (sinceLastScan < BleScanCooldown)
-            {
-                var wait = BleScanCooldown - sinceLastScan;
-                Log.Write("Sync", $"Holding off the Bluetooth scan for {wait.TotalSeconds:F0}s to stay under Android's scan throttle.");
-                try { await Task.Delay(wait, token).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return false; }
-            }
+            var scheduler = Interlocked.Exchange(ref _scheduler, null);
+            var radio = Interlocked.Exchange(ref _radio, null);
+            var inbound = Interlocked.Exchange(ref _inbound, null);
 
-            Platforms.Android.AndroidBleDiscovery? discovery = null;
+            Interlocked.Exchange(ref _peripheralStarted, 0);
+
+            try { inbound?.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            catch (Exception ex) { Log.Write("Sync", "Disposing the inbound Bluetooth link failed", ex); }
+
+            // Closed rather than merely stopped: a GATT service left registered by a process that
+            // has gone is the desktop side's worst Bluetooth failure, and there is no reason to
+            // reproduce it here.
+            try { scheduler?.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            catch (Exception ex) { Log.Write("Sync", "Disposing the Bluetooth scheduler failed", ex); }
+
+            try { radio?.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            catch (Exception ex) { Log.Write("Sync", "Disposing the radio failed", ex); }
+        }
+
+        /// <summary>Stops advertising and tears down the inbound Bluetooth link.</summary>
+        private static void RetirePeripheral() => RetireBle();
+
+        /// <summary>
+        /// Drops every Wi-Fi route, leaving the radio to hold presence.
+        ///
+        /// Used by an explicit Stop rather than by policy: policy closes routes one peer at a
+        /// time now, which is the difference between putting Wi-Fi away for a peer the radio is
+        /// carrying and dropping the socket to a device the radio never reached.
+        /// </summary>
+        private static void RetireWiFi()
+        {
             try
             {
-                _lastBleScanUtc = DateTime.UtcNow;
-                discovery = new Platforms.Android.AndroidBleDiscovery();
-                string? address = await discovery.FindPeerAsync(BleScanWindow, token).ConfigureAwait(false);
-
-                if (string.IsNullOrEmpty(address))
+                foreach (var link in _fabric?.Links ?? Array.Empty<PeerLink>())
                 {
-                    Log.Write("Sync", "No Mesh Sync peer found over Bluetooth.");
-                    return false;
+                    _ = link.CloseAsync(RouteKind.WiFi, "the user asked this device to stop");
                 }
-
-                var ble = new Platforms.Android.AndroidBleTransport
-                {
-                    // Announced over the link, so the peer knows whose key to seal for.
-                    // Without it this tier only worked when exactly one device was paired.
-                    LocalPublicKey = Security.Identity.PublicKey,
-                    LocalDeviceName = LocalDeviceName,
-                    LocalMeshName = Security.Peers.MeshName,
-                    OpenSession = OpenBleSession
-                };
-
-                ble.PayloadReceived += Transport_PayloadReceived;
-                ble.ConnectionClosed += Ble_ConnectionClosed;
-                ble.WiFiRequested += Ble_WiFiRequested;
-                ble.PeerIdentified += Ble_PeerIdentified;
-                _bleLink = ble;
-
-                await ble.ConnectAsync(address!, token).ConfigureAwait(false);
-
-                Log.Write("Sync", $"Bluetooth link up to {address}.");
-                return true;
             }
-            catch (Exception ex)
-            {
-                Log.Write("Sync", "Bluetooth connect failed", ex);
-                RetireBle();
-                return false;
-            }
-            finally
-            {
-                discovery?.Dispose();
-            }
-#else
-            await Task.CompletedTask;
-            return false;
-#endif
+            catch (Exception ex) { Log.Write("Sync", "Dropping the Wi-Fi links failed", ex); }
         }
 
         // ---------------------------------------------------------------- link events
 
-        private static void Transport_PayloadReceived(object? sender, PayloadReceivedEventArgs e)
+        /// <summary>
+        /// A payload arrived from a paired device, already opened.
+        ///
+        /// <para>One handler for both tiers. The radio used to have its own, which is how the two
+        /// ended up dispatching differently.</para>
+        /// </summary>
+        private static void Fabric_PayloadReceived(PeerLink link, RoutePayload payload)
         {
-            // Runs on the transport receive loop. Kept synchronous and total so a failure
-            // here can never take the connection down. The sender is the link, so it is also
-            // the answer to which key this payload should open under.
-            try { HandlePayload(e.EncryptedPayload, SessionOf(sender)); }
+            // Runs on a transport's receive loop. Kept total so a failure here can never take the
+            // connection down with it.
+            try { Apply(payload.Peer, payload.ContentType, payload.Body); }
             catch (Exception ex) { Log.Write("Sync", "Payload handling failed", ex); }
         }
 
-        private static void Ble_ConnectionClosed(object? sender, EventArgs e)
-        {
-            Log.Write("Sync", "Bluetooth link closed.");
-            ReportLinkState();
-            SignalBle();
-            // Wi-Fi is now the only thing that can carry presence, so let it know at once.
-            SignalWiFi();
-        }
-
-        private static void Mesh_PeerDisconnected(string fingerprint)
-        {
-            Log.Write("Sync", $"Wi-Fi link to {DeviceIdentity.Shorten(fingerprint)} closed.");
-            ReportLinkState();
-            SignalWiFi();
-        }
-
-        private static void Mesh_PeerConnected(PeerRecord peer)
+        private static void Fabric_PeerConnected(PeerLink link, IPeerRoute route)
         {
             // Remembered so the name survives the socket being dropped, which under standby is
-            // most of the time - otherwise the dashboard falls back to "your computer" the
-            // moment Wi-Fi goes away, which reads as a fault rather than as the design working.
-            if (!string.IsNullOrWhiteSpace(peer.Name)) _lastPeerName = peer.Name;
+            // most of the time - otherwise the dashboard falls back to "your computer" the moment
+            // Wi-Fi goes away, which reads as a fault rather than as the design working.
+            if (!string.IsNullOrWhiteSpace(link.Peer.Name)) _lastPeerName = link.Peer.Name;
+
+            Log.Write("Sync", $"{link.Peer.Name ?? DeviceIdentity.Shorten(link.Fingerprint)} connected over {route.Kind}.");
+
+            // The mesh key rides the links that already exist, which is what makes the upgrade
+            // cost no re-pair. Offered on every connect: it is 32 bytes, and a peer that already
+            // holds a lower one simply keeps it.
+            OfferMeshKey(link.Fingerprint);
 
             ReportLinkState();
         }
 
-        private static void Mesh_PayloadReceived(object? sender, MeshPayloadEventArgs e)
+        private static void Fabric_PeerDisconnected(PeerLink link, RouteKind kind, string reason)
         {
-            try { Apply(e.Peer, e.ContentType, e.Body); }
-            catch (Exception ex) { Log.Write("Sync", "Payload handling failed", ex); }
-        }
-
-        /// <summary>
-        /// The computer said which device it is over Bluetooth.
-        ///
-        /// Refused if it is not one this phone has paired with: the tier used to accept
-        /// anything advertising the service UUID, which was tolerable only because everything
-        /// shared one key and nothing could be distinguished anyway.
-        /// </summary>
-        private static void Ble_PeerIdentified(object? sender, PeerIdentifiedEventArgs e)
-        {
-            if (!Security.Authorise(e.PublicKey))
-            {
-                Log.Write("Sync", "The Bluetooth peer is not a paired device - dropping the link.");
-                if (ReferenceEquals(sender, _bleLink)) RetireBle();
-                SignalBle();
-                return;
-            }
-
-            // Recorded so there is something to call this device. Bluetooth carries the name
-            // in its hello now; without it a pair that has never met over Wi-Fi had no name at
-            // all and every notification read "your devices".
-            if (!string.IsNullOrWhiteSpace(e.DeviceName))
-            {
-                _lastPeerName = e.DeviceName;
-                Security.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName);
-            }
-
-            // Adopted only when this phone has no name of its own, which is what stops two
-            // devices that disagree overwriting each other on every reconnect.
-            Security.Peers.AdoptMeshName(e.MeshName);
-
-            // Two links to the same peer, which happens when both devices can advertise and
-            // both went looking. Settled the same way a TCP collision is: one deterministic
-            // rule, computed identically on both sides, so they converge without negotiating.
-            ResolveBleCollision(e.Fingerprint);
+            Log.Write("Sync", $"{DeviceIdentity.Shorten(link.Fingerprint)} lost its {kind} route: {reason}.");
 
             ReportLinkState();
+            _supervisor?.Signal();
         }
 
-        /// <summary>
-        /// Drops whichever Bluetooth link the role rule says should not exist.
-        ///
-        /// Only ever runs when both a link this device opened and one a peer opened are live at
-        /// the same time. Both ends compute the same answer from fingerprints they have already
-        /// exchanged, so neither has to be in charge and no round trip is needed.
-        /// </summary>
-        private static void ResolveBleCollision(string peerFingerprint)
+        /// <summary>Offers this phone's mesh discovery key to one peer, over the ordinary path.</summary>
+        private static void OfferMeshKey(string fingerprint)
         {
-#if ANDROID
-            if (_bleLink?.IsConnected != true || _blePeripheralLink?.IsConnected != true) return;
-            if (string.IsNullOrEmpty(peerFingerprint)) return;
+            var key = Security.Peers.MeshKey;
+            if (key == null) return;
 
-            var role = BleRoleRules.DecideFor(
-                Security.Identity.Fingerprint,
-                Platforms.Android.BleCapabilities.Detect(),
-                peerFingerprint,
-                BleCapability.Both);
-
-            if (role == BleRole.Peripheral)
+            _ = Task.Run(async () =>
             {
-                Log.Write("Sync", "Two Bluetooth links to one peer; keeping the one it opened.");
-                RetireBle();
-            }
-            else
-            {
-                Log.Write("Sync", "Two Bluetooth links to one peer; keeping the one this phone opened.");
-                try { _blePeripheralLink?.DisconnectAsync(); }
-                catch (Exception ex) { Log.Write("Sync", "Dropping the inbound Bluetooth link failed", ex); }
-            }
-#endif
-        }
-
-        /// <summary>
-        /// A peer has something Bluetooth cannot carry. It may not be able to dial us, so the
-        /// only way an image copied over there reaches this phone is for us to raise Wi-Fi in
-        /// response to this.
-        /// </summary>
-        private static void Ble_WiFiRequested(object? sender, EventArgs e)
-        {
-            var until = DateTime.UtcNow.Add(WiFiWakeWindow).Ticks;
-            Interlocked.Exchange(ref _wifiWakeUntilTicks, until);
-
-            Log.Write("Sync", $"The computer asked for Wi-Fi; holding it up for {WiFiWakeWindow.TotalSeconds:F0}s.");
-            SignalWiFi();
-        }
-
-        /// <summary>Detaches and disposes the Bluetooth link. Skipping this was the leak.</summary>
-        private static void RetireBle()
-        {
-            var transport = Interlocked.Exchange(ref _bleLink, null);
-            if (transport == null) return;
-
-            transport.PayloadReceived -= Transport_PayloadReceived;
-            transport.ConnectionClosed -= Ble_ConnectionClosed;
-
-#if ANDROID
-            if (transport is Platforms.Android.AndroidBleTransport ble)
-            {
-                ble.WiFiRequested -= Ble_WiFiRequested;
-                ble.PeerIdentified -= Ble_PeerIdentified;
-            }
-#endif
-
-            try { transport.Dispose(); } catch (Exception ex) { Log.Write("Sync", "Disposing the Bluetooth link failed", ex); }
-        }
-
-        /// <summary>Stops advertising and tears down the inbound Bluetooth link.</summary>
-        private static void RetirePeripheral()
-        {
-            var transport = Interlocked.Exchange(ref _blePeripheralLink, null);
-            Interlocked.Exchange(ref _peripheralStarted, 0);
-
-            if (transport == null) return;
-
-            transport.PayloadReceived -= Transport_PayloadReceived;
-            transport.ConnectionClosed -= Ble_ConnectionClosed;
-
-#if ANDROID
-            if (transport is Platforms.Android.AndroidBlePeripheral peripheral)
-            {
-                peripheral.WiFiRequested -= Ble_WiFiRequested;
-                peripheral.PeerIdentified -= Ble_PeerIdentified;
-            }
-#endif
-
-            // Closed rather than merely stopped: a GATT service left registered by a process
-            // that has gone is the desktop side's worst Bluetooth failure, and there is no
-            // reason to reproduce it here.
-            try { transport.Dispose(); }
-            catch (Exception ex) { Log.Write("Sync", "Disposing the Bluetooth peripheral failed", ex); }
-        }
-
-        /// <summary>Drops every Wi-Fi link, leaving Bluetooth to hold presence.</summary>
-        private static void RetireWiFi()
-        {
-            try { _mesh?.DisconnectAll(); }
-            catch (Exception ex) { Log.Write("Sync", "Dropping the Wi-Fi links failed", ex); }
+                try { await Fabric.SendToAsync(fingerprint, SyncContent.MeshKeyOffer, key).ConfigureAwait(false); }
+                catch (Exception ex) { Log.Write("Sync", "Offering the mesh key failed", ex); }
+            });
         }
 
         // ---------------------------------------------------------------- status

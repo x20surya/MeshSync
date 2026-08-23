@@ -9,6 +9,7 @@ using Android.OS;
 using CoreLib.Diagnostics;
 using CoreLib.Identity;
 using CoreLib.Transport;
+using CoreLib.Transport.Ble;
 using Java.Util;
 
 namespace AndroidClient.Platforms.Android
@@ -94,6 +95,12 @@ namespace AndroidClient.Platforms.Android
 
         /// <summary>What this device calls the mesh, so a peer with no name of its own can adopt it.</summary>
         public string? LocalMeshName { get; set; }
+
+        /// <summary>
+        /// What this phone's radio can do, announced rather than left for the peer to assume.
+        /// This half is running, so it can certainly advertise.
+        /// </summary>
+        public BleCapability LocalCapability { get; set; } = BleCapability.Both;
 
         /// <summary>Name the peer announced, or null if it has not said.</summary>
         public string? RemoteDeviceName { get; private set; }
@@ -195,27 +202,96 @@ namespace AndroidClient.Platforms.Android
                 _advertiser = advertiser;
             }
 
-            var settings = new AdvertiseSettings.Builder()!
+            lock (_gate) _settings = new AdvertiseSettings.Builder()!
                 .SetAdvertiseMode(AdvertiseMode.LowLatency)!
                 .SetTxPowerLevel(AdvertiseTx.PowerHigh)!
                 .SetConnectable(true)!
                 .Build();
 
-            // The service UUID is sixteen bytes, which is most of the thirty-one an
-            // advertisement carries. Including the device name as well overflows it and the
-            // whole advertisement is rejected, so the name is deliberately left out.
-            var data = new AdvertiseData.Builder()!
+            Advertise();
+            return Task.CompletedTask;
+        }
+
+        private AdvertiseSettings? _settings;
+        private byte[] _beacon = Array.Empty<byte>();
+
+        /// <summary>
+        /// The six-byte mesh beacon to publish beside the service UUID, or empty for none.
+        ///
+        /// <para>Setting it re-advertises, so a rotated epoch or a newly adopted mesh key reaches
+        /// the air without waiting for a restart.</para>
+        /// </summary>
+        public byte[] Beacon
+        {
+            get { lock (_gate) return _beacon; }
+            set
+            {
+                lock (_gate)
+                {
+                    if (_beacon.AsSpan().SequenceEqual(value ?? Array.Empty<byte>())) return;
+                    _beacon = value ?? Array.Empty<byte>();
+                }
+
+                Advertise();
+            }
+        }
+
+        /// <summary>
+        /// Publishes the advertisement, with the beacon when there is one.
+        ///
+        /// <para><b>The budget is exact.</b> Flags take three bytes, the 128-bit service UUID
+        /// eighteen, and the manufacturer-data section ten - which is the whole thirty-one a
+        /// legacy advertisement carries. Including the device name as well overflows it and the
+        /// whole advertisement is rejected, so the name is deliberately left out; a machine name
+        /// readable by anyone in the room is also the leak the beacon exists to close.</para>
+        /// </summary>
+        private void Advertise()
+        {
+            BluetoothLeAdvertiser? advertiser;
+            AdvertiseSettings? settings;
+            byte[] beacon;
+            AdvertiseCallbackHandler? previous;
+
+            lock (_gate)
+            {
+                advertiser = _advertiser;
+                settings = _settings;
+                beacon = _beacon;
+                previous = _advertiseCallback;
+            }
+
+            if (advertiser == null || settings == null) return;
+
+            if (previous != null)
+            {
+                try { advertiser.StopAdvertising(previous); }
+                catch (Exception ex) { Log.Write("BlePeripheral", "Could not stop the previous advertisement", ex); }
+            }
+
+            var builder = new AdvertiseData.Builder()!
                 .SetIncludeDeviceName(false)!
-                .AddServiceUuid(ServiceParcelUuid)!
-                .Build();
+                .AddServiceUuid(ServiceParcelUuid)!;
+
+            if (beacon.Length > 0) builder = builder.AddManufacturerData(MeshBeacon.CompanyId, beacon)!;
 
             var callback = new AdvertiseCallbackHandler();
             lock (_gate) _advertiseCallback = callback;
 
-            advertiser.StartAdvertising(settings, data, callback);
-            Log.Write("BlePeripheral", "Advertising the Mesh Sync GATT service.");
+            try
+            {
+                advertiser.StartAdvertising(settings, builder.Build(), callback);
 
-            return Task.CompletedTask;
+                Log.Write("BlePeripheral", beacon.Length > 0
+                    ? "Advertising the Mesh Sync service with this mesh's beacon."
+                    : "Advertising the Mesh Sync service.");
+            }
+            catch (Exception ex)
+            {
+                // Declaring BLUETOOTH_ADVERTISE is not requesting it: it is a runtime grant on
+                // Android 12+, and the advertiser throws a SecurityException naming the
+                // permission. Swallowing that is how a phone silently never becomes findable.
+                Log.Write("BlePeripheral", "Could not start advertising", ex);
+            }
         }
 
         /// <summary>Reports advertising failures, which are otherwise completely silent.</summary>
@@ -278,7 +354,23 @@ namespace AndroidClient.Platforms.Android
 
             if (enabling)
             {
-                lock (_gate) _subscriber = device;
+                // Said out loud when a second central arrives. This server holds one reassembler,
+                // one ephemeral keypair and one session, so a second subscriber's writes land in
+                // the same reassembler - a sequence gap from one discards the other's in-flight
+                // message and neither peer is told. Until this half is genuinely per subscriber,
+                // an honest log line beats silent corruption.
+                lock (_gate)
+                {
+                    if (_subscriber != null && device.Address != null &&
+                        !string.Equals(_subscriber.Address, device.Address, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log.Write("BlePeripheral",
+                            "A second central subscribed and this server serves one at a time. " +
+                            "The earlier link is being replaced.");
+                    }
+
+                    _subscriber = device;
+                }
                 _hasSubscriber = true;
                 _lastInboundUtc = DateTime.UtcNow;
 
@@ -428,7 +520,8 @@ namespace AndroidClient.Platforms.Android
             }
 
             if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName,
-                                                  out string peerMesh, out string peerEphemeral) ||
+                                                  out string peerMesh, out string peerEphemeral,
+                                                  out var peerCapability) ||
                 !DeviceIdentity.IsValidPublicKey(publicKey))
             {
                 Log.Write("BlePeripheral", "The peer announced something that is not a public key.");
@@ -467,7 +560,8 @@ namespace AndroidClient.Platforms.Android
                     PublicKey = publicKey,
                     Fingerprint = RemoteFingerprint,
                     DeviceName = RemoteDeviceName ?? "",
-                    MeshName = peerMesh
+                    MeshName = peerMesh,
+                    Capability = peerCapability,
                 });
             }
             catch (Exception ex) { Log.Write("BlePeripheral", "PeerIdentified handler threw", ex); }
@@ -611,7 +705,8 @@ namespace AndroidClient.Platforms.Android
             if (string.IsNullOrWhiteSpace(key)) return;
 
             var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
-                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey));
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey,
+                                              LocalCapability));
 
             // Written whole rather than fragmented - see BuildHelloPayload for why the two
             // shapes cannot be mixed - so an oversized one is reported rather than silently lost.

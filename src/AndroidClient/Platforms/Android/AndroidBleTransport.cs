@@ -6,6 +6,7 @@ using Android.Content;
 using Android.OS;
 using CoreLib.Diagnostics;
 using CoreLib.Transport;
+using CoreLib.Transport.Fabric;
 using Java.Util;
 
 namespace AndroidClient.Platforms.Android
@@ -23,7 +24,7 @@ namespace AndroidClient.Platforms.Android
     /// previous version wrote a whole payload in a single SetValue call, which silently
     /// truncated at the MTU - its own comment said chunking would be needed.
     /// </summary>
-    public sealed class AndroidBleTransport : BluetoothGattCallback, ITransportConnection
+    public sealed class AndroidBleTransport : BluetoothGattCallback, IPeerRoute
     {
         private static readonly UUID ServiceUuid = UUID.FromString(BleProtocol.ServiceUuid.ToString())!;
         private static readonly UUID InboxUuid = UUID.FromString(BleProtocol.InboxCharacteristicUuid.ToString())!;
@@ -45,8 +46,47 @@ namespace AndroidClient.Platforms.Android
         private volatile bool _ready;
         private bool _disposed;
 
-        public event EventHandler<PayloadReceivedEventArgs>? PayloadReceived;
-        public event EventHandler? ConnectionClosed;
+        private readonly ILinkClock _clock;
+        private RouteState _state;
+        private string? _lastFailure;
+        private int _closed;
+
+        public AndroidBleTransport(ILinkClock? clock = null)
+        {
+            // Qualified: Android.OS has a SystemClock of its own and this project's implicit
+            // usings pull it in, exactly as WinForms does with LinkState on the other head.
+            _clock = clock ?? CoreLib.Transport.Fabric.SystemClock.Instance;
+            _state = RouteState.Connecting;
+            StateSinceUtc = _clock.UtcNow;
+        }
+
+        public event Action<IPeerRoute, RouteState, RouteState>? StateChanged;
+        public event Action<IPeerRoute, RoutePayload>? PayloadReceived;
+
+        public RouteKind Kind => RouteKind.BleCentral;
+
+        /// <summary>This phone scanned and connected out, so the link is always outbound.</summary>
+        public bool IsOutbound => true;
+
+        public RouteState State => _state;
+
+        public DateTime StateSinceUtc { get; private set; }
+
+        public string PeerFingerprint => RemoteFingerprint;
+
+        public CoreLib.Identity.PeerSession? Session => Peer;
+
+        public string? LastFailure => _lastFailure;
+
+        public DateTime RetryAtUtc { get; private set; }
+
+        public int MaxPayloadBytes => BleProtocol.MaxPayloadBytes;
+
+        /// <summary>A radio link is proof the peer is nearby, which a socket can never say.</summary>
+        public bool CarriesPresence => true;
+
+        /// <summary>What this phone's radio can do, announced rather than assumed.</summary>
+        public BleCapability LocalCapability { get; set; } = BleCapability.Central;
 
         /// <summary>
         /// The computer has something Bluetooth cannot carry and is asking for Wi-Fi.
@@ -55,13 +95,10 @@ namespace AndroidClient.Platforms.Android
         /// way an image copied on the computer reaches the phone while Bluetooth is the
         /// standing link.
         /// </summary>
-        public event EventHandler? WiFiRequested;
+        public event Action<AndroidBleTransport>? WiFiRequested;
 
-        /// <summary>Raised once the computer has said which device it is.</summary>
-        public event EventHandler<PeerIdentifiedEventArgs>? PeerIdentified;
-
-        /// <summary>Only true once services are discovered and notifications are live.</summary>
-        public bool IsConnected => _ready;
+        /// <summary>Raised with the peer's hello, so the registry can note its name and capability.</summary>
+        public event Action<AndroidBleTransport, PeerIdentifiedEventArgs>? Identified;
 
         /// <summary>
         /// This device's base64 public key, announced over the link so the computer knows
@@ -130,6 +167,12 @@ namespace AndroidClient.Platforms.Android
                 _readySignal.TrySetException(new TimeoutException("The BLE link did not become ready in time.")));
 
             await _readySignal.Task.ConfigureAwait(false);
+
+            // The GATT link is open; the session is not. Handshaking is exactly that state, and
+            // it is the one the shared deadline watches - which is what stops a device that
+            // answers pings and never identifies itself from holding this phone's standing link.
+            Move(RouteState.Handshaking);
+
             Log.Write("BleClient", $"Link ready. Usable payload {_usablePayload} bytes per write.");
 
             // Ready is not the same as usable. Android reports the subscription write as
@@ -140,6 +183,7 @@ namespace AndroidClient.Platforms.Android
             if (!await ExchangeGreetingAsync(cancellationToken).ConfigureAwait(false))
             {
                 _ready = false;
+                Fail("the peer accepted the connection and did not answer; its service is stale");
                 throw new InvalidOperationException(
                     "The computer accepted the connection but did not answer; its Bluetooth service is stale.");
             }
@@ -174,10 +218,8 @@ namespace AndroidClient.Platforms.Android
             else if (newState == ProfileState.Disconnected)
             {
                 Log.Write("BleClient", $"Disconnected (status {status}).");
-                _ready = false;
-                _reassembler.Reset();
                 _readySignal?.TrySetException(new InvalidOperationException($"BLE disconnected: {status}"));
-                ConnectionClosed?.Invoke(this, EventArgs.Empty);
+                Fail($"the peer disconnected ({status})");
             }
         }
 
@@ -317,7 +359,7 @@ namespace AndroidClient.Platforms.Android
                             }
 
                             Log.Write("BleClient", "The computer asked for Wi-Fi.");
-                            WiFiRequested?.Invoke(this, EventArgs.Empty);
+                            WiFiRequested?.Invoke(this);
                             break;
 
                         default:
@@ -341,11 +383,26 @@ namespace AndroidClient.Platforms.Android
                 byte[]? payload = _reassembler.Accept(chunk);
                 if (payload == null) return;
 
-                Log.Write("BleClient", $"Reassembled a {payload.Length} byte payload.");
-                PayloadReceived?.Invoke(this, new PayloadReceivedEventArgs
+                var session = Peer;
+                if (session == null)
                 {
-                    EncryptedPayload = payload,
-                    Fingerprint = RemoteFingerprint
+                    Log.Write("BleClient", "Dropped a payload that arrived before a key was agreed.");
+                    return;
+                }
+
+                if (!session.TryDecrypt(payload, out var decrypted))
+                {
+                    Log.Write("BleClient", "Dropped a payload that does not authenticate under this link's key.");
+                    return;
+                }
+
+                Log.Write("BleClient", $"Reassembled a {payload.Length} byte payload.");
+                PayloadReceived?.Invoke(this, new RoutePayload
+                {
+                    Peer = decrypted.Peer,
+                    ContentType = decrypted.ContentType,
+                    Body = decrypted.Body,
+                    Via = RouteKind.BleCentral,
                 });
             }
             catch (Exception ex)
@@ -452,8 +509,7 @@ namespace AndroidClient.Platforms.Android
                     {
                         Log.Write("BleClient",
                             $"No answer from the peer for {BleProtocol.PeerTimeout.TotalSeconds:F0}s - dropping the link.");
-                        _ready = false;
-                        ConnectionClosed?.Invoke(this, EventArgs.Empty);
+                        Fail("the peer stopped answering");
                         return;
                     }
 
@@ -461,8 +517,7 @@ namespace AndroidClient.Platforms.Android
                     catch (Exception ex)
                     {
                         Log.Write("BleClient", "Heartbeat write failed - dropping the link", ex);
-                        _ready = false;
-                        ConnectionClosed?.Invoke(this, EventArgs.Empty);
+                        Fail("a heartbeat write failed");
                         return;
                     }
                 }
@@ -484,7 +539,8 @@ namespace AndroidClient.Platforms.Android
             }
 
             if (!BleProtocol.TryParseHelloPayload(payload, out string publicKey, out string peerName,
-                                                  out string peerMesh, out string peerEphemeral) ||
+                                                  out string peerMesh, out string peerEphemeral,
+                                                  out var peerCapability) ||
                 !CoreLib.Identity.DeviceIdentity.IsValidPublicKey(publicKey))
             {
                 Log.Write("BleClient", "The peer announced something that is not a public key.");
@@ -499,11 +555,20 @@ namespace AndroidClient.Platforms.Android
                 var agreed = open(publicKey, peerName, peerEphemeral, _ephemeral);
                 if (agreed == null)
                 {
+                    // Dropped, not merely logged. This returning and leaving the link up is the
+                    // whole of the defect this refactor is named after: _ready stayed true, so
+                    // BleConnected stayed true, so the Bluetooth loop parked on a semaphore with
+                    // no timeout and WiFiWanted() concluded Wi-Fi was unnecessary. A phone with
+                    // no working link to anything, indefinitely, reporting "Connected over
+                    // Bluetooth". The state machine now makes that unrepresentable, and this
+                    // closes it here as well so the grace does not have to.
                     Log.Write("BleClient", peerEphemeral.Length == 0
                         ? "The computer offered no ephemeral key; it is running an older build."
                         : "The computer is not a device this phone has paired with.");
+
                     RemotePublicKey = null;
                     RemoteFingerprint = string.Empty;
+                    Fail("not a paired device");
                     return;
                 }
 
@@ -517,15 +582,18 @@ namespace AndroidClient.Platforms.Android
 
             try
             {
-                PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs
+                Identified?.Invoke(this, new PeerIdentifiedEventArgs
                 {
                     PublicKey = publicKey,
                     Fingerprint = RemoteFingerprint,
                     DeviceName = RemoteDeviceName ?? "",
-                    MeshName = peerMesh
+                    MeshName = peerMesh,
+                    Capability = peerCapability,
                 });
             }
-            catch (Exception ex) { Log.Write("BleClient", "PeerIdentified handler threw", ex); }
+            catch (Exception ex) { Log.Write("BleClient", "An Identified handler threw", ex); }
+
+            Move(RouteState.Established);
         }
 
         /// <summary>Announces this device's public key over the link.</summary>
@@ -539,7 +607,8 @@ namespace AndroidClient.Platforms.Android
             if (gatt == null || inbox == null) return;
 
             var frame = BleProtocol.BuildExtended(BleProtocol.ExtendedHello,
-                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey));
+                BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey,
+                                              LocalCapability));
 
             // Written whole rather than fragmented - see BuildHelloPayload for why the two
             // shapes cannot be mixed - so an oversized one is reported rather than silently lost.
@@ -610,18 +679,25 @@ namespace AndroidClient.Platforms.Android
 
         // ──────────────────────────────── sending
 
-        public async Task SendPayloadAsync(byte[] encryptedPayload, CancellationToken cancellationToken = default)
+        public async Task<bool> SendAsync(byte contentType, byte[] body, CancellationToken cancellationToken = default)
         {
-            if (encryptedPayload == null) throw new ArgumentNullException(nameof(encryptedPayload));
+            if (State != RouteState.Established) return false;
+
+            var session = Peer;
+            if (session == null) return false;
 
             var gatt = _gatt;
             var inbox = _inbox;
-            if (gatt == null || inbox == null || !_ready) throw new InvalidOperationException("The BLE link is not ready.");
+            if (gatt == null || inbox == null || !_ready) return false;
+
+            byte[]? encryptedPayload = session.Encrypt(contentType, body);
+            if (encryptedPayload == null) return false;
 
             if (encryptedPayload.Length > BleProtocol.MaxPayloadBytes)
-                throw new ArgumentException(
-                    $"Payload of {encryptedPayload.Length} bytes is too large for BLE; use Wi-Fi for this.",
-                    nameof(encryptedPayload));
+            {
+                Log.Write("BleClient", $"{encryptedPayload.Length} bytes is over the Bluetooth ceiling; Wi-Fi is needed.");
+                return false;
+            }
 
             await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -638,10 +714,33 @@ namespace AndroidClient.Platforms.Android
                 }
 
                 Log.Write("BleClient", $"Sent {encryptedPayload.Length} bytes as {chunks.Count} chunks of at most {_usablePayload}.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("BleClient", "Sending over Bluetooth failed", ex);
+                return false;
             }
             finally
             {
                 _sendLock.Release();
+            }
+        }
+
+        /// <summary>Asks the peer to raise Wi-Fi, for something this link cannot carry.</summary>
+        public async Task<bool> RequestWiFiAsync()
+        {
+            if (State != RouteState.Established) return false;
+
+            try
+            {
+                await SendControlAsync(BleProtocol.ControlWakeWiFi).ConfigureAwait(false);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("BleClient", "Could not ask the peer for Wi-Fi", ex);
+                return false;
             }
         }
 
@@ -681,12 +780,55 @@ namespace AndroidClient.Platforms.Android
 
         // ──────────────────────────────── lifetime
 
-        public async Task DisconnectAsync()
+        /// <summary>Marks the link failed and tells the owner once, through the state machine.</summary>
+        private void Fail(string reason)
+        {
+            _lastFailure = reason;
+            _ready = false;
+            _reassembler.Reset();
+
+            // Destroyed with the link, which is what makes what crossed it unrecoverable.
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
+
+            Move(RouteState.Backoff);
+        }
+
+        private void Move(RouteState to)
+        {
+            var from = _state;
+            if (from == to) return;
+
+            // Idle is terminal: a disposed link does not come back, and a resurrection would
+            // leave the owning PeerLink holding something dead.
+            if (from == RouteState.Idle) return;
+
+            _state = to;
+            StateSinceUtc = _clock.UtcNow;
+
+            try { StateChanged?.Invoke(this, from, to); }
+            catch (Exception ex) { Log.Write("BleClient", "A StateChanged handler threw", ex); }
+        }
+
+        public async Task CloseAsync(string reason)
+        {
+            if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+
+            _lastFailure ??= reason;
+            Move(RouteState.Draining);
+
+            await TeardownAsync().ConfigureAwait(false);
+
+            Move(RouteState.Idle);
+        }
+
+        private async Task TeardownAsync()
         {
             _ready = false;
             try { _heartbeatCts?.Cancel(); } catch { }
             _heartbeatCts = null;
             _reassembler.Reset();
+
+            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
 
             var gatt = _gatt;
             _gatt = null;
@@ -700,9 +842,9 @@ namespace AndroidClient.Platforms.Android
 
                 // Close() immediately after Disconnect() leaves the underlying link up for a
                 // moment. Reconnecting into that half-torn-down link is what let the phone
-                // reattach to a connection the computer's newly published service was never
-                // bound to: both ends reported success and nothing crossed. Letting the
-                // disconnect land first forces a genuinely new connection.
+                // reattach to a connection the peer's newly published service was never bound
+                // to: both ends reported success and nothing crossed. Letting the disconnect
+                // land first forces a genuinely new connection.
                 await Task.Delay(TimeSpan.FromMilliseconds(600)).ConfigureAwait(false);
 
                 gatt.Close();
@@ -714,22 +856,19 @@ namespace AndroidClient.Platforms.Android
             }
         }
 
-        public new void Dispose()
+        public async ValueTask DisposeAsync()
         {
             if (_disposed) return;
             _disposed = true;
 
-            // Blocking here would stall the reconnect loop for a second on every retry, and
-            // the teardown does not need to be observed.
-            try { DisconnectAsync().GetAwaiter().GetResult(); } catch { }
+            await CloseAsync("this device is shutting down").ConfigureAwait(false);
 
-            // Destroyed with the link, which is what makes what crossed it unrecoverable.
-            try { Interlocked.Exchange(ref _peer, null)?.Dispose(); } catch { }
             try { _ephemeral.Dispose(); } catch { }
 
+            StateChanged = null;
             PayloadReceived = null;
-            ConnectionClosed = null;
             WiFiRequested = null;
+            Identified = null;
 
             base.Dispose();
         }
