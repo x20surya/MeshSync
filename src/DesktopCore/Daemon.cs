@@ -19,10 +19,14 @@ namespace DesktopCore;
 /// none of which any test could have; this exists so the same class of defect in the Linux port
 /// is found in a console app rather than behind a window.</para>
 ///
-/// <para><b>Wi-Fi only, deliberately.</b> There is no Bluetooth tier here. The architecture
-/// already treats that as a supported state rather than a broken one - Wi-Fi is raised whenever
-/// Bluetooth is not up - so a TCP-only peer is a degraded device on the mesh, not a special
-/// case. BlueZ is the largest single piece of the port and it should not gate the rest.</para>
+/// <para><b>Both tiers, arbitrated.</b> Wi-Fi carries everything and Bluetooth carries text when
+/// there is no network. Which of the two <em>radio</em> halves carries a given peer is settled by
+/// <c>BleLinkArbiter</c> over <c>BleRoleRules</c>, exactly as it is on Windows and Android: this
+/// file used to start both halves unconditionally and ask nothing, so two devices in range each
+/// dialled the other, both links stayed up, and the clipboard crossed twice.</para>
+///
+/// <para>A machine with no radio, or one whose adapter cannot advertise, is a supported device
+/// rather than a broken one - it is simply always the central, and Wi-Fi carries the rest.</para>
 /// </summary>
 public sealed class Daemon : IDisposable
 {
@@ -31,6 +35,15 @@ public sealed class Daemon : IDisposable
     private readonly ClipboardWatcher _watcher;
     private readonly SemaphoreSlim _dialNow = new(0, 1);
     private bool _disposed;
+
+    /// <summary>What this machine's radio can do, for the arbiter. Central only until proven otherwise.</summary>
+    private BleCapability _bleCapability = BleCapability.Central;
+
+    /// <summary>Held so it can be detached again; a lambda cannot be unsubscribed by reference.</summary>
+    private Action? _onPeersChanged;
+
+    /// <summary>This device's run, so a tier turned back on later can be started against it.</summary>
+    private CancellationToken _lifetime = CancellationToken.None;
 
     /// <summary>How often paired devices that are not connected are dialled again.</summary>
     private static readonly TimeSpan DialInterval = TimeSpan.FromSeconds(15);
@@ -54,6 +67,18 @@ public sealed class Daemon : IDisposable
     public IClipboardBridge ClipboardBridge { get; }
 
     public SyncActivityLog Activity { get; } = new();
+
+    /// <summary>
+    /// Which link is carrying a peer, and whether anything is.
+    ///
+    /// <para>Shared with the Windows daemon rather than reimplemented. Every screen reads this
+    /// and nothing reads a transport directly, which is what stops the sidebar saying "Bluetooth"
+    /// while the device list says the same peer has not been seen for twenty minutes.</para>
+    /// </summary>
+    public LinkState Links { get; } = new();
+
+    /// <summary>Which links this device is allowed to offer, remembered between runs.</summary>
+    public TransportSettings Transports { get; }
 
     /// <summary>Sending and receiving whole files, streamed rather than held in memory.</summary>
     public FileTransferService Files { get; }
@@ -88,6 +113,26 @@ public sealed class Daemon : IDisposable
 
     /// <summary>True when a Bluetooth link is up and has agreed a key, either way round.</summary>
     public bool IsBluetoothConnected => Ble?.IsConnected == true || BleServer?.IsConnected == true;
+
+    /// <summary>
+    /// True when this particular peer is reachable over Bluetooth, either way round.
+    ///
+    /// Exists so a device list can say which link a device is on rather than testing Wi-Fi and
+    /// calling everything else disconnected.
+    /// </summary>
+    public bool IsBluetoothConnectedTo(string fingerprint)
+    {
+        if (string.IsNullOrEmpty(fingerprint)) return false;
+
+        return (Ble?.IsConnected == true &&
+                string.Equals(Ble.RemoteFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+            || (BleServer?.IsConnected == true &&
+                string.Equals(BleServer.RemoteFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>True when this peer is reachable at all, over either tier.</summary>
+    public bool IsConnectedTo(string fingerprint) =>
+        Mesh.IsConnectedTo(fingerprint) || IsBluetoothConnectedTo(fingerprint);
 
     /// <summary>What this machine's radio can do, for the window to say so.</summary>
     public string BluetoothStatus { get; private set; } = "not started";
@@ -135,6 +180,9 @@ public sealed class Daemon : IDisposable
     {
         _paths = paths;
         Port = port;
+
+        Transports = new TransportSettings(new FileTransportPreferenceStore(paths.DataDirectory));
+        Transports.Changed += _ => ApplyTransportPreference();
 
         // Resolved before the identity is loaded, because DeviceIdentity rewrites a plaintext
         // key wrapped the moment it is handed a protector - so an existing unwrapped key upgrades
@@ -208,9 +256,17 @@ public sealed class Daemon : IDisposable
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_paths.IncomingDirectory);
+        _lifetime = cancellationToken;
 
-        await Mesh.StartListeningAsync(cancellationToken).ConfigureAwait(false);
-        Log.Write("Daemon", $"Listening on {Port}.");
+        if (Transports.AllowsWiFi)
+        {
+            await Mesh.StartListeningAsync(cancellationToken).ConfigureAwait(false);
+            Log.Write("Daemon", $"Listening on {Port}.");
+        }
+        else
+        {
+            Log.Write("Daemon", "Wi-Fi listener not started: the transport preference is Bluetooth only.");
+        }
 
         // A device with nobody to talk to is a device that has just been installed, so the
         // window opens itself rather than making the first run start with a command.
@@ -230,6 +286,13 @@ public sealed class Daemon : IDisposable
     /// </summary>
     private async Task StartBluetoothAsync(CancellationToken cancellationToken)
     {
+        if (!Transports.AllowsBle)
+        {
+            BluetoothStatus = "off - the transport preference is Wi-Fi only";
+            Log.Write("Ble", "Bluetooth not started: the transport preference is Wi-Fi only.");
+            return;
+        }
+
         try
         {
             _bleBus = await BlueZ.TryConnectAsync().ConfigureAwait(false);
@@ -279,15 +342,28 @@ public sealed class Daemon : IDisposable
 
                     BleServer.PayloadReceived += (_, e) => OnRadioPayload(BleServer.Peer, e);
                     BleServer.PeerIdentified += OnRadioPeerIdentified;
-                    BleServer.WiFiRequested += (_, _) =>
-                        Log.Write("Ble", "A peer asked for Wi-Fi; it is already up here.");
+                    BleServer.ConnectionClosed += (_, _) => Links.SetBle(IsBluetoothConnected);
+                    BleServer.WiFiRequested += (_, _) => RaiseWiFiFor("the peer on the inbound link");
                 }
             }
+
+            // Honest rather than optimistic: an adapter that claims it can advertise but whose
+            // GATT tree BlueZ then refused cannot advertise, and telling the arbiter otherwise
+            // would have both devices agree an arrangement neither can carry out.
+            _bleCapability = _peripheral != null ? BleCapability.Both : BleCapability.Central;
 
             BluetoothStatus = _peripheral != null ? "scanning and advertising" : "scanning";
 
             Ble = await LinuxBleCentral.TryCreateAsync().ConfigureAwait(false);
-            if (Ble == null) return;
+            if (Ble == null)
+            {
+                // Never silent. A scanner that failed to start looks exactly like one that
+                // started and found nothing, and telling those apart from the log is the whole
+                // difference between a five-minute diagnosis and an afternoon.
+                BluetoothStatus = "the scanner could not be started";
+                Log.Write("Ble", "The Bluetooth scanner could not be started; this device can only be connected to.");
+                return;
+            }
 
             Ble.LocalPublicKey = Security.Identity.PublicKey;
             Ble.LocalDeviceName = Mesh.LocalDeviceName;
@@ -300,16 +376,32 @@ public sealed class Daemon : IDisposable
 
             Ble.PayloadReceived += (_, e) => OnRadioPayload(Ble.Peer, e);
             Ble.PeerIdentified += OnRadioPeerIdentified;
+            Ble.ConnectionClosed += (_, _) => Links.SetBle(IsBluetoothConnected);
 
-            // Wi-Fi is already up on a desktop whenever there is a network at all, so there is
-            // nothing to raise. Logged because the peer is telling us it has something large.
-            Ble.WiFiRequested += (_, _) => Log.Write("Ble", "A peer asked for Wi-Fi; it is already up here.");
+            // A peer asking for Wi-Fi is asking because it has something Bluetooth cannot carry.
+            // This used to answer with a log line saying Wi-Fi was already up here, which is an
+            // assumption rather than a check: the listener being up is not a socket to that peer.
+            Ble.WiFiRequested += (_, _) => RaiseWiFiFor("the peer on the outbound link");
+
+            // The gate this end never had. BleRoleRules decides which device advertises and which
+            // connects; without asking it, two devices in range each dial the other.
+            Ble.ShouldDial = ShouldDialOverBluetooth;
 
             // A device refused for not being paired is the same device being paired seconds
             // later, and it must not sit out its cooldown after that.
-            Security.Peers.Changed += () => Ble?.ForgetRejections();
+            _onPeersChanged = () => Ble?.ForgetRejections();
+            Security.Peers.Changed += _onPeersChanged;
 
-            _ = Task.Run(() => Ble.RunAsync(adapterPath, cancellationToken), CancellationToken.None);
+            // The fault is observed rather than discarded. A bare Task.Run swallows whatever the
+            // scan loop throws on its way up, so a scanner that died on its first D-Bus call is
+            // indistinguishable from one quietly finding nothing - which is precisely how long
+            // this took to see.
+            _ = Task.Run(() => Ble.RunAsync(adapterPath, cancellationToken), CancellationToken.None)
+                    .ContinueWith(t =>
+                    {
+                        if (t.Exception != null)
+                            Log.Write("Ble", "The Bluetooth scan loop stopped", t.Exception.GetBaseException());
+                    }, TaskContinuationOptions.OnlyOnFaulted);
         }
         catch (Exception ex)
         {
@@ -318,7 +410,167 @@ public sealed class Daemon : IDisposable
     }
 
     /// <summary>
-    /// A payload that came over the radio rather than the socket.
+    /// Whether this device should be the one connecting out over Bluetooth, right now.
+    ///
+    /// <para>Three questions, and every one has to answer yes. Is the radio allowed at all; is
+    /// either half already holding a link, in which case dialling can only produce a second one;
+    /// and does <c>BleRoleRules</c> make this device the central for some device it is paired
+    /// with. The Windows daemon has asked the same three all along.</para>
+    /// </summary>
+    private bool ShouldDialOverBluetooth()
+    {
+        if (!Transports.AllowsBle) return false;
+        if (Ble?.IsConnected == true || BleServer?.IsConnected == true) return false;
+
+        bool dial = BleLinkArbiter.ShouldDialAnyPeer(
+            Security.Identity.Fingerprint,
+            _bleCapability,
+            Security.Peers.Peers.Select(peer => peer.Fingerprint));
+
+        // Said once per change of mind, not once per round. A device that has decided not to scan
+        // looks exactly like a device whose Bluetooth is broken, and the whole reason this gate
+        // was missing for so long is that nothing anywhere said which of the two was happening.
+        if (dial != _loggedDialDecision)
+        {
+            _loggedDialDecision = dial;
+            Log.Write("Ble", dial
+                ? $"This device takes the central half ({_bleCapability}); scanning."
+                : $"This device takes the peripheral half for every paired device ({_bleCapability}); waiting to be connected to rather than scanning.");
+        }
+
+        return dial;
+    }
+
+    private bool? _loggedDialDecision;
+
+    /// <summary>
+    /// Drops whichever Bluetooth link the role rule says should not exist.
+    ///
+    /// <para>Only ever does anything when both halves are holding the same peer at once. The dial
+    /// gate makes that rare but cannot make it impossible: two devices can dial each other inside
+    /// the same moment, before either has a link to notice. Both ends compute the same answer
+    /// from fingerprints they have already exchanged, so exactly one link is dropped rather than
+    /// both or neither. Android repairs the same race the same way.</para>
+    /// </summary>
+    private void ResolveBleCollision(string peerFingerprint)
+    {
+        if (string.IsNullOrEmpty(peerFingerprint)) return;
+        if (Ble?.IsConnected != true || BleServer?.IsConnected != true) return;
+
+        if (!string.Equals(Ble.RemoteFingerprint, peerFingerprint, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(BleServer.RemoteFingerprint, peerFingerprint, StringComparison.OrdinalIgnoreCase))
+        {
+            return;   // two links, but to two different peers, which is exactly what a mesh is
+        }
+
+        var keep = BleLinkArbiter.KeepFor(Security.Identity.Fingerprint, _bleCapability, peerFingerprint);
+
+        if (keep == BleRole.Peripheral)
+        {
+            Log.Write("Ble", "Two Bluetooth links to one peer; keeping the one it opened.");
+            _ = Ble.DisconnectAsync();
+        }
+        else
+        {
+            Log.Write("Ble", "Two Bluetooth links to one peer; keeping the one this device opened.");
+            BleServer.Disconnect();
+        }
+    }
+
+    /// <summary>
+    /// A peer has something Bluetooth cannot carry, so go to it.
+    ///
+    /// <para>The listener here is always up, which is what this used to answer with - but a
+    /// listener is not a socket to the device that asked. It may have just changed address, or
+    /// never had one recorded here at all. Dialling is the useful answer and it is the one
+    /// Windows gives.</para>
+    /// </summary>
+    private void RaiseWiFiFor(string who)
+    {
+        if (!Transports.AllowsWiFi)
+        {
+            Log.Write("Ble", $"{who} asked for Wi-Fi, but this device is set to Bluetooth only.");
+            return;
+        }
+
+        Log.Write("Ble", $"{who} asked for Wi-Fi; dialling now.");
+        NudgeDial();
+    }
+
+    /// <summary>
+    /// Tells a peer where this device is reachable, over the radio link rather than the socket.
+    ///
+    /// <para>Sealed with the key this link agreed, and sent once the hello has crossed because
+    /// before that there is no key to seal it with. This is the only address announcement a
+    /// device paired over Bluetooth alone will ever receive: without it, it knows this machine
+    /// only as a radio and has no route to a socket, so an image copied here has nowhere to go
+    /// and a lease change strands it with no way back short of a rescan.</para>
+    /// </summary>
+    private void AnnounceAddressOverRadio(PeerSession? session, Func<byte[], Task> send)
+    {
+        if (session == null) return;
+
+        string? address = NetworkUtil.GetLocalLanAddress();
+        if (string.IsNullOrEmpty(address)) return;
+
+        if (Port != TcpTransportConnection.DefaultPort) address = $"{address}:{Port}";
+
+        byte[]? payload = session.Encrypt(SyncContent.Address, Encoding.UTF8.GetBytes(address));
+        if (payload == null) return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await send(payload).ConfigureAwait(false);
+                Log.Write("Ble", $"Announced this device at {address} over Bluetooth.");
+            }
+            catch (Exception ex)
+            {
+                // Informational. A failure costs nothing until the address changes.
+                Log.Write("Ble", "Could not announce this device's address over Bluetooth", ex);
+            }
+        });
+    }
+
+    /// <summary>Starts or stops a tier when the preference changes, without a restart.</summary>
+    private void ApplyTransportPreference()
+    {
+        try
+        {
+            if (Transports.AllowsWiFi)
+            {
+                _ = Mesh.StartListeningAsync(_lifetime);
+                NudgeDial();
+            }
+            else
+            {
+                Mesh.StopListening();
+                Mesh.DisconnectAll();
+            }
+
+            if (Transports.AllowsBle)
+            {
+                if (Ble == null && BleServer == null) _ = StartBluetoothAsync(_lifetime);
+            }
+            else
+            {
+                _ = Ble?.DisconnectAsync();
+                BleServer?.Disconnect();
+                BluetoothStatus = "off - the transport preference is Wi-Fi only";
+            }
+
+            Links.SetWiFi(Mesh.IsConnectedToAny);
+            Links.SetBle(IsBluetoothConnected);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Daemon", "Could not apply the transport preference", ex);
+        }
+    }
+
+    /// <summary>
+    /// A peer proved who it is over the radio.
     ///
     /// Bluetooth carries no hello of the kind TCP has, so the sender is identified by which key
     /// authenticates the payload - which is the same test the socket path applies anyway.
@@ -327,7 +579,15 @@ public sealed class Daemon : IDisposable
     {
         Security.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName);
         Security.Peers.AdoptMeshName(e.MeshName);
+        Links.SetBle(true, e.DeviceName);
         Log.Write("Ble", $"{e.DeviceName} is in range over Bluetooth.");
+
+        if (ReferenceEquals(sender, Ble) && Ble is { } central)
+            AnnounceAddressOverRadio(central.Peer, payload => central.SendPayloadAsync(payload));
+        else if (ReferenceEquals(sender, BleServer) && BleServer is { } server)
+            AnnounceAddressOverRadio(server.Peer, payload => server.SendPayloadAsync(payload));
+
+        ResolveBleCollision(e.Fingerprint);
     }
 
     private void OnRadioPayload(PeerSession? session, PayloadReceivedEventArgs e)
@@ -356,7 +616,12 @@ public sealed class Daemon : IDisposable
         {
             try
             {
-                if (!Security.Peers.IsEmpty)
+                // The inbound radio link has no loop of its own, so its liveness check runs
+                // here. It was written to be called from this loop and never was, which left a
+                // peripheral link whose central had walked away showing as connected forever.
+                BleServer?.CheckHeartbeat();
+
+                if (!Security.Peers.IsEmpty && Transports.AllowsWiFi)
                 {
                     IsDialling = true;
                     try
@@ -412,37 +677,46 @@ public sealed class Daemon : IDisposable
     }
 
     /// <summary>
-    /// Sends over every tier that is up.
+    /// Sends over every tier that is up, once per peer.
     ///
-    /// Wi-Fi first because it carries anything; Bluetooth as well when a peer is only reachable
-    /// that way, which is the whole point of holding the radio link open. A peer reachable over
-    /// both gets it once, over the socket.
+    /// <para>Wi-Fi first because it carries anything; Bluetooth as well when a peer is only
+    /// reachable that way, which is the whole point of holding the radio link open.</para>
+    ///
+    /// <para><b>Once per peer, not once per link.</b> The two radio halves can hold two different
+    /// peers, and then sending over both is exactly right. They can equally hold the <em>same</em>
+    /// peer, one link in each direction, and then sending over both delivers the clipboard twice.
+    /// Deduplicating on the fingerprint covers both cases; picking one link, as the Windows
+    /// daemon does, would only ever have covered the second.</para>
     /// </summary>
     private async Task<int> BroadcastAsync(byte contentType, byte[] body, CancellationToken cancellationToken)
     {
         int sent = await Mesh.BroadcastAsync(contentType, body, cancellationToken).ConfigureAwait(false);
 
-        sent += await SendOverRadioAsync(Ble?.Peer, Ble?.RemoteFingerprint,
+        var reached = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        sent += await SendOverRadioAsync(Ble?.Peer, Ble?.RemoteFingerprint, reached,
             payload => Ble!.SendPayloadAsync(payload, cancellationToken), contentType, body).ConfigureAwait(false);
 
-        sent += await SendOverRadioAsync(BleServer?.Peer, BleServer?.RemoteFingerprint,
+        sent += await SendOverRadioAsync(BleServer?.Peer, BleServer?.RemoteFingerprint, reached,
             payload => BleServer!.SendPayloadAsync(payload), contentType, body).ConfigureAwait(false);
 
         return sent;
     }
 
     /// <summary>
-    /// Sends over one radio link, unless the same peer already has a socket.
+    /// Sends over one radio link, unless that peer has already been reached this round.
     ///
-    /// Skipping a peer reachable both ways is not an optimisation: sending twice would deliver
-    /// the clipboard twice, and the echo suppressor is on the sending side rather than the
-    /// receiving one.
+    /// Skipping a peer reachable more than one way is not an optimisation: sending twice would
+    /// deliver the clipboard twice, and the echo suppressor is on the sending side rather than
+    /// the receiving one.
     /// </summary>
     private async Task<int> SendOverRadioAsync(PeerSession? session, string? fingerprint,
+                                               HashSet<string> reached,
                                                Func<byte[], Task> send, byte contentType, byte[] body)
     {
         if (session == null || string.IsNullOrEmpty(fingerprint)) return 0;
         if (Mesh.IsConnectedTo(fingerprint)) return 0;
+        if (!reached.Add(fingerprint)) return 0;
 
         try
         {
@@ -530,9 +804,62 @@ public sealed class Daemon : IDisposable
     /// Sends a file to one device. Wi-Fi only, streamed in chunks, and hashed on both ends so a
     /// truncated transfer is a failure rather than a file that looks complete.
     /// </summary>
-    public Task<FileSendResult> SendFileAsync(string fingerprint, string path,
-                                              CancellationToken cancellationToken = default) =>
-        Files.SendAsync(fingerprint, path, cancellationToken);
+    public async Task<FileSendResult> SendFileAsync(string fingerprint, string path,
+                                                    CancellationToken cancellationToken = default)
+    {
+        await EnsureWiFiToAsync(fingerprint, cancellationToken).ConfigureAwait(false);
+
+        return await Files.SendAsync(fingerprint, path, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// How long to wait for a peer to raise Wi-Fi after being asked. The Windows daemon's
+    /// timeout, and for its reason: the request is not a guarantee, so it is bounded.
+    /// </summary>
+    private static readonly TimeSpan WiFiWakeTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Makes sure there is a socket to this peer, raising Wi-Fi over the radio if there is not.
+    ///
+    /// <para>A file needs the socket - Bluetooth will not carry one - so a peer reachable only
+    /// over the radio used to be simply absent from the list of things a file could be sent to,
+    /// with nothing said about why. Asking it to raise Wi-Fi and waiting is what the Windows
+    /// daemon does with an image for exactly the same reason.</para>
+    /// </summary>
+    public async Task<bool> EnsureWiFiToAsync(string fingerprint, CancellationToken cancellationToken = default)
+    {
+        if (Mesh.IsConnectedTo(fingerprint)) return true;
+        if (!Transports.AllowsWiFi) return false;
+
+        // Both directions at once: this device goes to the peer, and the peer is asked to come
+        // to this device. Either may be the one that can actually open the socket.
+        NudgeDial();
+
+        if (Ble?.IsConnected == true &&
+            string.Equals(Ble.RemoteFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+        {
+            await Ble.RequestWiFiAsync().ConfigureAwait(false);
+        }
+        else if (BleServer?.IsConnected == true &&
+                 string.Equals(BleServer.RemoteFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+        {
+            BleServer.RequestWiFi();
+        }
+
+        DateTime deadline = DateTime.UtcNow + WiFiWakeTimeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (Mesh.IsConnectedTo(fingerprint)) return true;
+
+            try { await Task.Delay(200, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return false; }
+        }
+
+        Log.Write("Daemon",
+            $"{DeviceIdentity.Shorten(fingerprint)} did not come up on Wi-Fi within {WiFiWakeTimeout.TotalSeconds:F0}s.");
+        return false;
+    }
 
     /// <summary>
     /// Dismisses a mirrored notification here and on the phone it came from.
@@ -761,11 +1088,19 @@ public sealed class Daemon : IDisposable
     {
         string name = peer.Name ?? DeviceIdentity.Shorten(peer.Fingerprint);
         Log.Write("Daemon", $"{name} connected.");
+
+        Links.SetWiFi(true, name);
         AnnounceAddress(peer.Fingerprint);
     }
 
-    private void OnPeerDisconnected(string fingerprint) =>
+    private void OnPeerDisconnected(string fingerprint)
+    {
         Log.Write("Daemon", $"{DeviceIdentity.Shorten(fingerprint)} disconnected.");
+
+        // The aggregate, not this one peer: another may still be up, and the UI asks whether
+        // anything is reachable rather than whether this device is.
+        Links.SetWiFi(Mesh.IsConnectedToAny);
+    }
 
     /// <summary>
     /// Tells a peer where this device is reachable, so a DHCP lease change cannot strand it.
@@ -893,6 +1228,7 @@ public sealed class Daemon : IDisposable
         Mesh.Dispose();
 
         Security.PairingRequested -= OnPairingRequested;
+        if (_onPeersChanged != null) Security.Peers.Changed -= _onPeersChanged;
         Security.Dispose();
 
         Files.Dispose();

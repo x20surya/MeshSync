@@ -28,6 +28,14 @@ public sealed class LinuxBleServer : IDisposable
     public event EventHandler<PeerIdentifiedEventArgs>? PeerIdentified;
     public event EventHandler? WiFiRequested;
 
+    /// <summary>
+    /// The inbound link went away.
+    ///
+    /// <para>The central half has always had this; this half did not, so nothing could tell the
+    /// rest of the daemon that the peer it was showing as connected over Bluetooth had gone.</para>
+    /// </summary>
+    public event EventHandler? ConnectionClosed;
+
     public string? LocalPublicKey { get; set; }
     public string? LocalDeviceName { get; set; }
     public string? LocalMeshName { get; set; }
@@ -134,7 +142,16 @@ public sealed class LinuxBleServer : IDisposable
             return;
         }
 
-        Volatile.Write(ref _peer, session);
+        // A second hello on one link would otherwise leak the first key. There is no legitimate
+        // reason for one, so the replacement is logged rather than silent, and the key it
+        // replaces is disposed - which is what makes the traffic under it unrecoverable. The TCP
+        // transport and the Windows radio have both done this all along.
+        var previous = Interlocked.Exchange(ref _peer, session);
+        if (previous != null)
+        {
+            Log.Write("BleServer", "A second hello arrived on one link; the earlier session key was discarded.");
+            previous.Dispose();
+        }
         RemoteDeviceName = string.IsNullOrWhiteSpace(deviceName) ? RemoteDeviceName : deviceName;
         RemoteFingerprint = session.Fingerprint;
 
@@ -163,6 +180,15 @@ public sealed class LinuxBleServer : IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Asks the central to raise Wi-Fi, for something Bluetooth cannot carry.
+    ///
+    /// The mirror of the central's own request, so a large item can cross whichever way round
+    /// the two devices happen to have arranged themselves.
+    /// </summary>
+    public bool RequestWiFi() =>
+        IsConnected && _peripheral.Notify(BleProtocol.BuildControl(BleProtocol.ControlWakeWiFi));
+
     /// <summary>Drops the link if the central has gone quiet. Called from the daemon's loop.</summary>
     public void CheckHeartbeat()
     {
@@ -175,6 +201,9 @@ public sealed class LinuxBleServer : IDisposable
         }
     }
 
+    /// <summary>Drops the inbound link, for the arbiter and for a transport preference change.</summary>
+    public void Disconnect() => Drop();
+
     private void Drop()
     {
         var session = Interlocked.Exchange(ref _peer, null);
@@ -182,6 +211,8 @@ public sealed class LinuxBleServer : IDisposable
 
         RemoteFingerprint = string.Empty;
         RemoteDeviceName = null;
+
+        if (session != null) ConnectionClosed?.Invoke(this, EventArgs.Empty);
     }
 
     public void Dispose()
@@ -198,5 +229,6 @@ public sealed class LinuxBleServer : IDisposable
         PayloadReceived = null;
         PeerIdentified = null;
         WiFiRequested = null;
+        ConnectionClosed = null;
     }
 }

@@ -34,6 +34,19 @@ public sealed class LinuxBleCentral : ITransportConnection
     private bool _discovering;
     private string? _adapterPath;
     private DateTime _linkUpAtUtc = DateTime.MinValue;
+    private DateTime _lastScanAtUtc = DateTime.MinValue;
+    private DateTime _lastPingAtUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Asked before every scan round: should this device be the one connecting out, right now?
+    ///
+    /// <para>This is the gate the Windows daemon has always had and this one did not.
+    /// <c>BleRoleRules</c> decides which end advertises and which end scans, and without asking
+    /// it, two devices in range each dial the other, both links come up, and neither is ever
+    /// dropped - so the clipboard crosses twice and the radio never settles. Null means dial,
+    /// which keeps this class usable on its own in a test.</para>
+    /// </summary>
+    public Func<bool>? ShouldDial { get; set; }
 
     /// <summary>
     /// Devices that connected but never agreed a session, and when to stop ignoring them.
@@ -46,7 +59,37 @@ public sealed class LinuxBleCentral : ITransportConnection
     /// </summary>
     private readonly Dictionary<string, DateTime> _rejected = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The same refusals, keyed by the peer's fingerprint instead of its address.
+    ///
+    /// <para>A phone rotates its LE address for privacy, so it reappears under a BlueZ object
+    /// path this device has never refused and the address-keyed cooldown above lapses early.
+    /// The identity does not rotate. This cannot stop the connection - nothing knows who a
+    /// device is until its hello arrives - but it refuses on the hello instead of holding the
+    /// link open for the full identity grace, which is the difference between one second and
+    /// twelve.</para>
+    /// </summary>
+    private readonly Dictionary<string, DateTime> _rejectedKeys = new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly TimeSpan RejectionCooldown = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// How often to look for a peer. The Windows daemon's interval, and for its reason: a scan
+    /// is expensive, and a device that is not in range now is very unlikely to be in range four
+    /// seconds later. This used to be four seconds, ungated, which is most of why the radio
+    /// never settled.
+    /// </summary>
+    private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>How long one scan round looks before giving up. Matches the Windows daemon.</summary>
+    private static readonly TimeSpan FindWindow = TimeSpan.FromSeconds(12);
+
+    /// <summary>
+    /// How often the loop wakes. Short, so that cancellation and the two liveness checks in
+    /// <c>HeartbeatAsync</c> are prompt; what actually happens on each wake is decided by
+    /// <see cref="ScanInterval"/> and <c>BleProtocol.HeartbeatInterval</c>.
+    /// </summary>
+    private static readonly TimeSpan Tick = TimeSpan.FromSeconds(2);
 
     /// <summary>How long a link may sit without the peer proving who it is.</summary>
     private static readonly TimeSpan IdentityGrace = TimeSpan.FromSeconds(12);
@@ -81,7 +124,11 @@ public sealed class LinuxBleCentral : ITransportConnection
     public static async Task<LinuxBleCentral?> TryCreateAsync()
     {
         var bluez = await BlueZ.TryConnectAsync().ConfigureAwait(false);
-        if (bluez == null) return null;
+        if (bluez == null)
+        {
+            Log.Write("BleCentral", "Could not open a second D-Bus connection for the scanner.");
+            return null;
+        }
 
         var (present, _, _, detail) = await BlueZCapability.ProbeAsync(bluez).ConfigureAwait(false);
         if (!present)
@@ -107,6 +154,7 @@ public sealed class LinuxBleCentral : ITransportConnection
     {
         _adapterPath = adapterPath;
         await _bluez.WatchPropertiesAsync(OnPropertyChanged).ConfigureAwait(false);
+        Log.Write("BleCentral", "The scan loop is running.");
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -115,8 +163,8 @@ public sealed class LinuxBleCentral : ITransportConnection
                 // _linkUp, not IsConnected. The GATT link comes up first and the session is
                 // agreed on it afterwards; testing for the session here tore down the very link
                 // the peer's hello was about to arrive on, once every cycle, forever.
-                if (!_linkUp) await FindAndConnectAsync(adapterPath, cancellationToken).ConfigureAwait(false);
-                else await HeartbeatAsync().ConfigureAwait(false);
+                if (_linkUp) await HeartbeatAsync().ConfigureAwait(false);
+                else if (DueForScan()) await FindAndConnectAsync(adapterPath, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex)
@@ -125,19 +173,118 @@ public sealed class LinuxBleCentral : ITransportConnection
                 await DropAsync().ConfigureAwait(false);
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(4), cancellationToken).ConfigureAwait(false); }
+            try { await Task.Delay(Tick, cancellationToken).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
     }
 
+    /// <summary>
+    /// Whether a scan round is due, and allowed.
+    ///
+    /// <para>Two conditions, and the second is the one that was missing. A round is due on the
+    /// interval; a round is <em>allowed</em> only when <see cref="ShouldDial"/> says this device
+    /// takes the central half for some paired peer and the peripheral half is not already
+    /// holding it. Scanning without asking is what put two links between every pair of
+    /// devices.</para>
+    /// </summary>
+    private bool DueForScan()
+    {
+        if (DateTime.UtcNow - _lastScanAtUtc < ScanInterval) return false;
+
+        return ShouldDial?.Invoke() ?? true;
+    }
+
+    /// <summary>
+    /// One scan round: start the radio, look for up to <see cref="FindWindow"/>, connect if
+    /// something turns up, and stop the radio either way.
+    ///
+    /// <para>The radio is stopped in a <c>finally</c>, which is what the Windows daemon does with
+    /// its advertisement watcher and for the same reason: an active scan running alongside a live
+    /// link contends with it for the same antenna, and this one used to be started once and left
+    /// running for the lifetime of the process.</para>
+    /// </summary>
     private async Task FindAndConnectAsync(string adapterPath, CancellationToken cancellationToken)
     {
-        // Filtered on our service UUID so the radio is not woken for every beacon in the room,
-        // and on "le" so classic Bluetooth devices never appear at all.
+        _lastScanAtUtc = DateTime.UtcNow;
+
+        if (!await StartDiscoveryAsync(adapterPath).ConfigureAwait(false)) return;
+
         try
         {
-            if (_discovering) { /* already scanning */ }
-            else await _bluez.CallAsync(adapterPath, BlueZ.AdapterInterface, "SetDiscoveryFilter", "a{sv}", (ref MessageWriter writer) =>
+            BlueZObject? candidate = null;
+            DateTime deadline = DateTime.UtcNow + FindWindow;
+
+            while (candidate == null && DateTime.UtcNow < deadline)
+            {
+                candidate = await FindCandidateAsync().ConfigureAwait(false);
+                if (candidate != null) break;
+
+                try { await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+            }
+
+            if (candidate == null) return;
+
+            Log.Write("BleCentral", $"Found {candidate.String(BlueZ.DeviceInterface, "Alias") ?? candidate.Path}; connecting.");
+
+            if (!candidate.Bool(BlueZ.DeviceInterface, "Connected"))
+            {
+                await _bluez.CallAsync(candidate.Path, BlueZ.DeviceInterface, "Connect").ConfigureAwait(false);
+            }
+
+            _devicePath = candidate.Path;
+            RemoteDeviceName = candidate.String(BlueZ.DeviceInterface, "Alias");
+
+            await ResolveCharacteristicsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await StopDiscoveryAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Picks the best device advertising the mesh service, or null when there is not one.
+    ///
+    /// <para>A phone rotates its LE address for privacy, and BlueZ keeps a device object for every
+    /// address it has ever seen - each one still carrying the service UUID it advertised at the
+    /// time. Taking the first match means dialling an address that stopped existing minutes ago,
+    /// which is why nine connect attempts in ten never resolved a GATT tree.</para>
+    ///
+    /// <para>RSSI is the discriminator: BlueZ publishes it only while a device is being seen in
+    /// the current discovery session, and drops it when the device goes away. A cached ghost has
+    /// none. Strongest signal wins, so the nearest live radio is preferred over a weak one.</para>
+    /// </summary>
+    private async Task<BlueZObject?> FindCandidateAsync()
+    {
+        var objects = await _bluez.GetObjectsAsync().ConfigureAwait(false);
+
+        return objects
+            .Where(o => o.Has(BlueZ.DeviceInterface) &&
+                        o.Strings(BlueZ.DeviceInterface, "UUIDs")
+                         .Any(u => string.Equals(u, BleProtocol.ServiceUuid.ToString("D"),
+                                                 StringComparison.OrdinalIgnoreCase)))
+            .Where(o => o.Bool(BlueZ.DeviceInterface, "Connected") ||
+                        o.Property(BlueZ.DeviceInterface, "RSSI") != null)
+            .Where(o => !InCooldown(o.Path))
+            .OrderByDescending(o => o.Bool(BlueZ.DeviceInterface, "Connected"))
+            .ThenByDescending(o => Rssi(o))
+            .FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Starts a filtered discovery, and reports whether the radio is actually scanning.
+    ///
+    /// Filtered on our service UUID so the radio is not woken for every beacon in the room, and
+    /// on "le" so classic Bluetooth devices never appear at all.
+    /// </summary>
+    private async Task<bool> StartDiscoveryAsync(string adapterPath)
+    {
+        if (_discovering) return true;
+
+        try
+        {
+            await _bluez.CallAsync(adapterPath, BlueZ.AdapterInterface, "SetDiscoveryFilter", "a{sv}", (ref MessageWriter writer) =>
             {
                 var dict = writer.WriteArrayStart(DBusType.DictEntry);
                 writer.WriteString("UUIDs");
@@ -150,58 +297,40 @@ public sealed class LinuxBleCentral : ITransportConnection
                 writer.WriteArrayEnd(dict);
             }).ConfigureAwait(false);
 
-            if (!_discovering)
-            {
-                await _bluez.CallAsync(adapterPath, BlueZ.AdapterInterface, "StartDiscovery").ConfigureAwait(false);
-                _discovering = true;
-                Log.Write("BleCentral", "Scanning for the mesh service.");
-            }
+            await _bluez.CallAsync(adapterPath, BlueZ.AdapterInterface, "StartDiscovery").ConfigureAwait(false);
+
+            _discovering = true;
+            Log.Write("BleCentral", "Scanning for the mesh service.");
+            return true;
         }
         catch (Exception ex)
         {
-            // Another client may already have the adapter scanning, which is fine and is not
-            // worth saying twice a minute.
-            _discovering = true;
+            // Left false, deliberately. This used to be set true on failure, so one transient
+            // refusal - an adapter powered off at launch, or held by something else - convinced
+            // the loop it was already scanning and it never tried again for the life of the
+            // process. Reporting the failure honestly costs one skipped round instead.
+            _discovering = false;
             Log.Write("BleCentral", $"Discovery could not be started: {ex.Message}");
+            return false;
         }
+    }
 
-        var objects = await _bluez.GetObjectsAsync().ConfigureAwait(false);
+    /// <summary>Stops the scan. Safe to call when it was never started.</summary>
+    private async Task StopDiscoveryAsync()
+    {
+        if (!_discovering) return;
+        _discovering = false;
 
-        // Anything advertising the mesh service, but only if it is actually there.
-        //
-        // A phone rotates its LE address for privacy, and BlueZ keeps a device object for every
-        // address it has ever seen - each one still carrying the service UUID it advertised at
-        // the time. Taking the first match means dialling an address that stopped existing
-        // minutes ago, which is why nine connect attempts in ten never resolved a GATT tree.
-        //
-        // RSSI is the discriminator: BlueZ publishes it only while a device is being seen in the
-        // current discovery session, and drops it when the device goes away. A cached ghost has
-        // none. Strongest signal wins, so the nearest live radio is preferred over a weak one.
-        var candidate = objects
-            .Where(o => o.Has(BlueZ.DeviceInterface) &&
-                        o.Strings(BlueZ.DeviceInterface, "UUIDs")
-                         .Any(u => string.Equals(u, BleProtocol.ServiceUuid.ToString("D"),
-                                                 StringComparison.OrdinalIgnoreCase)))
-            .Where(o => o.Bool(BlueZ.DeviceInterface, "Connected") ||
-                        o.Property(BlueZ.DeviceInterface, "RSSI") != null)
-            .Where(o => !InCooldown(o.Path))
-            .OrderByDescending(o => o.Bool(BlueZ.DeviceInterface, "Connected"))
-            .ThenByDescending(o => Rssi(o))
-            .FirstOrDefault();
+        if (_adapterPath == null) return;
 
-        if (candidate == null) return;
-
-        Log.Write("BleCentral", $"Found {candidate.String(BlueZ.DeviceInterface, "Alias") ?? candidate.Path}; connecting.");
-
-        if (!candidate.Bool(BlueZ.DeviceInterface, "Connected"))
+        try
         {
-            await _bluez.CallAsync(candidate.Path, BlueZ.DeviceInterface, "Connect").ConfigureAwait(false);
+            await _bluez.CallAsync(_adapterPath, BlueZ.AdapterInterface, "StopDiscovery").ConfigureAwait(false);
         }
-
-        _devicePath = candidate.Path;
-        RemoteDeviceName = candidate.String(BlueZ.DeviceInterface, "Alias");
-
-        await ResolveCharacteristicsAsync(cancellationToken).ConfigureAwait(false);
+        catch (Exception ex)
+        {
+            Log.Write("BleCentral", $"Discovery could not be stopped: {ex.Message}");
+        }
     }
 
     /// <summary>Finds the two characteristics under the connected device and subscribes to notifications.</summary>
@@ -274,10 +403,20 @@ public sealed class LinuxBleCentral : ITransportConnection
     /// </summary>
     public void ForgetRejections()
     {
-        if (_rejected.Count == 0) return;
+        if (_rejected.Count == 0 && _rejectedKeys.Count == 0) return;
 
         _rejected.Clear();
+        _rejectedKeys.Clear();
         Log.Write("BleCentral", "The paired devices changed; giving every device another try.");
+    }
+
+    /// <summary>Remembers a refusal against this device's address, and its identity when known.</summary>
+    private void Reject(string? fingerprint)
+    {
+        DateTime until = DateTime.UtcNow + RejectionCooldown;
+
+        if (_devicePath != null) _rejected[_devicePath] = until;
+        if (!string.IsNullOrEmpty(fingerprint)) _rejectedKeys[fingerprint] = until;
     }
 
     private bool InCooldown(string path)
@@ -286,6 +425,15 @@ public sealed class LinuxBleCentral : ITransportConnection
         if (DateTime.UtcNow < until) return true;
 
         _rejected.Remove(path);
+        return false;
+    }
+
+    private bool InCooldownByKey(string fingerprint)
+    {
+        if (!_rejectedKeys.TryGetValue(fingerprint, out var until)) return false;
+        if (DateTime.UtcNow < until) return true;
+
+        _rejectedKeys.Remove(fingerprint);
         return false;
     }
 
@@ -400,19 +548,39 @@ public sealed class LinuxBleCentral : ITransportConnection
 
         if (_ephemeral == null || OpenSession == null) return;
 
+        // Refused before the session is even attempted, when this is a device already known to
+        // belong to another mesh. It reached us again because it changed its LE address, not
+        // because anything about it changed.
+        string announced = DeviceIdentity.FingerprintOf(publicKey);
+        if (InCooldownByKey(announced))
+        {
+            Log.Write("BleCentral", $"{deviceName} is still in another mesh; dropping it again.");
+            Reject(announced);
+            _ = DropAsync();
+            return;
+        }
+
         var session = OpenSession(publicKey, deviceName, ephemeralKey, _ephemeral);
         if (session == null)
         {
             Log.Write("BleCentral",
                 $"{deviceName} is not in this mesh. Ignoring it for {RejectionCooldown.TotalMinutes:F0} minutes.");
 
-            if (_devicePath != null) _rejected[_devicePath] = DateTime.UtcNow + RejectionCooldown;
-
+            Reject(announced);
             _ = DropAsync();
             return;
         }
 
-        Volatile.Write(ref _peer, session);
+        // A second hello on one link would otherwise leak the first key. There is no legitimate
+        // reason for one, so the replacement is logged rather than silent, and the key it
+        // replaces is disposed - which is what makes the traffic under it unrecoverable. The TCP
+        // transport and the Windows radio have both done this all along.
+        var previous = Interlocked.Exchange(ref _peer, session);
+        if (previous != null)
+        {
+            Log.Write("BleCentral", "A second hello arrived on one link; the earlier session key was discarded.");
+            previous.Dispose();
+        }
         RemoteDeviceName = string.IsNullOrWhiteSpace(deviceName) ? RemoteDeviceName : deviceName;
         RemoteFingerprint = session.Fingerprint;
         _lastHeard = DateTime.UtcNow;
@@ -455,8 +623,7 @@ public sealed class LinuxBleCentral : ITransportConnection
             string name = RemoteDeviceName ?? _devicePath ?? "a device";
             Log.Write("BleCentral", $"{name} never agreed a session; it belongs to another mesh. Ignoring it for {RejectionCooldown.TotalMinutes:F0} minutes.");
 
-            if (_devicePath != null) _rejected[_devicePath] = DateTime.UtcNow + RejectionCooldown;
-
+            Reject(null);
             await DropAsync().ConfigureAwait(false);
             return;
         }
@@ -469,6 +636,13 @@ public sealed class LinuxBleCentral : ITransportConnection
             await DropAsync().ConfigureAwait(false);
             return;
         }
+
+        // The protocol's cadence, not the loop's. The loop wakes every couple of seconds so the
+        // two checks above are prompt, but a ping is due on BleProtocol.HeartbeatInterval - which
+        // is what Windows and Android both send on, and what this end used to ignore by pinging
+        // on every wake instead.
+        if (DateTime.UtcNow - _lastPingAtUtc < BleProtocol.HeartbeatInterval) return;
+        _lastPingAtUtc = DateTime.UtcNow;
 
         await SendRawAsync(BleProtocol.BuildControl(BleProtocol.ControlPing)).ConfigureAwait(false);
     }
