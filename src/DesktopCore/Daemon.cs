@@ -445,7 +445,13 @@ public sealed class Daemon : IDisposable
 
         var peers = Security.Peers.Peers.Select(peer => peer.Fingerprint).ToList();
 
-        bool dial = BleLinkArbiter.ShouldDialAnyPeer(Security.Identity.Fingerprint, _bleCapability, peers);
+        // The pairing window is part of the decision, not a detail of it. With nothing paired
+        // there is no peer to arbitrate a role with, so the rule answers no - and this machine
+        // cannot advertise, so it would then be neither scanning nor advertising and could not be
+        // paired over Bluetooth at all. Observed: the only peer was forgotten, the phone still
+        // trusted this laptop, knocked, and was never heard.
+        bool dial = BleLinkArbiter.ShouldDialAnyPeer(
+            Security.Identity.Fingerprint, _bleCapability, peers, Security.Pairing.IsOpen);
 
         // Said once per change of mind, not once per round. A device that has decided not to scan
         // looks exactly like a device whose Bluetooth is broken, and the whole reason this gate
@@ -461,7 +467,7 @@ public sealed class Daemon : IDisposable
 
             Log.Write("Ble",
                 dial ? $"This device takes the central half ({_bleCapability}); scanning."
-                : peers.Count == 0 ? "Nothing is paired yet, so there is nothing to scan for."
+                : peers.Count == 0 ? "Nothing is paired and the pairing window is shut, so there is nothing to scan for."
                 : $"The peer opens the link for every paired device ({_bleCapability}); waiting to be connected to rather than scanning.");
         }
 

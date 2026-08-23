@@ -29,11 +29,31 @@ namespace CoreLib.Transport
         /// laptops waiting for each other.</para>
         /// </summary>
         public static bool ShouldDialAnyPeer(string localFingerprint, BleCapability local,
-                                             IEnumerable<string> peerFingerprints)
+                                             IEnumerable<string> peerFingerprints,
+                                             bool pairingOpen = false)
         {
             if (peerFingerprints == null) return false;
 
-            return peerFingerprints.Any(peer => ShouldDialPeer(localFingerprint, local, peer));
+            bool anyPeers = false;
+
+            foreach (string peer in peerFingerprints)
+            {
+                anyPeers = true;
+                if (ShouldDialPeer(localFingerprint, local, peer)) return true;
+            }
+
+            // Nothing paired, and a human is standing there inviting something in: scan.
+            //
+            // There is no peer to arbitrate a role with, so the rule above has nothing to decide
+            // and answers no. On an adapter that cannot advertise, that leaves the device neither
+            // scanning nor advertising - the exact deadlock this class exists to prevent, reached
+            // from the other direction. Observed on a laptop whose only peer had just been
+            // forgotten: the phone still trusted it, knocked, and was never heard.
+            //
+            // Gated on the pairing window rather than merely on having no peers, because a device
+            // that is not being paired has no reason to hold the radio open for ever. The window
+            // is three minutes and closes itself.
+            return !anyPeers && pairingOpen;
         }
 
         /// <summary>True when this device takes the central half of a link with that peer.</summary>

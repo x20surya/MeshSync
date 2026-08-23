@@ -117,4 +117,47 @@ public class BleLinkArbiterTests
             Assert.Equal(first, BleLinkArbiter.ShouldDialPeer(Lower, BleCapability.Both, Higher));
         }
     }
+
+    /// <summary>
+    /// A device with nothing paired scans while it is being paired, and not otherwise.
+    ///
+    /// There is no peer to arbitrate a role with, so the ordinary rule answers no - and on an
+    /// adapter that cannot advertise that leaves the device silent and unpairable over Bluetooth.
+    /// Observed on a laptop whose only peer had just been forgotten: the phone still trusted it,
+    /// knocked, and was never heard.
+    /// </summary>
+    [Fact]
+    public void A_device_with_no_peers_scans_while_pairing_is_open()
+    {
+        Assert.True(BleLinkArbiter.ShouldDialAnyPeer(Lower, BleCapability.Central,
+            Array.Empty<string>(), pairingOpen: true));
+
+        Assert.True(BleLinkArbiter.ShouldDialAnyPeer(Lower, BleCapability.Both,
+            Array.Empty<string>(), pairingOpen: true));
+    }
+
+    /// <summary>And stops again when the window closes, rather than holding the radio for ever.</summary>
+    [Fact]
+    public void A_device_with_no_peers_stops_when_pairing_closes()
+    {
+        Assert.False(BleLinkArbiter.ShouldDialAnyPeer(Lower, BleCapability.Both,
+            Array.Empty<string>(), pairingOpen: false));
+    }
+
+    /// <summary>An open window does not make a device scan when the roles already say otherwise.</summary>
+    [Fact]
+    public void Pairing_being_open_does_not_override_the_role_rule()
+    {
+        var peers = new[] { Higher };
+        bool withWindow = BleLinkArbiter.ShouldDialAnyPeer(Lower, BleCapability.Both, peers, pairingOpen: true);
+        bool without = BleLinkArbiter.ShouldDialAnyPeer(Lower, BleCapability.Both, peers, pairingOpen: false);
+
+        Assert.Equal(without, withWindow);
+    }
+
+    [Fact]
+    public void A_null_peer_list_is_still_refused()
+    {
+        Assert.False(BleLinkArbiter.ShouldDialAnyPeer(Lower, BleCapability.Both, null!, pairingOpen: true));
+    }
 }
