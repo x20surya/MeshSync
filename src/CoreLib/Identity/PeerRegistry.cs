@@ -254,7 +254,8 @@ namespace CoreLib.Identity
 
                 peer.LastSeenUtc = DateTimeOffset.UtcNow;
 
-                if (!string.IsNullOrWhiteSpace(address) && peer.LastAddress != address)
+                if (!string.IsNullOrWhiteSpace(address) && peer.LastAddress != address &&
+                    !WouldLosePort(peer.LastAddress, address))
                 {
                     peer.LastAddress = address;
                     changed = true;
@@ -274,6 +275,38 @@ namespace CoreLib.Identity
                 Save();
                 Changed?.Invoke();
             }
+        }
+
+        /// <summary>
+        /// True when taking the new address would throw away a port the old one carried.
+        ///
+        /// <para><b>Why this guard exists.</b> The address a connection reports is deliberately
+        /// port-less: on an accepted socket the peer's port is its ephemeral source port, which
+        /// is useless to dial back. That is right for learning where an unknown peer lives, and
+        /// wrong for a peer whose <c>host:port</c> a human already supplied in a pairing code -
+        /// which is exactly what happens on the first connect after joining, so the port is lost
+        /// before it is ever used.</para>
+        ///
+        /// <para>It hides in the field, because every device in the field listens on 45001 and a
+        /// bare host dials there anyway. It does not hide when two devices share one machine and
+        /// cannot share a port - the one arrangement this project relies on to exercise the mesh
+        /// without a third piece of hardware. The second device dialled the default port forever
+        /// and was refused by nothing, because nothing was listening there.</para>
+        ///
+        /// <para>Only the same host is protected. A device that genuinely moved must still be
+        /// able to record where it moved to.</para>
+        /// </summary>
+        private static bool WouldLosePort(string? stored, string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(stored)) return false;
+
+            // Exactly one colon, with a port after it. A bare IPv6 address has several, and
+            // mistaking one for a host and port would pin a peer to an address it never had.
+            int colon = stored.IndexOf(':');
+            if (colon <= 0 || stored.IndexOf(':', colon + 1) >= 0) return false;
+            if (!int.TryParse(stored[(colon + 1)..], out int port) || port is < 1 or > 65535) return false;
+
+            return string.Equals(stored[..colon], candidate, StringComparison.OrdinalIgnoreCase);
         }
 
         public bool Forget(string fingerprint)

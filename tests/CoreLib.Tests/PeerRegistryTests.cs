@@ -94,6 +94,65 @@ public class PeerRegistryTests
         Assert.Equal("192.168.1.240", registry.Find(peer.Fingerprint)!.LastAddress);
     }
 
+    /// <summary>
+    /// A pairing code carries <c>host:port</c>; a connection reports the host alone. The second
+    /// must not erase the first, or a peer that does not listen on the default port becomes
+    /// undialable the moment it first connects.
+    /// </summary>
+    [Fact]
+    public void Seeing_a_peer_does_not_drop_the_port_it_was_paired_with()
+    {
+        var registry = PeerRegistry.CreateEphemeral();
+        using var peer = DeviceIdentity.CreateEphemeral();
+
+        registry.Trust(peer.PublicKey, "Second device", "192.168.1.41:45091");
+        registry.NoteSeen(peer.Fingerprint, "192.168.1.41");
+
+        Assert.Equal("192.168.1.41:45091", registry.Find(peer.Fingerprint)!.LastAddress);
+    }
+
+    /// <summary>The guard is about the port, not about pinning a device to one address.</summary>
+    [Fact]
+    public void A_peer_that_moves_to_another_host_still_updates()
+    {
+        var registry = PeerRegistry.CreateEphemeral();
+        using var peer = DeviceIdentity.CreateEphemeral();
+
+        registry.Trust(peer.PublicKey, "Second device", "192.168.1.41:45091");
+        registry.NoteSeen(peer.Fingerprint, "192.168.1.99");
+
+        Assert.Equal("192.168.1.99", registry.Find(peer.Fingerprint)!.LastAddress);
+    }
+
+    /// <summary>A newer port for the same host is still news.</summary>
+    [Fact]
+    public void A_peer_that_changes_port_still_updates()
+    {
+        var registry = PeerRegistry.CreateEphemeral();
+        using var peer = DeviceIdentity.CreateEphemeral();
+
+        registry.Trust(peer.PublicKey, "Second device", "192.168.1.41:45091");
+        registry.NoteSeen(peer.Fingerprint, "192.168.1.41:45092");
+
+        Assert.Equal("192.168.1.41:45092", registry.Find(peer.Fingerprint)!.LastAddress);
+    }
+
+    /// <summary>
+    /// An IPv6 address is full of colons and is not a host and port. Reading one as such would
+    /// refuse every later address for that peer.
+    /// </summary>
+    [Fact]
+    public void An_ipv6_address_is_not_mistaken_for_a_host_and_port()
+    {
+        var registry = PeerRegistry.CreateEphemeral();
+        using var peer = DeviceIdentity.CreateEphemeral();
+
+        registry.Trust(peer.PublicKey, "Second device", "fe80::1c2d:3e4f:5a6b:7c8d");
+        registry.NoteSeen(peer.Fingerprint, "192.168.1.41");
+
+        Assert.Equal("192.168.1.41", registry.Find(peer.Fingerprint)!.LastAddress);
+    }
+
     [Fact]
     public void An_unreadable_key_is_refused()
     {
