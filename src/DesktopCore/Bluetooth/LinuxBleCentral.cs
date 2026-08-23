@@ -32,6 +32,24 @@ public sealed class LinuxBleCentral : ITransportConnection
     private int _usablePayload = BleFragmenter.MinimumMtuPayload;
     private bool _linkUp;
     private bool _discovering;
+    private string? _adapterPath;
+    private DateTime _linkUpAtUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Devices that connected but never agreed a session, and when to stop ignoring them.
+    ///
+    /// <para>The service UUID is the same for every install of this app, so a scan finds every
+    /// nearby Mesh Sync device including ones in somebody else's mesh. Those are refused, as they
+    /// must be - but without remembering the refusal the scan finds them again four seconds later
+    /// and the radio spends its life connecting to a stranger it will never be allowed to talk
+    /// to.</para>
+    /// </summary>
+    private readonly Dictionary<string, DateTime> _rejected = new(StringComparer.Ordinal);
+
+    private static readonly TimeSpan RejectionCooldown = TimeSpan.FromMinutes(5);
+
+    /// <summary>How long a link may sit without the peer proving who it is.</summary>
+    private static readonly TimeSpan IdentityGrace = TimeSpan.FromSeconds(12);
     private byte _messageCounter;
     private EphemeralKeyPair? _ephemeral;
     private PeerSession? _peer;
@@ -87,6 +105,7 @@ public sealed class LinuxBleCentral : ITransportConnection
     /// </summary>
     public async Task RunAsync(string adapterPath, CancellationToken cancellationToken)
     {
+        _adapterPath = adapterPath;
         await _bluez.WatchPropertiesAsync(OnPropertyChanged).ConfigureAwait(false);
 
         while (!cancellationToken.IsCancellationRequested)
@@ -148,10 +167,27 @@ public sealed class LinuxBleCentral : ITransportConnection
 
         var objects = await _bluez.GetObjectsAsync().ConfigureAwait(false);
 
-        var candidate = objects.FirstOrDefault(o =>
-            o.Has(BlueZ.DeviceInterface) &&
-            o.Strings(BlueZ.DeviceInterface, "UUIDs")
-             .Any(u => string.Equals(u, BleProtocol.ServiceUuid.ToString("D"), StringComparison.OrdinalIgnoreCase)));
+        // Anything advertising the mesh service, but only if it is actually there.
+        //
+        // A phone rotates its LE address for privacy, and BlueZ keeps a device object for every
+        // address it has ever seen - each one still carrying the service UUID it advertised at
+        // the time. Taking the first match means dialling an address that stopped existing
+        // minutes ago, which is why nine connect attempts in ten never resolved a GATT tree.
+        //
+        // RSSI is the discriminator: BlueZ publishes it only while a device is being seen in the
+        // current discovery session, and drops it when the device goes away. A cached ghost has
+        // none. Strongest signal wins, so the nearest live radio is preferred over a weak one.
+        var candidate = objects
+            .Where(o => o.Has(BlueZ.DeviceInterface) &&
+                        o.Strings(BlueZ.DeviceInterface, "UUIDs")
+                         .Any(u => string.Equals(u, BleProtocol.ServiceUuid.ToString("D"),
+                                                 StringComparison.OrdinalIgnoreCase)))
+            .Where(o => o.Bool(BlueZ.DeviceInterface, "Connected") ||
+                        o.Property(BlueZ.DeviceInterface, "RSSI") != null)
+            .Where(o => !InCooldown(o.Path))
+            .OrderByDescending(o => o.Bool(BlueZ.DeviceInterface, "Connected"))
+            .ThenByDescending(o => Rssi(o))
+            .FirstOrDefault();
 
         if (candidate == null) return;
 
@@ -194,13 +230,13 @@ public sealed class LinuxBleCentral : ITransportConnection
                 {
                     await SubscribeAsync().ConfigureAwait(false);
 
-                    // Up as soon as the characteristics resolve. The session follows when the
-                    // peer answers, and the loop must leave the link alone until it does.
+                    // The GATT link is open; the session is not. The loop must leave it alone
+                    // long enough for the peer to answer, but no longer - see HeartbeatAsync.
                     _linkUp = true;
                     _lastHeard = DateTime.UtcNow;
+                    _linkUpAtUtc = DateTime.UtcNow;
 
                     await SendHelloAsync().ConfigureAwait(false);
-                    Log.Write("BleCentral", $"Bluetooth link up to {RemoteDeviceName ?? "the peer"}.");
                     return;
                 }
             }
@@ -209,8 +245,38 @@ public sealed class LinuxBleCentral : ITransportConnection
             catch (OperationCanceledException) { return; }
         }
 
-        Log.Write("BleCentral", "The device never published the mesh service; dropping it.");
+        Log.Write("BleCentral", "That device never published the mesh service; forgetting it.");
+
+        // Removed from BlueZ outright, not just disconnected. Left in place it keeps its cached
+        // UUIDs and is picked again on the next sweep, forever.
+        string? stale = _devicePath;
         await DropAsync().ConfigureAwait(false);
+
+        if (stale != null && _adapterPath != null)
+        {
+            try
+            {
+                await _bluez.CallAsync(_adapterPath, BlueZ.AdapterInterface, "RemoveDevice", "o",
+                    (ref MessageWriter w) => w.WriteObjectPath(stale)).ConfigureAwait(false);
+            }
+            catch (Exception ex) { Log.Write("BleCentral", $"Could not forget it: {ex.GetType().Name}"); }
+        }
+    }
+
+    private bool InCooldown(string path)
+    {
+        if (!_rejected.TryGetValue(path, out var until)) return false;
+        if (DateTime.UtcNow < until) return true;
+
+        _rejected.Remove(path);
+        return false;
+    }
+
+    /// <summary>Signal strength, or the weakest possible value when the device is not being seen.</summary>
+    private static int Rssi(BlueZObject device)
+    {
+        var value = device.Property(BlueZ.DeviceInterface, "RSSI");
+        try { return value?.GetInt16() ?? short.MinValue; } catch { return short.MinValue; }
     }
 
     private static string? FindCharacteristic(List<BlueZObject> objects, string servicePath, Guid uuid) =>
@@ -320,7 +386,11 @@ public sealed class LinuxBleCentral : ITransportConnection
         var session = OpenSession(publicKey, deviceName, ephemeralKey, _ephemeral);
         if (session == null)
         {
-            Log.Write("BleCentral", $"Refusing {DeviceIdentity.Shorten(DeviceIdentity.FingerprintOf(publicKey))}: no session could be agreed.");
+            Log.Write("BleCentral",
+                $"{deviceName} is not in this mesh. Ignoring it for {RejectionCooldown.TotalMinutes:F0} minutes.");
+
+            if (_devicePath != null) _rejected[_devicePath] = DateTime.UtcNow + RejectionCooldown;
+
             _ = DropAsync();
             return;
         }
@@ -330,7 +400,7 @@ public sealed class LinuxBleCentral : ITransportConnection
         RemoteFingerprint = session.Fingerprint;
         _lastHeard = DateTime.UtcNow;
 
-        Log.Write("BleCentral", $"Peer identified as \"{RemoteDeviceName}\" ({DeviceIdentity.Shorten(RemoteFingerprint)}).");
+        Log.Write("BleCentral", $"Bluetooth link up to \"{RemoteDeviceName}\" ({DeviceIdentity.Shorten(RemoteFingerprint)}).");
 
         PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs
         {
@@ -359,6 +429,21 @@ public sealed class LinuxBleCentral : ITransportConnection
 
     private async Task HeartbeatAsync()
     {
+        // A device that has not proved who it is inside the grace period is not one of ours.
+        // Almost always it is a Mesh Sync device in somebody else's mesh: it advertises the same
+        // service, so it is found, and it refuses the session, as it should. Dropping it and
+        // remembering it is what stops the radio going back to it every four seconds.
+        if (_peer == null && DateTime.UtcNow - _linkUpAtUtc > IdentityGrace)
+        {
+            string name = RemoteDeviceName ?? _devicePath ?? "a device";
+            Log.Write("BleCentral", $"{name} never agreed a session; it belongs to another mesh. Ignoring it for {RejectionCooldown.TotalMinutes:F0} minutes.");
+
+            if (_devicePath != null) _rejected[_devicePath] = DateTime.UtcNow + RejectionCooldown;
+
+            await DropAsync().ConfigureAwait(false);
+            return;
+        }
+
         // The peer has to have answered at some point. A link that comes up and stays silent is
         // a peer that is not running the app, and holding it open forever helps nobody.
         if (DateTime.UtcNow - _lastHeard > BleProtocol.PeerTimeout)
@@ -426,6 +511,7 @@ public sealed class LinuxBleCentral : ITransportConnection
         bool wasConnected = IsConnected;
 
         _linkUp = false;
+        _linkUpAtUtc = DateTime.MinValue;
         _inboxPath = null;
         _outboxPath = null;
 
