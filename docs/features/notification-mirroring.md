@@ -5,6 +5,7 @@ platforms: [windows, android, linux]
 tier: either
 code:
   - src/CoreLib/Transport/NotificationProtocol.cs
+  - src/AndroidClient/Platforms/Android/NotificationMirrorService.cs
   - src/WinDaemon/MirroredNotifications.cs
   - src/WinDaemon/WindowsToasts.cs
   - src/DesktopCore/MirroredNotifications.cs
@@ -14,9 +15,37 @@ updated: 2026-08-23
 
 # Notification mirroring
 
-Mirror the apps you choose from your phone, and dismiss them from either end.
-A few hundred bytes each, so Bluetooth carries them, which means notifications keep mirroring with
-no network at all.
+Mirror the apps you choose from your phone, dismiss them from either end, and **reply to them
+without picking the phone up**.
+A few hundred bytes each, so Bluetooth carries them, which means notifications keep mirroring -
+and keep being answerable - with no network at all.
+
+## Replying
+
+> **In flight** as of 2026-08-23: protocol, desktop, bus and both UIs are built and the protocol
+> is under test; the Android half has not yet met a real WhatsApp notification.
+
+Reading a message on the laptop and then reaching for the phone to answer it is most of the reason
+a mirror gets switched off again. So the desktop can answer.
+
+**Nothing here talks to WhatsApp.** Android attaches a `RemoteInput` to the reply action of a
+messaging notification, and firing that action with the text filled in is byte for byte what
+happens when a person types into the notification shade. The message goes out through WhatsApp, or
+Signal, or Messages, from the account already signed in on the phone. No credential is held and no
+app is automated from the outside - the line this project drew when it
+[[android-client|banned the accessibility service]] is not crossed.
+
+`FindReplyAction` matches on `AllowFreeFormInput`: some apps attach a `RemoteInput` restricted to
+canned choices, and typing into that one does not send what was typed.
+
+**The notification says whether it can be answered**, and the desktop believes it rather than
+guessing. A reply box on a notification whose app offered no reply action is a message the user
+believes they sent.
+
+**The frame grew by appending.** A flags byte and a reply label go after the five original fields,
+and `TryParse` reads them only if they are there - so a device on the older build reads the five it
+knows and stops. Both directions keep working across a mixed mesh, which matters because the phone
+and the desktop are updated on different days by different means.
 
 ## Where it lives
 

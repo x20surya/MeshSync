@@ -56,6 +56,30 @@ for px in 16 24 32 48 64 128 256 512; do
 done
 cp "$HERE/dev.meshsync.desktop.metainfo.xml" "$APPDIR/usr/share/metainfo/" 2>/dev/null || true
 
+# The panel icons. Symbolic, so the tray recolours them for the scheme in use.
+for svg in "$HERE"/icons/symbolic/*-symbolic.svg; do
+    [ -f "$svg" ] || continue
+    name="$(basename "$svg" .svg)"
+    for px in 16 22 24; do
+        mkdir -p "$APPDIR/usr/share/icons/hicolor/${px}x${px}/apps"
+        source_svg="$HERE/icons/symbolic/$name-$px.svg"
+        [ "$px" = "22" ] && source_svg="$svg"
+        [ -f "$source_svg" ] && cp "$source_svg" "$APPDIR/usr/share/icons/hicolor/${px}x${px}/apps/$name.svg"
+    done
+    mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
+    cp "$svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/$name.svg"
+done
+
+cp "$HERE/meshsyncctl" "$APPDIR/usr/bin/meshsyncctl"
+chmod 755 "$APPDIR/usr/bin/meshsyncctl"
+
+# The widget rides inside the AppImage and is copied out on first run under Plasma, because an
+# AppImage cannot write into a plasmoid directory at install time - it has no install time.
+if [ -d "$REPO/plasma/dev.meshsync.desktop" ]; then
+    mkdir -p "$APPDIR/usr/bin/plasma"
+    cp -r "$REPO/plasma/dev.meshsync.desktop" "$APPDIR/usr/bin/plasma/"
+fi
+
 echo "==> AppImage"
 TOOL="$TOOLS/appimagetool-$APPIMAGE_ARCH.AppImage"
 if [ ! -x "$TOOL" ]; then
@@ -84,6 +108,33 @@ for px in 16 24 32 48 64 128 256 512; do
 done
 ln -sf /opt/meshsync/meshsync "$DEB/usr/bin/meshsync"
 
+install -Dm755 "$HERE/meshsyncctl" "$DEB/usr/bin/meshsyncctl"
+
+# The Plasma widget. Nothing in it is compiled, so it is copied rather than built - the same
+# directory works on any Plasma 6.
+if [ -d "$REPO/plasma/dev.meshsync.desktop" ]; then
+    mkdir -p "$DEB/usr/share/plasma/plasmoids"
+    cp -r "$REPO/plasma/dev.meshsync.desktop" "$DEB/usr/share/plasma/plasmoids/"
+fi
+
+# D-Bus activation, so the widget can start Mesh Sync rather than only report it is not running.
+mkdir -p "$DEB/usr/share/dbus-1/services"
+sed 's|@EXEC@|/usr/bin/meshsync|' "$HERE/dev.meshsync.Daemon.service.in" \
+    > "$DEB/usr/share/dbus-1/services/dev.meshsync.Daemon.service"
+
+for svg in "$HERE"/icons/symbolic/*-symbolic.svg; do
+    [ -f "$svg" ] || continue
+    name="$(basename "$svg" .svg)"
+    for px in 16 22 24; do
+        mkdir -p "$DEB/usr/share/icons/hicolor/${px}x${px}/apps"
+        source_svg="$HERE/icons/symbolic/$name-$px.svg"
+        [ "$px" = "22" ] && source_svg="$svg"
+        [ -f "$source_svg" ] && cp "$source_svg" "$DEB/usr/share/icons/hicolor/${px}x${px}/apps/$name.svg"
+    done
+    mkdir -p "$DEB/usr/share/icons/hicolor/scalable/apps"
+    cp "$svg" "$DEB/usr/share/icons/hicolor/scalable/apps/$name.svg"
+done
+
 INSTALLED_KB="$(du -sk "$DEB/opt" | cut -f1)"
 
 cat > "$DEB/DEBIAN/control" <<EOF
@@ -96,7 +147,8 @@ Installed-Size: $INSTALLED_KB
 Maintainer: x20surya <suryanshuc659@gmail.com>
 Homepage: https://github.com/x20surya/MeshSync
 Depends: libc6, libx11-6, libice6, libsm6, libfontconfig1
-Recommends: wl-clipboard | xclip
+Recommends: wl-clipboard | xclip, libglib2.0-bin
+Suggests: plasma-workspace (>= 4:6.4)
 Description: Local-first universal clipboard for your own devices
  Copy on one device and paste on another, with no cloud, no server and no
  account. Carries text, images and files, mirrors phone notifications, and
@@ -127,6 +179,8 @@ mkdir -p "$TARDIR"
 cp -r "$PUB/." "$TARDIR/"
 cp "$HERE/meshsync.desktop" "$TARDIR/"
 cp "$HERE/icons/meshsync-256.png" "$TARDIR/meshsync.png"
+cp "$HERE/meshsyncctl" "$TARDIR/"
+cp -r "$REPO/plasma" "$TARDIR/plasma" 2>/dev/null || true
 cp "$HERE/INSTALL.txt" "$TARDIR/" 2>/dev/null || true
 tar -C "$OUT" -caf "$OUT/meshsync-$VERSION-$RID.tar.xz" "$(basename "$TARDIR")"
 

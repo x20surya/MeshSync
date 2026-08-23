@@ -13,7 +13,9 @@ updated: 2026-08-23
 # D-Bus interface
 
 > **In flight.** `src/DesktopCore/Ipc/` and `packaging/meshsyncctl` are uncommitted as of
-> 2026-08-23. This describes what is on disk.
+> 2026-08-23. This describes what is on disk - and what is on disk has been exercised end to end:
+> two daemons paired entirely over this interface, `Confirm` on a `Pairing1`, then `IsConnected`,
+> `ActiveLink wifi` and `SendText -> 1` across a real socket.
 
 The running device publishes itself on the **session** bus as `dev.meshsync.Daemon`, so a panel
 widget, a tray applet or a script can drive it.
@@ -47,14 +49,24 @@ than one place is how a device ends up unreachable at a path that looks right.
 | `SendText`, `SendFile` | Send to the mesh |
 | `Dial`, `Join` | Connect, and pair from a code |
 | `StopRinging` | Silence this device's own alarm |
+| `SendClipboard` | Send whatever is on the clipboard now, for the tray and the widget |
 | `Notifications`, `DismissNotification`, `DismissAllNotifications` | [[notification-mirroring]] |
-| `ReplyToNotification` | In flight, see below |
+| `ReplyToNotification` | Answer a mirrored notification in the app that posted it |
 | `Activity` | The in-memory [[activity-log]] |
 | `Show`, `Quit` | Raise the window on a named page, and exit |
 
-Properties: `MeshName`, `Transport`.
+Writable properties: `MeshName`, `Transport`, `TrayIconVisible`.
+
+**What is deliberately not on the bus.** Clipboard text, image bytes, notification titles and
+bodies, and activity previews. Everything on the session bus is readable by every program running
+as this user, and a mirrored notification is the most private thing Mesh Sync carries.
+`Notifications` returns a key, an app name, a sender and a time - enough to badge "3 from S21 FE"
+and draw a reply box, and nothing to read. `SendText` takes text from a caller; nothing hands text
+back.
 
 **`dev.meshsync.Device1`**: `Ring`, `SendFile`, `EnsureWiFi`, `Forget`.
+`IsConnected` is answered **per peer** here, which is more than [[link-state]] can say - a device
+list on a panel would otherwise show the same dot on every row.
 
 **`dev.meshsync.Pairing1`**: `Confirm`, `Reject`.
 
@@ -104,6 +116,19 @@ message by **closing the connection with nothing said**.
 
 Reproduced rather than assumed: a five-entry `a{sv}` disconnects the sender mid-reply written one
 way, and reads cleanly from `gdbus`, `busctl` and QML written the other.
+
+**The same rule un-blocked [[bluetooth-tier]]'s peripheral half.** `LinuxBlePeripheral` hand-rolled
+every dictionary in its `a{oa{sa{sv}}}`, which is why BlueZ closed the connection on
+`RegisterApplication` and the peripheral stood aside. With `WriteDictionaryEntryStart` in place
+BlueZ reads the tree and accepts it; the remaining failure has moved on to `RegisterAdvertisement`
+and is a different problem, described in [[bluetooth-tier]].
+
+**A slow method must not be awaited in the handler.** Dialling takes seconds and sending a file
+takes as long as the file; awaiting either inline holds the dispatch loop so every property read
+queues behind it. `MethodContext.DisposesAsynchronously = true`, return, and reply from a
+background task - measured, a call issued during a 2.5s one comes back in 18 ms.
+`MessageWriter` is a **ref struct**, so it cannot be a local or a parameter anywhere inside an
+async method: the awaiting and the writing are two delegates for that reason.
 
 **The writer is a struct, so it is passed by `ref` everywhere.**
 Handing it to an `Action<MessageWriter>` writes the body into a copy that is discarded, and the

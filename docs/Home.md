@@ -26,6 +26,8 @@ What the owner of a device can point at.
 | [[pairing]] | Wi-Fi to start | Shipped, two steps, both required |
 | [[mesh-name]] | Either | Shipped, renaming does not propagate |
 | [[transport-preference]] | n/a | Shipped on Windows and the desktop head |
+| [[plasma-widget]] | n/a | In flight; pure QML, no compiled plugin |
+| [[tray-applet]] | n/a | In flight; replaces Avalonia's, and the headless head has one now |
 | [[password-vault]] | n/a | Planned and deliberately gated |
 
 ## Mechanisms

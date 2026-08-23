@@ -16,6 +16,9 @@ updated: 2026-08-23
 > **In flight.** `src/DesktopCore/Ipc/` is untracked as of 2026-08-23, and `App.axaml.cs`,
 > `Program.cs` and `PeerRegistry.cs` have uncommitted changes wiring it up.
 > This note describes what is on disk, not what is committed.
+> What is on disk has been exercised: two daemons paired entirely over this interface and text
+> crossed a real socket between them. Its consumers are [[plasma-widget]], [[tray-applet]] and
+> `meshsyncctl`.
 
 Publishes the running device on the session bus as `dev.meshsync.Daemon`, so something outside the
 app - a panel widget, a tray applet, a script - can drive it.
