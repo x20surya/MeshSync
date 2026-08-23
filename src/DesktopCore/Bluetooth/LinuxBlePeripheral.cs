@@ -74,15 +74,15 @@ public sealed class LinuxBlePeripheral : IPathMethodHandler, IDisposable
             await bluez.CallAsync(adapterPath, BlueZ.GattManagerInterface, "RegisterApplication", "oa{sv}", (ref MessageWriter writer) =>
             {
                 writer.WriteObjectPath(Root);
-                var options = writer.WriteArrayStart(DBusType.DictEntry);
-                writer.WriteArrayEnd(options);
+                var options = writer.WriteDictionaryStart();
+                writer.WriteDictionaryEnd(options);
             }).ConfigureAwait(false);
 
             await bluez.CallAsync(adapterPath, BlueZ.AdvertisingManagerInterface, "RegisterAdvertisement", "oa{sv}", (ref MessageWriter writer) =>
             {
                 writer.WriteObjectPath(AdvertPath);
-                var options = writer.WriteArrayStart(DBusType.DictEntry);
-                writer.WriteArrayEnd(options);
+                var options = writer.WriteDictionaryStart();
+                writer.WriteDictionaryEnd(options);
             }).ConfigureAwait(false);
 
             Log.Write("BlePeripheral", "Advertising the mesh service; other devices can now connect to this one.");
@@ -93,8 +93,22 @@ public sealed class LinuxBlePeripheral : IPathMethodHandler, IDisposable
             // BlueZ closes the connection outright when it dislikes an exported tree, so this is
             // usually "connection closed by peer" with nothing more to say. Reported once, at one
             // line, because the central half carries the tier regardless.
+            // The message matters now, and what it says has moved.
+            //
+            // Before the dictionaries were aligned this was DBusConnectionClosedException:
+            // GetManagedObjects returned a malformed a{oa{sa{sv}}} and BlueZ hung up without a
+            // word. With WriteDictionaryEntryStart in place, RegisterApplication *succeeds* -
+            // BlueZ reads the whole tree and takes it - and the failure has moved on to
+            // RegisterAdvertisement, which answers org.bluez.Error.Failed: Failed to register
+            // advertisement.
+            //
+            // That is a different problem and not a marshalling one: the adapter reports
+            // SupportedInstances 12 with ActiveInstances 0 and MaxAdvLen 251, so it is neither
+            // full nor short of room, and dropping LocalName from the packet changes nothing.
+            // Whatever it is, BlueZ is now talking rather than hanging up, which is the
+            // difference between a diagnosable problem and a silent one.
             Log.Write("BlePeripheral",
-                $"BlueZ would not accept the GATT application ({ex.GetType().Name}); this device will scan rather than advertise.");
+                $"BlueZ would not accept the GATT application: {ex.GetType().Name}: {ex.Message}. This device will scan rather than advertise.");
             return null;
         }
     }
@@ -230,36 +244,44 @@ public sealed class LinuxBlePeripheral : IPathMethodHandler, IDisposable
     {
         var writer = context.CreateReplyWriter("a{oa{sa{sv}}}");
 
-        // a{oa{sa{sv}}} - the elements are dict entries, not structs. Declaring one and writing
-        // the other is what dbus-daemon disconnects a client for.
-        var outer = writer.WriteArrayStart(DBusType.DictEntry);
+        // a{oa{sa{sv}}} - three nested dictionaries, and every entry of every one of them has to
+        // start on an eight-byte boundary. WriteArrayStart(DictEntry) opens an array of the right
+        // element type and does not insert that padding, so the second entry onwards lands one to
+        // seven bytes early and the whole message is malformed - which BlueZ answers by closing
+        // the connection with nothing said. WriteDictionaryEntryStart is the padding.
+        var outer = writer.WriteDictionaryStart();
 
         WriteObject(ref writer, ServicePath, BlueZ.ServiceInterface);
         WriteObject(ref writer, InboxPath, BlueZ.CharacteristicInterface);
         WriteObject(ref writer, OutboxPath, BlueZ.CharacteristicInterface);
 
-        writer.WriteArrayEnd(outer);
+        writer.WriteDictionaryEnd(outer);
         context.Reply(writer.CreateMessage());
     }
 
     private void WriteObject(ref MessageWriter writer, string path, string iface)
     {
+        writer.WriteDictionaryEntryStart();
         writer.WriteObjectPath(path);
 
-        var interfaces = writer.WriteArrayStart(DBusType.DictEntry);
+        var interfaces = writer.WriteDictionaryStart();
+        writer.WriteDictionaryEntryStart();
         writer.WriteString(iface);
         WriteProperties(ref writer, path, iface);
-        writer.WriteArrayEnd(interfaces);
+        writer.WriteDictionaryEnd(interfaces);
     }
 
     private void WriteProperties(ref MessageWriter writer, string path, string iface)
     {
-        var dict = writer.WriteArrayStart(DBusType.DictEntry);
+        var dict = writer.WriteDictionaryStart();
 
         if (iface == BlueZ.ServiceInterface && path == ServicePath)
         {
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("UUID");
             writer.WriteVariantString(BleProtocol.ServiceUuid.ToString("D"));
+
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("Primary");
             writer.WriteVariantBool(true);
         }
@@ -267,33 +289,44 @@ public sealed class LinuxBlePeripheral : IPathMethodHandler, IDisposable
         {
             bool inbox = path == InboxPath;
 
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("UUID");
             writer.WriteVariantString((inbox ? BleProtocol.InboxCharacteristicUuid
                                              : BleProtocol.OutboxCharacteristicUuid).ToString("D"));
+
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("Service");
             writer.WriteVariantObjectPath(ServicePath);
+
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("Flags");
             writer.WriteSignature("as");
             writer.WriteArray(inbox ? new[] { "write", "write-without-response" } : new[] { "notify" });
 
             if (!inbox)
             {
+                writer.WriteDictionaryEntryStart();
                 writer.WriteString("Notifying");
                 writer.WriteVariantBool(_notifying);
             }
         }
         else if (iface == AdvertisementInterface && path == AdvertPath)
         {
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("Type");
             writer.WriteVariantString("peripheral");
+
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("ServiceUUIDs");
             writer.WriteSignature("as");
             writer.WriteArray(new[] { BleProtocol.ServiceUuid.ToString("D") });
+
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("LocalName");
             writer.WriteVariantString(_localName);
         }
 
-        writer.WriteArrayEnd(dict);
+        writer.WriteDictionaryEnd(dict);
     }
 
     private bool WriteOneProperty(ref MessageWriter writer, string path, string iface, string name)
@@ -367,11 +400,12 @@ public sealed class LinuxBlePeripheral : IPathMethodHandler, IDisposable
 
             writer.WriteString(BlueZ.CharacteristicInterface);
 
-            var changed = writer.WriteArrayStart(DBusType.DictEntry);
+            var changed = writer.WriteDictionaryStart();
+            writer.WriteDictionaryEntryStart();
             writer.WriteString("Value");
             writer.WriteSignature("ay");
             writer.WriteArray(frame);
-            writer.WriteArrayEnd(changed);
+            writer.WriteDictionaryEnd(changed);
 
             writer.WriteArray(Array.Empty<string>());   // nothing invalidated
 
