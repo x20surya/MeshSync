@@ -120,6 +120,10 @@ public partial class MainWindow : Window
         _refresh.Tick += (_, _) => Refresh();
         _refresh.Start();
 
+        // Immediately, rather than on the next tick of the timer above. A link coming up is the
+        // one change a person is actually watching for, and the Windows window does the same.
+        _daemon.Links.Changed += () => Dispatcher.UIThread.Post(Refresh);
+
         _daemon.Ringer.StateChanged += ringing => Dispatcher.UIThread.Post(() =>
         {
             RingBanner.IsVisible = ringing;
@@ -127,6 +131,16 @@ public partial class MainWindow : Window
                 ? "A device in your mesh asked this computer to make a noise."
                 : "";
         });
+
+        // Set before the handler is allowed to act, so restoring the stored preference does not
+        // read as the user having just chosen it.
+        TransportMode.SelectedIndex = _daemon.Transports.Current switch
+        {
+            TransportPreference.WiFi => 1,
+            TransportPreference.Ble => 2,
+            _ => 0,
+        };
+        _transportReady = true;
 
         StartupSwitch.IsChecked = Autostart.IsEnabled;
 
@@ -332,11 +346,13 @@ public partial class MainWindow : Window
         var security = _daemon.Security;
         bool dark = ActualThemeVariant == ThemeVariant.Dark;
 
-        int connected = _daemon.Mesh.ConnectedCount;
         int total = security.Peers.Count;
 
-        bool anyLink = connected > 0 || _daemon.IsBluetoothConnected;
-        bool overBle = _daemon.IsBluetoothConnected && connected == 0;
+        // One question to one place. This used to compare a transport's connection count against
+        // a Bluetooth flag and reach its own conclusion, which is how the sidebar could say
+        // "Bluetooth" while every row on the Devices page called the same peer disconnected.
+        bool anyLink = _daemon.Links.IsConnected;
+        bool overBle = _daemon.Links.ActiveLink == LinkKind.Ble;
 
         SidebarDot.Fill = anyLink ? Accent(dark) : Warn(dark);
         SidebarStatus.Text = anyLink ? (overBle ? "Bluetooth" : "Connected") : "Waiting";
@@ -476,15 +492,22 @@ public partial class MainWindow : Window
     {
         var rows = security.Peers.Peers.Select(peer =>
         {
-            bool up = _daemon.Mesh.IsConnectedTo(peer.Fingerprint);
+            // Both tiers, because a device paired over Bluetooth alone is connected - it just is
+            // not connected over Wi-Fi. Asking only the socket made every such device read as
+            // last seen twenty minutes ago while the sidebar said Bluetooth.
+            bool wifi = _daemon.Mesh.IsConnectedTo(peer.Fingerprint);
+            bool ble = _daemon.IsBluetoothConnectedTo(peer.Fingerprint);
+            bool up = wifi || ble;
 
             return new DeviceRow
             {
                 Name = _daemon.Mesh.NameOf(peer.Fingerprint) ?? peer.Name ?? "Unnamed device",
                 Fingerprint = DeviceIdentity.Shorten(peer.Fingerprint),
-                Detail = up
+                Detail = wifi
                     ? $"Connected over Wi-Fi, {peer.LastAddress ?? "unknown address"}"
-                    : $"Last seen {Ago(peer.LastSeenUtc)}, {peer.LastAddress ?? "no recorded address"}",
+                    : ble
+                        ? "Connected over Bluetooth - text only"
+                        : $"Last seen {Ago(peer.LastSeenUtc)}, {peer.LastAddress ?? "no recorded address"}",
                 Connected = up,
                 Dot = up ? Accent(dark) : Faint(dark),
             };
@@ -632,9 +655,12 @@ public partial class MainWindow : Window
             FilesEmpty.IsVisible = files.Count == 0;
         }
 
-        // Only connected devices can be sent to, because a file needs Wi-Fi up right now.
-        var targets = _daemon.Mesh.ConnectedPeers
-            .Select(f => _daemon.Mesh.NameOf(f) ?? DeviceIdentity.Shorten(f))
+        // Every reachable device, not only the ones already on Wi-Fi. A file does need the
+        // socket, but a device holding a Bluetooth link can be asked to raise Wi-Fi - which
+        // SendFileAsync does - so leaving it out of the list offered no way to find that out.
+        var targets = _daemon.Security.Peers.Peers
+            .Where(p => _daemon.IsConnectedTo(p.Fingerprint))
+            .Select(p => _daemon.Mesh.NameOf(p.Fingerprint) ?? p.Name ?? DeviceIdentity.Shorten(p.Fingerprint))
             .ToList();
 
         if (!FileTargetBox.Items.Cast<object?>().Select(i => i?.ToString()).SequenceEqual(targets))
@@ -645,6 +671,29 @@ public partial class MainWindow : Window
                 ? previous
                 : targets.FirstOrDefault();
         }
+    }
+
+    private bool _transportReady;
+
+    /// <summary>
+    /// Applies a connection preference the moment it is chosen.
+    ///
+    /// The daemon starts and stops each tier in place, so this means something immediately rather
+    /// than at the next start - which is what the same control does on Windows.
+    /// </summary>
+    private void OnTransportModeChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!_transportReady || _daemon is null) return;
+
+        var preference = (TransportMode.SelectedItem as ComboBoxItem)?.Tag?.ToString() switch
+        {
+            "WiFi" => TransportPreference.WiFi,
+            "Ble" => TransportPreference.Ble,
+            _ => TransportPreference.Both,
+        };
+
+        _daemon.Transports.Set(preference);
+        Refresh();
     }
 
     private void OnStopRinging(object? sender, RoutedEventArgs e) => _daemon.Ringer.Stop();

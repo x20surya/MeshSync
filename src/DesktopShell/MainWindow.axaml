@@ -462,6 +462,18 @@
                   <TextBlock Text="Clipboard" FontSize="13" FontWeight="SemiBold" />
                   <TextBlock x:Name="SettingsClipboard" Classes="muted" Margin="0,3,0,0" />
                 </StackPanel>
+                <StackPanel>
+                  <TextBlock Text="Connection" FontSize="13" FontWeight="SemiBold" />
+                  <ComboBox x:Name="TransportMode" Margin="0,6,0,0" HorizontalAlignment="Stretch"
+                            SelectionChanged="OnTransportModeChanged">
+                    <ComboBoxItem Content="Wi-Fi and Bluetooth" Tag="Both" />
+                    <ComboBoxItem Content="Wi-Fi only (carries images, needs a network)" Tag="WiFi" />
+                    <ComboBoxItem Content="Bluetooth only (text, no network needed)" Tag="Ble" />
+                  </ComboBox>
+                  <TextBlock x:Name="TransportHint" Classes="muted" FontSize="11.5" TextWrapping="Wrap"
+                             Margin="0,6,0,0"
+                             Text="Bluetooth stays connected and carries text with no network at all. Wi-Fi is brought up when there is an image to send." />
+                </StackPanel>
                 <CheckBox x:Name="StartupSwitch" Content="Start Mesh Sync when I log in"
                           IsCheckedChanged="OnStartupChanged" />
                 <StackPanel>
