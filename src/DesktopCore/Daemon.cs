@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using CoreLib;
 using CoreLib.Diagnostics;
@@ -294,6 +294,7 @@ public sealed class Daemon : IDisposable
         {
             WantedCentralPeersChanged = peers => _scheduler?.SetWanted(peers),
             AdvertisingWanted = wanted => _ = ApplyAdvertisingAsync(wanted),
+            ProbingWanted = probing => _scheduler?.SetProbing(probing),
         };
 
         _discovery = new MeshDiscovery(Security);
@@ -812,8 +813,16 @@ public sealed class Daemon : IDisposable
             return (false, "That pairing key is not valid.");
         }
 
+        // The device whose code was just scanned, so the radio can look for that one and
+        // nothing else. Its beacon is derived from the same key, so a second pairing screen
+        // open in the same room is told apart rather than connected to.
+        //
+        // This is what lets two devices pair with no network at all: the QR carries a key,
+        // the inviter advertises a tag derived from it, and the joiner scans for exactly that.
+        _discovery.InvitedPublicKey = key;
+
         // The other end refuses the first attempt and asks a human to compare fingerprints, so
-        // the dial loop is nudged rather than waited out.
+        // the supervisor is nudged rather than waited out.
         NudgeDial();
 
         string fingerprint = DeviceIdentity.FingerprintOf(key!);

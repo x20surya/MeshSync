@@ -1,4 +1,4 @@
-using CoreLib.Identity;
+﻿using CoreLib.Identity;
 using CoreLib.Tests.Fakes;
 using CoreLib.Transport;
 using CoreLib.Transport.Ble;
@@ -349,6 +349,101 @@ public class BleRadioSchedulerTests
 
         Assert.False(await scheduler.RotateIfCrowdedAsync());
         Assert.False(route.IsClosed);
+    }
+
+    // ── pairing, and the failsafe ladder ─────────────────────────────────────
+
+    /// <summary>
+    /// A device with nothing paired still has to scan while somebody is pairing it.
+    ///
+    /// The wanted set is empty - there is no peer to owe a link to - so without this a fresh
+    /// install could only ever be joined and never join.
+    /// </summary>
+    [Fact]
+    public async Task Probing_scans_with_nothing_wanted()
+    {
+        var (scheduler, radio, _) = Rig();
+        await using var _s = scheduler;
+
+        radio.Place("the inviter", rssi: -40);
+        scheduler.SetWanted(new HashSet<string>());
+
+        await scheduler.RunRoundAsync(CancellationToken.None);
+        Assert.Empty(radio.ScanWindows);
+
+        scheduler.SetProbing(true);
+        await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Single(radio.ScanWindows);
+        Assert.Single(radio.ConnectAttempts);
+    }
+
+    /// <summary>
+    /// Rung four: several rounds that saw nothing at all while peers were wanted republish the
+    /// service.
+    ///
+    /// <para>The failure that motivates it is real. Killing a process orphans its GATT
+    /// registration, and a peer then keeps discovering the orphan: it connects, subscribes, both
+    /// ends report success, and nothing crosses. Quitting gracefully recovers; a crash needs the
+    /// adapter toggled.</para>
+    /// </summary>
+    [Fact]
+    public async Task Rounds_that_see_nothing_at_all_republish_the_service()
+    {
+        var (scheduler, radio, _) = Rig();
+        await using var _s = scheduler;
+
+        await scheduler.SetAdvertisingAsync(true, new BleAdvertisement());
+        scheduler.SetWanted(new HashSet<string> { Fingerprint() });
+
+        // An empty room: wanted, scanned, nothing seen.
+        for (int round = 0; round < 3; round++) await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Equal(1, scheduler.Recoveries);
+        Assert.Equal(1, radio.StopAdvertisingCalls);
+        Assert.True(radio.Advertising, "the service should be back up after a recovery");
+    }
+
+    /// <summary>
+    /// A round that saw devices and refused them is the radio working exactly as intended, and
+    /// must not count towards recovery.
+    /// </summary>
+    [Fact]
+    public async Task Refusing_other_meshes_is_not_a_reason_to_restart_the_radio()
+    {
+        var (scheduler, radio, _) = Rig();
+        await using var _s = scheduler;
+
+        scheduler.BeaconFilter = _ => false;
+        await scheduler.SetAdvertisingAsync(true, new BleAdvertisement());
+
+        radio.Place("somebody else", rssi: -30, beacon: new byte[] { 0x99 });
+        scheduler.SetWanted(new HashSet<string> { Fingerprint() });
+
+        for (int round = 0; round < 5; round++) await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Equal(0, scheduler.Recoveries);
+        Assert.Equal(0, scheduler.BarrenRounds);
+    }
+
+    [Fact]
+    public async Task A_round_that_finds_something_clears_the_barren_count()
+    {
+        var (scheduler, radio, _) = Rig();
+        await using var _s = scheduler;
+
+        await scheduler.SetAdvertisingAsync(true, new BleAdvertisement());
+        scheduler.SetWanted(new HashSet<string> { Fingerprint() });
+
+        await scheduler.RunRoundAsync(CancellationToken.None);
+        await scheduler.RunRoundAsync(CancellationToken.None);
+        Assert.Equal(2, scheduler.BarrenRounds);
+
+        radio.Place("here at last", rssi: -50);
+        await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Equal(0, scheduler.BarrenRounds);
+        Assert.Equal(0, scheduler.Recoveries);
     }
 
     // ── inbound ──────────────────────────────────────────────────────────────

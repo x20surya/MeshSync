@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -49,6 +49,14 @@ namespace CoreLib.Transport.Fabric
 
         /// <summary>Asked to publish or withdraw the GATT service.</summary>
         public Action<bool>? AdvertisingWanted { get; set; }
+
+        /// <summary>
+        /// Asked to scan even with nothing wanted, because a human is pairing something in.
+        ///
+        /// Without it a fresh install never scans - there is no peer to owe a link to - so it
+        /// could only ever be joined and never join.
+        /// </summary>
+        public Action<bool>? ProbingWanted { get; set; }
 
         public long Passes => Interlocked.Read(ref _passes);
 
@@ -175,6 +183,8 @@ namespace CoreLib.Transport.Fabric
 
             Invoke(() => WantedCentralPeersChanged?.Invoke(wanted), "WantedCentralPeersChanged");
             Invoke(() => AdvertisingWanted?.Invoke(plan.ShouldAdvertise), "AdvertisingWanted");
+            Invoke(() => ProbingWanted?.Invoke(RoutePolicy.ShouldScan(plan, peers, local) && wanted.Count == 0),
+                   "ProbingWanted");
 
             return Task.CompletedTask;
         }
@@ -200,6 +210,7 @@ namespace CoreLib.Transport.Fabric
             _signal.Dispose();
             WantedCentralPeersChanged = null;
             AdvertisingWanted = null;
+            ProbingWanted = null;
             return ValueTask.CompletedTask;
         }
     }

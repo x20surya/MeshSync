@@ -170,16 +170,21 @@ namespace WinDaemon
 
             if (peers != null)
             {
-                string? connectedName = Program.Links.IsConnected ? Program.Links.PeerName : null;
                 var accent = (System.Windows.Media.Brush)FindResource("B.Accent");
                 var faint = (System.Windows.Media.Brush)FindResource("B.TextFaint");
 
                 foreach (var peer in peers.Peers.OrderBy(p => p.Name ?? p.Fingerprint))
                 {
-                    bool live = connectedName != null &&
-                                string.Equals(connectedName, peer.Name, StringComparison.OrdinalIgnoreCase);
+                    // Asked of the peer, not of the app. This used to compare the one connected
+                    // name LinkState could hold against each row, so it could mark only one device
+                    // connected and guessed which by name - which broke outright with two devices
+                    // called the same thing. That gap is what platform-matrix.md recorded as
+                    // "answers per app" for this head.
+                    bool live = Program.IsConnectedTo(peer.Fingerprint);
+                    bool overWiFi = Program.IsWiFiConnectedTo(peer.Fingerprint);
 
-                    string via = Program.Links.ActiveLink == LinkKind.Ble ? "Bluetooth" : "Wi-Fi";
+                    // Wi-Fi wins when both are up, because it is the link that carries everything.
+                    string via = overWiFi ? "Wi-Fi" : "Bluetooth";
 
                     _devices.Add(new DeviceRow
                     {
@@ -874,7 +879,13 @@ namespace WinDaemon
                         Name = string.IsNullOrWhiteSpace(peer.Name)
                             ? DeviceIdentity.Shorten(peer.Fingerprint)
                             : peer.Name!,
-                        Sub = DeviceIdentity.Shorten(peer.Fingerprint),
+                        // Says which peers can actually answer, rather than offering to browse
+                        // a device that is not there.
+                        Sub = Program.IsWiFiConnectedTo(peer.Fingerprint)
+                            ? DeviceIdentity.Shorten(peer.Fingerprint)
+                            : Program.IsConnectedTo(peer.Fingerprint)
+                                ? $"{DeviceIdentity.Shorten(peer.Fingerprint)} · Bluetooth only"
+                                : $"{DeviceIdentity.Shorten(peer.Fingerprint)} · not reachable",
                         Action = "Browse",
                         Kind = BrowseRowKind.Device,
                         Target = peer.Fingerprint

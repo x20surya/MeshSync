@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -44,6 +44,19 @@ namespace CoreLib.Transport.Ble
         private BleAdvertisement _advertisement = new();
         private DateTime _lastRotationUtc;
         private long _rounds;
+        private int _barrenRounds;
+        private long _recoveries;
+
+        /// <summary>
+        /// True while a human is inviting a device in and there is nothing paired to arbitrate a
+        /// role with.
+        ///
+        /// <para>Without it a fresh install never scans - the wanted set is empty, because there
+        /// is no peer to owe a link to - so it can only ever be joined and never join. On an
+        /// adapter that cannot advertise that leaves it neither scanning nor advertising, which
+        /// is the same deadlock reached from the other direction.</para>
+        /// </summary>
+        private bool _probing;
         private int _lastSeen;
         private int _lastOurs;
         private bool _disposed;
@@ -109,6 +122,35 @@ namespace CoreLib.Transport.Ble
         /// Called every reconcile pass. An empty set stops the scan entirely - not because a link
         /// exists, but because nothing is missing one.
         /// </summary>
+        /// <summary>
+        /// How many rounds in a row have found nothing at all while something was wanted.
+        ///
+        /// The escalation signal: a radio that has been asked for peers and has seen no
+        /// advertisement of any kind for several full windows is more likely to be wedged than
+        /// to be in an empty room.
+        /// </summary>
+        public int BarrenRounds { get { lock (_gate) return _barrenRounds; } }
+
+        /// <summary>How many times the adapter has been restarted to get out of that.</summary>
+        public long Recoveries => Interlocked.Read(ref _recoveries);
+
+        /// <summary>
+        /// Scan even with nothing wanted, because a human is pairing something in.
+        ///
+        /// Fed from <c>RoutePolicy.ShouldScan</c>, which is where the rule lives.
+        /// </summary>
+        public void SetProbing(bool probing)
+        {
+            bool changed;
+            lock (_gate)
+            {
+                changed = _probing != probing;
+                _probing = probing;
+            }
+
+            if (changed) Signal();
+        }
+
         public void SetWanted(IReadOnlySet<string> peers)
         {
             bool changed;
@@ -204,9 +246,17 @@ namespace CoreLib.Transport.Ble
                 live = _central.Count;
             }
 
-            // Nothing missing a link: stop scanning altogether. Advertising continues, because a
-            // peer that cannot advertise depends on this device staying findable.
-            if (wanted.Count == 0) return _timings.ReconcileInterval;
+            bool probing;
+            lock (_gate) probing = _probing;
+
+            // Nothing missing a link and nobody pairing: stop scanning altogether. Advertising
+            // continues, because a peer that cannot advertise depends on this device staying
+            // findable.
+            if (wanted.Count == 0 && !probing)
+            {
+                lock (_gate) _barrenRounds = 0;
+                return _timings.ReconcileInterval;
+            }
 
             if (!_radio.IsAvailable) return _timings.ReconcileInterval;
 
@@ -250,8 +300,16 @@ namespace CoreLib.Transport.Ble
                 Log.Write("Ble", seen.Count == 0
                     ? "Nothing in range advertising the Mesh Sync service."
                     : $"{seen.Count} device(s) advertising the service, none of them in this mesh.");
+
+                // Only a round that saw *nothing at all* counts towards recovery. A round that
+                // saw devices and refused them is the radio working exactly as intended.
+                if (seen.Count == 0) await NoteBarrenRoundAsync().ConfigureAwait(false);
+                else lock (_gate) _barrenRounds = 0;
+
                 return _timings.ScanInterval;
             }
+
+            lock (_gate) _barrenRounds = 0;
 
             // Room for several, not one. A round that connects to a single candidate and ends is
             // how one foreign device sitting closer than your own took every round.
@@ -266,6 +324,56 @@ namespace CoreLib.Transport.Ble
 
             return opened > 0 ? _timings.ReconcileInterval : _timings.ScanInterval;
         }
+
+        /// <summary>
+        /// Restarts the adapter's advertising after several rounds that saw nothing at all.
+        ///
+        /// <para>Rung four of the failsafe ladder. A radio that has been asked for peers and has
+        /// seen no advertisement of any kind for several full windows is more likely to be wedged
+        /// than to be in an empty room - and the failure that motivates it is real: killing a
+        /// process orphans its GATT registration, and a peer then keeps discovering the orphan,
+        /// connects, subscribes, both ends report success, and nothing crosses. Quitting
+        /// gracefully recovers; a crash needs the adapter toggled.</para>
+        ///
+        /// <para>Cheap and safe: stopping and starting an advertisement costs nothing when it was
+        /// working, and the count resets the moment a round sees anything.</para>
+        /// </summary>
+        private async Task NoteBarrenRoundAsync()
+        {
+            int barren;
+            bool advertising;
+
+            lock (_gate)
+            {
+                barren = ++_barrenRounds;
+                advertising = _advertising;
+            }
+
+            if (barren < BarrenRoundsBeforeRecovery || !advertising) return;
+
+            lock (_gate) _barrenRounds = 0;
+            Interlocked.Increment(ref _recoveries);
+
+            Log.Write("Ble",
+                $"{barren} scan rounds saw nothing at all while peers were wanted; republishing the service.");
+
+            try
+            {
+                await _radio.StopAdvertisingAsync().ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+                await _radio.StartAdvertisingAsync(_advertisement).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Ble", "Republishing the service failed", ex);
+            }
+        }
+
+        /// <summary>
+        /// Three full windows of complete silence. Long enough that an empty room does not trigger
+        /// it constantly, short enough that a wedged radio is not left all night.
+        /// </summary>
+        private const int BarrenRoundsBeforeRecovery = 3;
 
         private async Task<bool> TryConnectAsync(BleCandidate candidate, CancellationToken cancellationToken)
         {

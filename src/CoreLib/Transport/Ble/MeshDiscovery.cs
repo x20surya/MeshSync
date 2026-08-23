@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using CoreLib.Diagnostics;
 using CoreLib.Identity;
 using CoreLib.Transport.Fabric;
@@ -141,7 +141,13 @@ namespace CoreLib.Transport.Ble
         /// The public key from a pairing code this device has just scanned, while it looks for
         /// that device over the radio. Cleared when the pairing window shuts.
         /// </summary>
-        public string? InvitedPublicKey { get; set; }
+        public string? InvitedPublicKey
+        {
+            get => _security.Pairing.IsOpen ? _invited : null;
+            set => _invited = value;
+        }
+
+        private string? _invited;
 
         /// <summary>
         /// Mints a mesh key if this device has peers and no key, so an upgraded mesh converges.

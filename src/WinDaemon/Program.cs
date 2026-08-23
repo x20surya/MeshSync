@@ -312,6 +312,7 @@ namespace WinDaemon
             {
                 WantedCentralPeersChanged = peers => _scheduler?.SetWanted(peers),
                 AdvertisingWanted = wanted => _ = ApplyAdvertisingAsync(wanted),
+                ProbingWanted = probing => _scheduler?.SetProbing(probing),
             };
 
             // A device refused a moment ago for not being paired is the same device being

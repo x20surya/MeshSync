@@ -70,16 +70,18 @@ public partial class DevicesPage : ContentPage
         var peers = SyncManager.Security.Peers;
         _devices.Clear();
 
-        // Only whether anything is reachable is known, not which peer. Honest while the mesh is
-        // small, and the next thing to grow when it is not.
-        bool anyLive = SyncManager.IsConnected;
-        string via = SyncManager.WiFiConnected && SyncManager.BleConnected ? "Wi-Fi + Bluetooth"
-                   : SyncManager.WiFiConnected ? "Wi-Fi"
-                   : "Bluetooth";
-
         foreach (var peer in peers.Peers.OrderBy(p => p.Name ?? p.Fingerprint))
         {
-            bool live = anyLive && string.Equals(peer.Name, SyncManager.PeerName, StringComparison.OrdinalIgnoreCase);
+            // Asked of the peer, not of the app. This used to know only whether *anything* was
+            // reachable and guess which row that was by comparing names, so a second device
+            // called the same thing was marked connected when it was not.
+            bool overWiFi = SyncManager.WiFiConnectedTo(peer.Fingerprint);
+            bool overBle = SyncManager.BleConnectedTo(peer.Fingerprint);
+            bool live = overWiFi || overBle;
+
+            string via = overWiFi && overBle ? "Wi-Fi + Bluetooth"
+                       : overWiFi ? "Wi-Fi"
+                       : "Bluetooth";
 
             _devices.Add(new DeviceRow
             {
