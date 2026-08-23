@@ -71,6 +71,23 @@ public sealed class LinuxBleCentral : ITransportConnection
     /// </summary>
     private readonly Dictionary<string, DateTime> _rejectedKeys = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The same refusals again, keyed by the name the device advertises.
+    ///
+    /// <para><b>Why a third key.</b> The address rotates and the identity is not known until the
+    /// hello arrives, so neither of the two above can stop a refused device being <em>picked</em>
+    /// again - only refused faster. A round costs one candidate, and the candidate is the
+    /// strongest signal in range, so a foreign device sitting closer than your own phone wins
+    /// every round, is refused, and the round ends. Observed exactly that: six minutes of scans
+    /// found a stranger's phone over and over and the paired one never once.</para>
+    ///
+    /// <para>The advertised name does not rotate with the address, so it is enough to stop
+    /// re-picking. It is a scheduling hint and nothing else - it decides who to <em>try</em>,
+    /// never who is let in, so a device that spoofs a name gains nothing but its own exclusion.
+    /// A legitimate device whose name collides waits five minutes.</para>
+    /// </summary>
+    private readonly Dictionary<string, DateTime> _rejectedNames = new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly TimeSpan RejectionCooldown = TimeSpan.FromMinutes(5);
 
     /// <summary>
@@ -267,6 +284,7 @@ public sealed class LinuxBleCentral : ITransportConnection
             .Where(o => o.Bool(BlueZ.DeviceInterface, "Connected") ||
                         o.Property(BlueZ.DeviceInterface, "RSSI") != null)
             .Where(o => !InCooldown(o.Path))
+            .Where(o => !InCooldownByName(o.String(BlueZ.DeviceInterface, "Alias")))
             .OrderByDescending(o => o.Bool(BlueZ.DeviceInterface, "Connected"))
             .ThenByDescending(o => Rssi(o))
             .FirstOrDefault();
@@ -407,16 +425,32 @@ public sealed class LinuxBleCentral : ITransportConnection
 
         _rejected.Clear();
         _rejectedKeys.Clear();
+        _rejectedNames.Clear();
         Log.Write("BleCentral", "The paired devices changed; giving every device another try.");
     }
 
-    /// <summary>Remembers a refusal against this device's address, and its identity when known.</summary>
+    /// <summary>
+    /// Remembers a refusal against this device's address, its identity when known, and the name
+    /// it advertises - which is the only one of the three that survives an address rotation and
+    /// is known before a connection is made.
+    /// </summary>
     private void Reject(string? fingerprint)
     {
         DateTime until = DateTime.UtcNow + RejectionCooldown;
 
         if (_devicePath != null) _rejected[_devicePath] = until;
         if (!string.IsNullOrEmpty(fingerprint)) _rejectedKeys[fingerprint] = until;
+        if (!string.IsNullOrEmpty(RemoteDeviceName)) _rejectedNames[RemoteDeviceName!] = until;
+    }
+
+    private bool InCooldownByName(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+        if (!_rejectedNames.TryGetValue(name!, out var until)) return false;
+        if (DateTime.UtcNow < until) return true;
+
+        _rejectedNames.Remove(name!);
+        return false;
     }
 
     private bool InCooldown(string path)
@@ -460,10 +494,8 @@ public sealed class LinuxBleCentral : ITransportConnection
         // many round trips as it needs.
         try
         {
-            var mtu = await _bluez.GetPropertyAsync(_inboxPath!, BlueZ.CharacteristicInterface, "MTU")
-                .ConfigureAwait(false);
+            int negotiated = await ReadSettledMtuAsync().ConfigureAwait(false);
 
-            int negotiated = (int)mtu.GetUInt16();
             _usablePayload = Math.Max(BleFragmenter.MinimumMtuPayload, BleProtocol.UsablePayload(negotiated));
             Log.Write("BleCentral", $"Negotiated MTU {negotiated}; {_usablePayload} bytes per chunk.");
         }
@@ -473,6 +505,45 @@ public sealed class LinuxBleCentral : ITransportConnection
         }
 
         Log.Write("BleCentral", "Subscribed to the peer's outbox.");
+    }
+
+    /// <summary>The ATT default, which is what BlueZ reports before an exchange has happened.</summary>
+    private const int DefaultAttMtu = 23;
+
+    /// <summary>
+    /// The link's MTU, once it has actually been negotiated.
+    ///
+    /// <para><b>Why this is a loop and not a read.</b> BlueZ publishes the characteristic's MTU
+    /// as a property, and the ATT exchange that raises it above the 23-byte default completes
+    /// some milliseconds after the subscription does. Reading once wins that race on a peer that
+    /// takes its time and loses it on a fast one - and losing it is not a slow link, it is a
+    /// broken one: the hello is written in a single attribute write, so a 20-byte window
+    /// truncates it and the peer reports "the peer announced something that is not a public key"
+    /// while its own side logs MTU 517. Observed exactly that against an S21 FE, which resolved
+    /// in half a second, while a slower phone in the same room negotiated 517 every time.</para>
+    ///
+    /// <para>Waits up to a second and a half. A peer that genuinely only does 23 costs that once
+    /// per connection and then works, fragmenting as it always did.</para>
+    /// </summary>
+    private async Task<int> ReadSettledMtuAsync()
+    {
+        int negotiated = DefaultAttMtu;
+
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            var mtu = await _bluez.GetPropertyAsync(_inboxPath!, BlueZ.CharacteristicInterface, "MTU")
+                .ConfigureAwait(false);
+
+            negotiated = (int)mtu.GetUInt16();
+            if (negotiated > DefaultAttMtu) return negotiated;
+
+            await Task.Delay(TimeSpan.FromMilliseconds(180)).ConfigureAwait(false);
+        }
+
+        // Said out loud, because a link that works but carries twenty bytes at a time looks
+        // like a slow peer rather than an exchange that never happened.
+        Log.Write("BleCentral", "The MTU never rose above the 23-byte default; this link will be slow.");
+        return negotiated;
     }
 
     // ──────────────────────────────── frames
