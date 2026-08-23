@@ -137,6 +137,14 @@ public static class Shell
                 PrintBanner(daemon);
                 return false;
 
+            case "links":
+                // The whole connection layer in one table. Diagnosing this used to mean three log
+                // files on three devices, one of them through adb, and inferring state no head
+                // could actually report.
+                Console.WriteLine();
+                Console.WriteLine(daemon.Health.ToTable());
+                return false;
+
             case "peers":
                 PrintPeers(daemon);
                 return false;
@@ -292,6 +300,7 @@ public static class Shell
         Console.WriteLine("""
               status              this device, its mesh and its peers
               peers               paired devices and which are connected
+              links               every route to every peer, and why any is not up
               pair                open the pairing window and show a code to scan
               uri                 print the pairing URI without the QR code
               join <code>         join a mesh from another device's meshsync:// code
@@ -330,13 +339,13 @@ public static class Shell
         {
             // Both tiers. Asking only the socket called every Bluetooth-only device disconnected,
             // which is the same thing the window used to get wrong.
-            bool wifi = daemon.Mesh.IsConnectedTo(peer.Fingerprint);
+            bool wifi = daemon.IsWiFiConnectedTo(peer.Fingerprint);
             bool ble = daemon.IsBluetoothConnectedTo(peer.Fingerprint);
             bool connected = wifi || ble;
 
             if (connected) reachable++;
 
-            string name = daemon.Mesh.NameOf(peer.Fingerprint) ?? peer.Name ?? "unnamed";
+            string name = daemon.NameOf(peer.Fingerprint) ?? peer.Name ?? "unnamed";
             string via = wifi ? peer.LastAddress ?? "no address" : ble ? "bluetooth" : peer.LastAddress ?? "no address";
 
             Console.WriteLine($"    {(connected ? "*" : " ")} {DeviceIdentity.Shorten(peer.Fingerprint)}  " +

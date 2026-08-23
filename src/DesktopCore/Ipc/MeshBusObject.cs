@@ -96,7 +96,7 @@ internal sealed class MeshBusObject : IPathMethodHandler
             ["ShortFingerprint"] = CoreLib.Identity.DeviceIdentity.Shorten(peer.Fingerprint),
             ["IsConnected"] = connected,
             ["ActiveLink"] = !connected ? "none"
-                : _daemon.Mesh.IsConnectedTo(peer.Fingerprint) ? "wifi" : "ble",
+                : _daemon.IsWiFiConnectedTo(peer.Fingerprint) ? "wifi" : "ble",
             ["LastSeen"] = peer.LastSeenUtc.ToUnixTimeSeconds(),
             ["LastAddress"] = peer.LastAddress ?? "",
         };

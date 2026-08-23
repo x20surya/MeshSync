@@ -523,13 +523,13 @@ public partial class MainWindow : Window
             // Both tiers, because a device paired over Bluetooth alone is connected - it just is
             // not connected over Wi-Fi. Asking only the socket made every such device read as
             // last seen twenty minutes ago while the sidebar said Bluetooth.
-            bool wifi = _daemon.Mesh.IsConnectedTo(peer.Fingerprint);
+            bool wifi = _daemon.IsWiFiConnectedTo(peer.Fingerprint);
             bool ble = _daemon.IsBluetoothConnectedTo(peer.Fingerprint);
             bool up = wifi || ble;
 
             return new DeviceRow
             {
-                Name = _daemon.Mesh.NameOf(peer.Fingerprint) ?? peer.Name ?? "Unnamed device",
+                Name = _daemon.NameOf(peer.Fingerprint) ?? peer.Name ?? "Unnamed device",
                 Fingerprint = DeviceIdentity.Shorten(peer.Fingerprint),
                 Detail = wifi
                     ? $"Connected over Wi-Fi, {peer.LastAddress ?? "unknown address"}"
@@ -706,7 +706,7 @@ public partial class MainWindow : Window
         // SendFileAsync does - so leaving it out of the list offered no way to find that out.
         var targets = _daemon.Security.Peers.Peers
             .Where(p => _daemon.IsConnectedTo(p.Fingerprint))
-            .Select(p => _daemon.Mesh.NameOf(p.Fingerprint) ?? p.Name ?? DeviceIdentity.Shorten(p.Fingerprint))
+            .Select(p => _daemon.NameOf(p.Fingerprint) ?? p.Name ?? DeviceIdentity.Shorten(p.Fingerprint))
             .ToList();
 
         if (!FileTargetBox.Items.Cast<object?>().Select(i => i?.ToString()).SequenceEqual(targets))

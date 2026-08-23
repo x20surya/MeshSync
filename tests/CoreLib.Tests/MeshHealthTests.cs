@@ -149,6 +149,55 @@ public class MeshHealthTests
         Assert.Contains("3 restarts", health.ToTable());
     }
 
+    /// <summary>
+    /// A route that is wanted and cannot be opened is the most useful row in the table.
+    ///
+    /// "no address recorded; waiting for this peer to dial in" is an answer. An empty row is not,
+    /// and it is what the first end-to-end run of the fabric printed.
+    /// </summary>
+    [Fact]
+    public async Task A_route_that_is_wanted_and_cannot_be_opened_says_why()
+    {
+        await using var rig = new Rig();
+        string peer = rig.Pair("Framework 13");
+
+        var wanted = new HashSet<RouteKey> { new(peer, RouteKind.WiFi) };
+        var health = MeshHealth.Of(rig.Fabric, rig.Clock, rig.Clock.UtcNow, 1, 0, wanted: wanted);
+
+        var row = Assert.Single(health.Peers.Single().Routes);
+        Assert.Equal(RouteState.Wanted, row.State);
+        Assert.Contains("no address recorded", row.Detail);
+    }
+
+    [Fact]
+    public async Task A_peer_that_opens_the_link_itself_says_that_rather_than_nothing()
+    {
+        await using var rig = new Rig();
+        string peer = rig.Pair("S21 FE");
+
+        var wanted = new HashSet<RouteKey> { new(peer, RouteKind.BlePeripheral) };
+        var health = MeshHealth.Of(rig.Fabric, rig.Clock, rig.Clock.UtcNow, 1, 0, wanted: wanted);
+
+        Assert.Contains("waiting to be connected to", health.Peers.Single().Routes.Single().Detail);
+    }
+
+    /// <summary>A route that exists is not also reported as missing.</summary>
+    [Fact]
+    public async Task A_wanted_route_that_exists_is_reported_once()
+    {
+        await using var rig = new Rig();
+        string peer = rig.Pair("a");
+
+        var route = rig.WiFi.NewRoute(peer).Identify(peer).Establish();
+        rig.Fabric.LinkTo(peer)!.Adopt(route);
+
+        var wanted = new HashSet<RouteKey> { new(peer, RouteKind.WiFi) };
+        var health = MeshHealth.Of(rig.Fabric, rig.Clock, rig.Clock.UtcNow, 1, 0, wanted: wanted);
+
+        Assert.Single(health.Peers.Single().Routes);
+        Assert.Equal(RouteState.Established, health.Peers.Single().Routes.Single().State);
+    }
+
     [Fact]
     public async Task A_mesh_with_nothing_paired_says_so_rather_than_printing_an_empty_table()
     {

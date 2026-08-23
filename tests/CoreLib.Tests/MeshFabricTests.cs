@@ -219,6 +219,69 @@ public class MeshFabricTests
         Assert.DoesNotContain(b, presence);
     }
 
+    /// <summary>
+    /// A route that has been dialled and has not identified itself yet is still a route.
+    ///
+    /// <para>Found on the very first end-to-end run of the fabric, not by reading: two daemons on
+    /// one machine, and the log showed several sockets to one peer inside a second. A pending
+    /// route lives outside the peer's own table - it has no fingerprint yet, so there is nowhere
+    /// to put it - and counting only the adopted ones made every reconcile pass open another.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_route_already_being_opened_is_not_opened_again()
+    {
+        await using var mesh = new Mesh();
+        string a = mesh.Pair("a");
+
+        // Queued twice: if the guard fails, the second pass takes the second one.
+        mesh.WiFi.Queue(a, mesh.WiFi.NewRoute());
+        mesh.WiFi.Queue(a, mesh.WiFi.NewRoute());
+
+        Assert.True(mesh.Fabric.TryOpen(a, RouteKind.WiFi));
+        Assert.True(mesh.Fabric.IsPending(a, RouteKind.WiFi));
+
+        Assert.False(mesh.Fabric.TryOpen(a, RouteKind.WiFi));
+        Assert.False(mesh.Fabric.TryOpen(a, RouteKind.WiFi));
+
+        Assert.Equal(1, mesh.Fabric.PendingCount);
+        Assert.Single(mesh.WiFi.OpenedFor);
+    }
+
+    /// <summary>Once it identifies, it belongs to the peer and is no longer pending.</summary>
+    [Fact]
+    public async Task A_pending_route_stops_being_pending_when_it_identifies()
+    {
+        await using var mesh = new Mesh();
+        string a = mesh.Pair("a");
+
+        var route = mesh.WiFi.NewRoute();
+        mesh.WiFi.Queue(a, route);
+        mesh.Fabric.TryOpen(a, RouteKind.WiFi);
+
+        route.Identify(a).Establish();
+
+        Assert.False(mesh.Fabric.IsPending(a, RouteKind.WiFi));
+        Assert.Equal(0, mesh.Fabric.PendingCount);
+        Assert.True(mesh.Fabric.IsConnectedTo(a));
+    }
+
+    /// <summary>A failed attempt must not block the next one for ever.</summary>
+    [Fact]
+    public async Task A_pending_route_that_fails_stops_blocking_the_next_attempt()
+    {
+        await using var mesh = new Mesh();
+        string a = mesh.Pair("a");
+
+        var first = mesh.WiFi.NewRoute();
+        mesh.WiFi.Queue(a, first);
+        mesh.Fabric.TryOpen(a, RouteKind.WiFi);
+        Assert.True(mesh.Fabric.IsPending(a, RouteKind.WiFi));
+
+        first.Drop("connect timed out");
+
+        Assert.False(mesh.Fabric.IsPending(a, RouteKind.WiFi));
+    }
+
     [Fact]
     public async Task Opening_is_refused_while_a_route_is_backing_off()
     {

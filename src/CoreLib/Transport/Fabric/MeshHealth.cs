@@ -67,7 +67,8 @@ namespace CoreLib.Transport.Fabric
         public static MeshHealth Of(MeshFabric fabric, ILinkClock clock, DateTime lastPassUtc,
                                     long passes, long restarts,
                                     string radioStatus = "", int radioLinks = 0, int radioBudget = 0,
-                                    bool advertising = false, (int Seen, int Ours) lastScan = default)
+                                    bool advertising = false, (int Seen, int Ours) lastScan = default,
+                                    IReadOnlySet<RouteKey>? wanted = null)
         {
             var now = clock.UtcNow;
 
@@ -94,6 +95,10 @@ namespace CoreLib.Transport.Fabric
                         Since = TimeSpan.Zero,
                         Detail = Retry(link.FailureOf(kind), link.RetryAt(kind), now),
                     }))
+
+                    // A route policy wants and cannot open is the most useful row in the table:
+                    // "wanted, no address" is an answer, and an empty row is not.
+                    .Concat(Missing(link, wanted))
                     .OrderBy(r => r.Kind)
                     .ToList(),
             }).ToList();
@@ -113,6 +118,34 @@ namespace CoreLib.Transport.Fabric
                 SupervisorRestarts = restarts,
                 SinceLastPass = now - lastPassUtc,
             };
+        }
+
+        /// <summary>Routes policy wants for this peer that do not exist and are not backing off.</summary>
+        private static IEnumerable<RouteHealth> Missing(PeerLink link, IReadOnlySet<RouteKey>? wanted)
+        {
+            if (wanted == null) yield break;
+
+            foreach (var want in wanted)
+            {
+                if (!string.Equals(want.Fingerprint, link.Fingerprint, StringComparison.OrdinalIgnoreCase)) continue;
+                if (link.Has(want.Kind)) continue;
+                if (link.Backoffs.Contains(want.Kind)) continue;
+
+                yield return new RouteHealth
+                {
+                    Kind = want.Kind,
+                    State = RouteState.Wanted,
+                    Since = TimeSpan.Zero,
+                    Detail = want.Kind switch
+                    {
+                        RouteKind.WiFi when string.IsNullOrWhiteSpace(link.Peer.LastAddress) =>
+                            "no address recorded; waiting for this peer to dial in",
+                        RouteKind.WiFi => $"dialling {link.Peer.LastAddress}",
+                        RouteKind.BlePeripheral => "this peer opens the link; waiting to be connected to",
+                        _ => "scanning",
+                    },
+                };
+            }
         }
 
         private static string Retry(string? failure, DateTime retryAt, DateTime now) =>
@@ -156,7 +189,7 @@ namespace CoreLib.Transport.Fabric
 
                 if (peer.Routes.Count == 0)
                 {
-                    text.AppendLine($"{label,-16}{"-",-17}{"Idle",-15}{"-",-8}no route wanted");
+                    text.AppendLine($"{label,-16}{"-",-17}{"Idle",-15}{"-",-8}no route wanted for this peer");
                     continue;
                 }
 

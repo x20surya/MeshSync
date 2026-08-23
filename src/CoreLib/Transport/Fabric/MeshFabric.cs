@@ -32,7 +32,15 @@ namespace CoreLib.Transport.Fabric
         private readonly object _gate = new();
         private readonly Dictionary<string, PeerLink> _links = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<RouteKind, IRouteProvider> _providers = new();
-        private readonly List<IPeerRoute> _pending = new();
+        /// <summary>
+        /// Routes that exist and have not said who they are on yet.
+        ///
+        /// <para>The value is the peer this device <em>meant</em> to reach, empty for a link that
+        /// arrived unasked. Without it a route dialled but not yet identified counted as no route
+        /// at all, so every reconcile pass opened another one - observed as several sockets to one
+        /// peer inside a second, on the very first end-to-end run of the fabric.</para>
+        /// </summary>
+        private readonly Dictionary<IPeerRoute, string> _pending = new();
 
         private bool _disposed;
 
@@ -170,6 +178,10 @@ namespace CoreLib.Transport.Fabric
             var link = LinkTo(fingerprint);
             if (link == null || !link.MayOpen(kind)) return false;
 
+            // A route already on its way to this peer is a route. Counting only adopted ones made
+            // the supervisor dial again on every pass for as long as a handshake was in flight.
+            if (IsPending(fingerprint, kind)) return false;
+
             var provider = ProviderFor(kind);
             if (provider?.IsAvailable != true) return false;
 
@@ -183,7 +195,7 @@ namespace CoreLib.Transport.Fabric
 
             if (route == null) return false;
 
-            if (string.IsNullOrWhiteSpace(route.PeerFingerprint)) Hold(route);
+            if (string.IsNullOrWhiteSpace(route.PeerFingerprint)) Hold(route, fingerprint);
             else link.Adopt(route);
 
             return true;
@@ -211,13 +223,32 @@ namespace CoreLib.Transport.Fabric
             link.Adopt(route);
         }
 
+        /// <summary>True when a route to this peer of this kind is already being opened.</summary>
+        public bool IsPending(string fingerprint, RouteKind kind)
+        {
+            lock (_gate)
+            {
+                foreach (var pair in _pending)
+                {
+                    if (pair.Value.Length == 0) continue;
+                    if (pair.Key.Kind != kind) continue;
+                    if (!string.Equals(pair.Value, fingerprint, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (pair.Key.State is RouteState.Backoff or RouteState.Idle) continue;
+
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
         /// <summary>Parks a route that has not said who it is, under the handshake deadline.</summary>
-        private void Hold(IPeerRoute route)
+        private void Hold(IPeerRoute route, string intended = "")
         {
             lock (_gate)
             {
                 if (_disposed) { _ = DropAsync(route, "the fabric is gone"); return; }
-                _pending.Add(route);
+                _pending[route] = intended;
             }
 
             route.StateChanged += OnPendingState;
@@ -275,7 +306,7 @@ namespace CoreLib.Transport.Fabric
 
             lock (_gate)
             {
-                foreach (var route in _pending.ToList())
+                foreach (var route in _pending.Keys.ToList())
                 {
                     if (route.State is not (RouteState.Handshaking or RouteState.Connecting)) continue;
                     if (now - route.StateSinceUtc < _timings.HandshakeGrace) continue;
@@ -383,7 +414,7 @@ namespace CoreLib.Transport.Fabric
                 _disposed = true;
 
                 links = _links.Values.ToList();
-                pending = _pending.ToList();
+                pending = _pending.Keys.ToList();
                 providers = _providers.Values.ToList();
                 _links.Clear();
                 _pending.Clear();
