@@ -83,17 +83,18 @@ pending_path_for() { printf '%s/pending/%s' "$ROOT" "$(printf '%s' "$1" | tr '-'
 # Resolves a prefix, a name or a full fingerprint to exactly one device. Ambiguity is an error
 # rather than a guess: ringing the wrong phone is not a small mistake.
 resolve() {
-    want=$(printf '%s' "$1" | tr 'a-z' 'A-Z')
+    want=$(printf '%s' "$1" | tr 'a-z' 'A-Z' | tr -d '-')
     [ -n "$want" ] || die "Which device? Try: meshsyncctl devices"
 
     found=""
     count=0
     for fp in $(fingerprints); do
-        upper=$(printf '%s' "$fp" | tr 'a-z' 'A-Z')
-        name=$(device_property "$fp" Name 2>/dev/null || printf '')
-        upname=$(printf '%s' "$name" | tr 'a-z' 'A-Z')
+        full=$(printf '%s' "$fp" | tr 'a-z' 'A-Z')
+        short=$(device_property "$fp" ShortFingerprint 2>/dev/null | tr 'a-z' 'A-Z' | tr -d '-')
+        upname=$(device_property "$fp" Name 2>/dev/null | tr 'a-z' 'A-Z')
 
-        case "$upper" in "$want"*) found="$fp"; count=$((count + 1)); continue;; esac
+        case "$full" in "$want"*) found="$fp"; count=$((count + 1)); continue;; esac
+        case "$short" in "$want"*) found="$fp"; count=$((count + 1)); continue;; esac
         case "$upname" in *"$want"*) found="$fp"; count=$((count + 1));; esac
     done
 
@@ -179,14 +180,24 @@ cmd_pending() {
     return 0
 }
 
+# Matches what `pending` actually printed. The listing shows the short fingerprint -
+# AC83-492B-684F-4263 - while the object path carries the full 64-character digest, so matching
+# only the path meant the tool refused the very string it had just told you to use.
 resolve_pending() {
-    want=$(printf '%s' "$1" | tr 'a-z' 'A-Z')
+    want=$(printf '%s' "$1" | tr 'a-z' 'A-Z' | tr -d '-')
+    [ -n "$want" ] || die "Which device? Try: meshsyncctl pending"
+
     found=""; count=0
     for fp in $(pending_fingerprints); do
-        upper=$(printf '%s' "$fp" | tr 'a-z' 'A-Z')
-        case "$upper" in "$want"*) found="$fp"; count=$((count + 1));; esac
+        full=$(printf '%s' "$fp" | tr 'a-z' 'A-Z')
+        short=$(call "$(pending_path_for "$fp")" org.freedesktop.DBus.Properties Get \
+                    "$PAIRING_IFACE" ShortFingerprint | unwrap | tr 'a-z' 'A-Z' | tr -d '-')
+
+        case "$full" in "$want"*) found="$fp"; count=$((count + 1)); continue;; esac
+        case "$short" in "$want"*) found="$fp"; count=$((count + 1));; esac
     done
-    [ "$count" -eq 0 ] && die "Nothing matching \"$1\" is asking to join."
+
+    [ "$count" -eq 0 ] && die "Nothing matching \"$1\" is asking to join. Try: meshsyncctl pending"
     [ "$count" -gt 1 ] && die "\"$1\" matches $count requests. Use more of the fingerprint."
     printf '%s' "$found"
 }
