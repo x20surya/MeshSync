@@ -12,6 +12,17 @@ public sealed class MirroredEntry
     public required string Text { get; init; }
     public required DateTime AtUtc { get; init; }
 
+    /// <summary>
+    /// True when the device this came from offered a reply action with it.
+    ///
+    /// <para>The sender's answer, never this end's guess. A reply box on a notification that
+    /// carried no reply action is a message the user believes they sent.</para>
+    /// </summary>
+    public bool CanReply { get; init; }
+
+    /// <summary>The app's own word for the action - "Reply" on most, not on all.</summary>
+    public string ReplyLabel { get; init; } = "";
+
     public string Age
     {
         get
@@ -60,6 +71,8 @@ public sealed class MirroredNotifications
             Title = notification.Title,
             Text = notification.Text,
             AtUtc = DateTime.UtcNow,
+            CanReply = notification.CanReply,
+            ReplyLabel = notification.ReplyLabel,
         };
 
         lock (_gate) _live[entry.Key] = entry;

@@ -1014,6 +1014,7 @@ namespace AndroidClient
                 else if (contentType == SyncContent.Address) NoteAnnouncedAddress(peer, body);
                 else if (contentType == SyncContent.Ring) ApplyRing(peer, body);
                 else if (contentType == SyncContent.NotificationDismiss) ApplyNotificationDismiss(body);
+                else if (contentType == SyncContent.NotificationReply) ApplyNotificationReply(body);
                 else if (contentType == SyncContent.Notification) ApplyNotification(peer, body);
                 else Log.Write("Sync", $"Ignoring unknown content type {contentType}.");
             }
@@ -1083,6 +1084,30 @@ namespace AndroidClient
         /// The half that makes mirroring feel finished. Without it the desktop is a second inbox
         /// that has to be emptied separately, which is worse than not mirroring at all.
         /// </summary>
+        /// <summary>
+        /// A paired device answered one of this phone's notifications, so send it.
+        ///
+        /// <para>The reply goes out through the app that posted the notification, by pulling the
+        /// reply action the notification already carried. Nothing is typed into any app and no
+        /// credential is involved - see <see cref="Platforms.Android.NotificationMirrorService.ReplyTo"/>.</para>
+        ///
+        /// <para>Authenticated by the time it gets here: it arrived inside an encrypted payload
+        /// on a session agreed with a paired device. That matters more for this than for anything
+        /// else the mesh carries, because the effect of a forged one is a message sent as you.</para>
+        /// </summary>
+        private static void ApplyNotificationReply(byte[] body)
+        {
+#if ANDROID
+            if (!NotificationProtocol.TryParseReply(body, out string key, out string text)) return;
+
+            // That one arrived, never what it said.
+            Log.Write("Sync", "A paired device replied to a notification; sending it.");
+            Platforms.Android.NotificationMirrorService.ReplyTo(key, text);
+#else
+            _ = body;
+#endif
+        }
+
         private static void ApplyNotificationDismiss(byte[] body)
         {
 #if ANDROID

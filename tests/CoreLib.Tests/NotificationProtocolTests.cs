@@ -161,4 +161,82 @@ public class NotificationProtocolTests
         byte[] frame = NotificationProtocol.Build(maximal);
         Assert.True(frame.Length < BleProtocol.MaxPayloadBytes);
     }
+
+    /// <summary>A reply action on the sending side has to survive the wire, label and all.</summary>
+    [Fact]
+    public void A_notification_that_can_be_replied_to_says_so()
+    {
+        var sent = new MirroredNotification("k1", "com.whatsapp", "WhatsApp", "Aditya",
+            "are you around?", DateTimeOffset.UtcNow, canReply: true, replyLabel: "Reply");
+
+        Assert.True(NotificationProtocol.TryParse(NotificationProtocol.Build(sent), out var got));
+        Assert.True(got!.CanReply);
+        Assert.Equal("Reply", got.ReplyLabel);
+        Assert.Equal("are you around?", got.Text);
+    }
+
+    [Fact]
+    public void A_notification_that_cannot_be_replied_to_says_that_too()
+    {
+        var sent = new MirroredNotification("k2", "com.bank", "Bank", "OTP", "123456",
+            DateTimeOffset.UtcNow);
+
+        Assert.True(NotificationProtocol.TryParse(NotificationProtocol.Build(sent), out var got));
+        Assert.False(got!.CanReply);
+        Assert.Equal("", got.ReplyLabel);
+    }
+
+    /// <summary>
+    /// The reply fields are appended, so a body written by a device that predates them still
+    /// parses. This is that body: the five fields and nothing after them.
+    /// </summary>
+    [Fact]
+    public void A_notification_from_before_replies_existed_still_parses()
+    {
+        var full = NotificationProtocol.Build(new MirroredNotification(
+            "k3", "com.app", "App", "Title", "Text", DateTimeOffset.UnixEpoch.AddSeconds(1)));
+
+        // Walk the five length-prefixed fields to find where the old format ended.
+        int at = 8;
+        for (int field = 0; field < 5; field++)
+            at += 2 + System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(full.AsSpan(at, 2));
+
+        byte[] old = full.AsSpan(0, at).ToArray();
+
+        Assert.True(NotificationProtocol.TryParse(old, out var got));
+        Assert.Equal("Title", got!.Title);
+        Assert.False(got.CanReply);
+    }
+
+    [Fact]
+    public void A_reply_round_trips()
+    {
+        byte[] body = NotificationProtocol.BuildReply("0|com.whatsapp|42|null|10123", "on my way");
+
+        Assert.True(NotificationProtocol.TryParseReply(body, out string key, out string text));
+        Assert.Equal("0|com.whatsapp|42|null|10123", key);
+        Assert.Equal("on my way", text);
+    }
+
+    /// <summary>A blank reply would post an empty message into somebody's conversation.</summary>
+    [Fact]
+    public void An_empty_reply_is_refused()
+    {
+        Assert.False(NotificationProtocol.TryParseReply(
+            NotificationProtocol.BuildReply("k", "   "), out _, out _));
+
+        Assert.False(NotificationProtocol.TryParseReply(
+            NotificationProtocol.BuildReply("", "hello"), out _, out _));
+    }
+
+    [Fact]
+    public void A_reply_longer_than_the_cap_is_trimmed_rather_than_refused()
+    {
+        string huge = new string('a', NotificationProtocol.MaxReplyBytes * 2);
+
+        Assert.True(NotificationProtocol.TryParseReply(
+            NotificationProtocol.BuildReply("k", huge), out _, out string text));
+
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(text) <= NotificationProtocol.MaxReplyBytes);
+    }
 }

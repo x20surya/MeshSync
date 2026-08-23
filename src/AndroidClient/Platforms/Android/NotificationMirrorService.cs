@@ -87,15 +87,21 @@ namespace AndroidClient.Platforms.Android
                 // usually a placeholder an app updates a moment later.
                 if (title.Length == 0 && text.Length == 0) return;
 
+                var reply = FindReplyAction(sbn.Notification);
+
                 var mirrored = new MirroredNotification(
                     sbn.Key ?? "",
                     package,
                     NameOf(package),
                     title,
                     text,
-                    DateTimeOffset.FromUnixTimeMilliseconds(sbn.PostTime));
+                    DateTimeOffset.FromUnixTimeMilliseconds(sbn.PostTime),
+                    canReply: reply != null,
+                    replyLabel: reply?.Label ?? "");
 
                 if (mirrored.Key.Length == 0) return;
+
+                if (reply != null) Remember(mirrored.Key, reply);
 
                 // The one line that makes "why did this notification not appear on my computer"
                 // answerable. Bounded by how many notifications the allowed apps actually post,
@@ -125,12 +131,148 @@ namespace AndroidClient.Platforms.Android
                 string key = sbn.Key ?? "";
                 if (key.Length == 0) return;
 
+                Forget(key);
+
                 Log.Write("Notify", $"A notification from {sbn.PackageName} went away.");
                 _ = SyncManager.SendNotificationDismissAsync(key);
             }
             catch (Exception ex)
             {
                 Log.Write("Notify", "Mirroring a dismissal failed", ex);
+            }
+        }
+
+        // ──────────────────────────────── replying
+
+        /// <summary>A notification's reply action, held so it can be fired later.</summary>
+        private sealed record ReplyAction(PendingIntent Intent, RemoteInput[] Inputs, string Label);
+
+        /// <summary>
+        /// The reply actions of the notifications currently showing.
+        ///
+        /// <para>Bounded and cleared as notifications go away. A <c>PendingIntent</c> is a
+        /// reference to something in another process; holding one for a notification that has
+        /// been gone for an hour keeps that alive for no reason, and firing it would put a
+        /// message into a conversation the user has long since left.</para>
+        /// </summary>
+        private static readonly Dictionary<string, ReplyAction> Replies = new(StringComparer.Ordinal);
+        private static readonly object RepliesGate = new();
+
+        /// <summary>Generous for a phone's notification shade, and a hard ceiling all the same.</summary>
+        private const int MaxRemembered = 64;
+
+        private static void Remember(string key, ReplyAction action)
+        {
+            lock (RepliesGate)
+            {
+                if (Replies.Count >= MaxRemembered && !Replies.ContainsKey(key)) Replies.Clear();
+                Replies[key] = action;
+            }
+        }
+
+        private static void Forget(string key)
+        {
+            lock (RepliesGate) Replies.Remove(key);
+        }
+
+        /// <summary>
+        /// The action a messaging app attaches for replying from the shade, or null when there
+        /// is none.
+        ///
+        /// <para>Every messaging app that supports inline reply does it the same way, because
+        /// this is the API Android gives them: an action carrying a <c>RemoteInput</c>. WhatsApp,
+        /// Signal, Messages, Telegram and Slack all match. An app that has no such action is not
+        /// a failure - it is a notification that cannot be replied to, and the desktop is told
+        /// so rather than being offered a box that does nothing.</para>
+        ///
+        /// <para><c>AllowFreeFormInput</c> is the discriminator. Some apps attach a
+        /// <c>RemoteInput</c> restricted to canned choices, and typing into that one does not
+        /// send what was typed.</para>
+        /// </summary>
+        private static ReplyAction? FindReplyAction(Notification? notification)
+        {
+            try
+            {
+                var actions = notification?.Actions;
+                if (actions == null) return null;
+
+                foreach (var action in actions)
+                {
+                    var inputs = action?.GetRemoteInputs();
+                    if (action?.ActionIntent == null || inputs == null || inputs.Length == 0) continue;
+
+                    bool freeForm = false;
+                    foreach (var input in inputs) if (input.AllowFreeFormInput) { freeForm = true; break; }
+                    if (!freeForm) continue;
+
+                    return new ReplyAction(action.ActionIntent, inputs, action.Title?.ToString() ?? "Reply");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Notify", "Could not read a notification's actions", ex);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Sends a reply by pulling the notification's own reply action.
+        ///
+        /// <para><b>This is not automating an app.</b> It fills the <c>RemoteInput</c> the app
+        /// itself published and fires the <c>PendingIntent</c> the app itself created - byte for
+        /// byte what happens when a person types into the notification shade. The message is sent
+        /// by WhatsApp, or Signal, or Messages, from the account already signed in. Nothing here
+        /// holds a credential, and no accessibility service is involved, which is the line this
+        /// project drew and is not crossing.</para>
+        ///
+        /// <para>Returns false when the notification has gone or never had a reply action, so the
+        /// other end can say why rather than reporting a message that was never sent.</para>
+        /// </summary>
+        public static bool ReplyTo(string key, string text)
+        {
+            ReplyAction? action;
+            lock (RepliesGate) Replies.TryGetValue(key, out action);
+
+            if (action == null)
+            {
+                Log.Write("Notify", "A reply arrived for a notification that is no longer showing.");
+                return false;
+            }
+
+            try
+            {
+                var context = global::Android.App.Application.Context;
+
+                var results = new global::Android.OS.Bundle();
+                foreach (var input in action.Inputs) results.PutCharSequence(input.ResultKey, text);
+
+                // The intent the app will receive. RemoteInput writes the results into it in the
+                // shape the app expects to read them back out of.
+                var filled = new Intent();
+                RemoteInput.AddResultsToIntent(action.Inputs, filled, results);
+
+                // Some apps read this to decide whether to keep the notification up. Saying the
+                // text was typed rather than picked from a canned list is both true and what the
+                // shade sends for a free-form reply. API 28 and up; below that the app simply is
+                // not told, which every app already copes with because the field did not exist.
+                if (OperatingSystem.IsAndroidVersionAtLeast(28))
+                {
+                    RemoteInput.SetResultsSource(filled, RemoteInputSource.FreeFormInput);
+                }
+
+                action.Intent.Send(context, 0, filled);
+
+                // The app name, never the text. A reply is a message.
+                Log.Write("Notify", "Sent a reply through the notification's own reply action.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // A PendingIntent whose owner has died throws CanceledException, which is an
+                // ordinary outcome for a notification from an app that has since been killed.
+                Log.Write("Notify", "Could not send the reply", ex);
+                return false;
             }
         }
 
@@ -141,6 +283,8 @@ namespace AndroidClient.Platforms.Android
         /// </summary>
         public static void DismissByKey(string key)
         {
+            Forget(key);
+
             try { _instance?.CancelNotification(key); }
             catch (Exception ex) { Log.Write("Notify", "Could not dismiss a notification", ex); }
         }

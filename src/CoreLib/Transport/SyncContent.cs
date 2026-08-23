@@ -109,5 +109,25 @@ namespace CoreLib.Transport
         /// were already built and tested rather than a second copy of them.
         /// </summary>
         public const byte FetchRequest = 0x0B;
+
+        /// <summary>
+        /// "Send this back as a reply to that notification." A key and the text to send.
+        ///
+        /// <para>The one thing mirroring could not do. Reading a message on the laptop and then
+        /// picking up the phone to answer it is most of the reason a mirror gets switched off
+        /// again - the second screen shows you what you have to go and deal with elsewhere.</para>
+        ///
+        /// <para><b>It is not a message the app sends; it is the notification's own reply action
+        /// being pulled.</b> Android attaches a <c>RemoteInput</c> to the reply action of a
+        /// messaging notification, and firing that action with the text filled in is exactly what
+        /// happens when you reply from the shade. So the message goes out through WhatsApp, or
+        /// Signal, or Messages, by the account already signed in on the phone. Nothing here has
+        /// or needs any credential, and no app is automated from the outside - which is the line
+        /// this project drew when it banned the accessibility service.</para>
+        ///
+        /// <para>Two short strings, so Bluetooth carries it. Answering a message with no network
+        /// is the case that makes the feature worth having rather than a convenience.</para>
+        /// </summary>
+        public const byte NotificationReply = 0x0C;
     }
 }

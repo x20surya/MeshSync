@@ -64,7 +64,8 @@ public class SyncContentTests
             nameof(SyncContent.NotificationDismiss),
             nameof(SyncContent.BrowseRequest),
             nameof(SyncContent.BrowseReply),
-            nameof(SyncContent.FetchRequest)
+            nameof(SyncContent.FetchRequest),
+            nameof(SyncContent.NotificationReply)
         };
 
         Assert.Equal(expected.OrderBy(n => n), AllContentTypes().Keys.OrderBy(n => n));
