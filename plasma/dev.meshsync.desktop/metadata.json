@@ -14,7 +14,7 @@
         "Id": "dev.meshsync.desktop",
         "License": "GPL-3.0",
         "Name": "Mesh Sync",
-        "Version": "0.3.0",
+        "Version": "0.3.1",
         "Website": "https://github.com/x20surya/MeshSync"
     },
     "X-Plasma-API": "declarativeappletscript",
