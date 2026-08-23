@@ -5,6 +5,11 @@ Mesh Sync.
 Read [HANDOFF.md](HANDOFF.md) alongside it: it records the findings behind these decisions, most
 of which are not guessable from the code.
 
+This document and HANDOFF.md stay the source of truth for the rules and the findings.
+[docs/](docs/Home.md) is the map over the top of them: one note per feature, mechanism and head,
+saying where each thing lives and which platforms actually have it.
+Go there first to orient, come back here for what must never be broken.
+
 ## The Goal
 
 - **Absolute privacy**: no cloud hosting, no third-party servers, no account.

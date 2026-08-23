@@ -5,6 +5,13 @@ guidelines for AI assistants.
 Read [HANDOFF.md](HANDOFF.md) before touching the transports or pairing: it records the findings
 behind the current design, most of which are not guessable from the documentation.
 
+**Start at [docs/Home.md](docs/Home.md) when the question is "what is this feature, where does it
+live, and which platforms have it".**
+`docs/` is a linked vault with one note per feature, mechanism and head - three notes and a file
+path usually beat reading AGENTS.md and HANDOFF.md in full.
+[docs/platform-matrix.md](docs/platform-matrix.md) is the one table nothing else in the repo has.
+If you change a file a note lists under **Where it lives**, update that note in the same commit.
+
 ## Useful Commands
 
 ### Build & Run Windows Daemon
@@ -54,7 +61,8 @@ when there is no desktop session or when something needs driving from a script.
 dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj
 ```
 
-Its shell takes `pair`, `join`, `confirm`, `send`, `peers`, `ring`, `bt` and `transport`.
+Its shell takes `pair`, `uri`, `join`, `confirm`, `reject`, `forget`, `peers`, `status`, `send`,
+`clip`, `clipset`, `ring`, `unring`, `bt`, `bluetooth`, `transport`, `name`, `help` and `quit`.
 `transport` shows or sets which links this device offers - `both`, `wifi` or `ble` - and applies it without a restart.
 `--no-shell` holds the links open with nobody to take commands from, which is what a service manager wants and what to reach for when driving it from a script.
 
@@ -121,6 +129,8 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
 
 ## Project Structure
 
+- `docs`: the feature vault. One note per feature, mechanism and head, linked, and readable
+  either as Markdown or as an Obsidian vault. An index over the code, never a copy of it.
 - `src/CoreLib`: cross-platform logic shared by both apps.
   - `Identity/`: the device keypair, the peer registry, per-connection session keys and the
     agreement behind them, key-at-rest wrapping, the pairing window and its confirmation queue.

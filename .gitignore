@@ -487,3 +487,9 @@ $RECYCLE.BIN/
 # Packaging output and the cached appimagetool
 packaging/out/
 packaging/.tools/
+
+# Obsidian per-user state. The docs/ vault's own config is tracked; nothing else here is.
+/.obsidian/
+docs/.obsidian/workspace.json
+docs/.obsidian/workspace-mobile.json
+docs/.obsidian/cache
