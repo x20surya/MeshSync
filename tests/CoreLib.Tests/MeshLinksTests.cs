@@ -10,6 +10,7 @@ namespace CoreLib.Tests;
 /// devices dial each other at the same moment. None of this could be tested before, because
 /// the transport held one session on a device whose role was fixed at compile time.
 /// </summary>
+[Collection(LoopbackCollection.Name)]
 public class MeshLinksTests : IDisposable
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
@@ -323,6 +324,61 @@ public class MeshLinksTests : IDisposable
         phone.Links.DisconnectAll();
         Assert.True(await phone.Links.ConnectToAsync(PeerAt(phone, laptop), TimeSpan.FromSeconds(10)));
         Assert.True(await WaitFor(() => laptop.Links.IsConnectedToAny));
+    }
+
+    /// <summary>
+    /// A link that was mid-handshake when everything was dropped must not come back.
+    ///
+    /// <para>An accepted socket lives in <c>_pending</c> until its hello is read, and
+    /// <c>DisconnectAll</c> used to clear only <c>_links</c> - so a hello already in flight
+    /// promoted the socket a moment after "drop everything", with nothing left to drop it again.
+    /// Under standby that is a socket held open all night, which is the exact cost the tier is
+    /// arranged to avoid.</para>
+    ///
+    /// <para>Driven from a raw socket rather than from a second <c>MeshLinks</c>, because a real
+    /// transport sends its hello the instant the socket exists and the window is therefore
+    /// unreachable from the outside. This is the only way to hold a connection in that state on
+    /// purpose; in the field it is reached by the host simply being busy, which is why it showed
+    /// up as a test that failed only under load.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_handshake_dropped_mid_flight_does_not_promote_itself_afterwards()
+    {
+        var laptop = NewDevice("Laptop");
+
+        // A device the laptop trusts, whose hello we will deliver by hand.
+        var phone = DeviceIdentity.CreateEphemeral();
+        laptop.Security.Peers.Trust(phone.PublicKey, "Phone");
+
+        await laptop.Links.StartListeningAsync();
+
+        using var raw = new TcpClient();
+        await raw.ConnectAsync(IPAddress.Loopback, laptop.Port);
+        var stream = raw.GetStream();
+
+        // The laptop sends its own hello the moment it adopts the socket, so receiving a byte is
+        // proof it has accepted and the connection is sitting in _pending.
+        var peek = new byte[1];
+        int read = await stream.ReadAsync(peek).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(1, read);
+        Assert.False(laptop.Links.IsConnectedToAny, "nothing has identified itself yet");
+
+        // Drop everything, exactly as the screen going off does.
+        laptop.Links.DisconnectAll();
+
+        // Now let the hello land. Before the fix this promoted the socket into _links and the
+        // laptop reported connected with nothing left to drop it.
+        using var ephemeral = EphemeralKeyPair.Create();
+        byte[] hello = TcpTransportConnection.BuildHelloFrame("Phone", phone.PublicKey, "", ephemeral.PublicKey);
+
+        try { await stream.WriteAsync(hello); await stream.FlushAsync(); }
+        catch (IOException) { /* the fix closes the socket, so the write may fail. That is the point. */ }
+        catch (ObjectDisposedException) { }
+
+        await Task.Delay(750);
+
+        Assert.False(laptop.Links.IsConnectedToAny,
+            "a connection dropped mid-handshake promoted itself once its hello arrived");
     }
 
     [Fact]

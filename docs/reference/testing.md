@@ -10,8 +10,9 @@ updated: 2026-08-23
 
 # What the tests cover
 
-**21 files, 243 `[Fact]`/`[Theory]` attributes, 296 cases** once the theories expand.
-Verified by running it on 2026-08-23: `Failed: 0, Passed: 296`, 670 ms.
+**27 files, 291 `[Fact]`/`[Theory]` attributes, 348 cases** once the theories expand.
+Verified by running it on 2026-08-23: `Failed: 0, Passed: 348`, ten consecutive runs under build
+load, 2 s each.
 
 > **The root documents say 286.** They are right about the last commit and wrong about the working
 > tree: the uncommitted notification-reply work adds ten cases across `NotificationProtocolTests`,
@@ -40,7 +41,7 @@ found and no test could have.
 | `LinkStateTests` | 10 | Tier precedence, per-instance isolation |
 | `CryptoEngineTests` | 10 | AES-GCM, tagging, tamper, wrong key |
 | `TransportSettingsTests` | 9 | Preference, persistence, a throwing store |
-| `MeshLinksTests` | 9 | Several peers, collisions, broadcast, isolation |
+| `MeshLinksTests` | 10 | Several peers, collisions, broadcast, isolation, dropped handshakes |
 | `BleLinkArbiterTests` | 9 | Whether to scan at all |
 | `SessionKeysTests` | 8 | Agreement from both sides, per-connection keys |
 | `BleRoleRulesTests` | 8 | Capability-first role selection |
@@ -48,6 +49,11 @@ found and no test could have.
 | `SyncActivityLogTests` | 5 | Bounds, previews, location |
 | `KeyProtectionTests` | 5 | Wrap, migrate, refuse-to-replace |
 | `SyncContentTests` | 3 | **Every content type is accounted for** |
+| `RoutePolicyTests` | 14 | Wi-Fi demand per peer, roles, when to scan, when to advertise |
+| `PeerLinkTests` | 11 | The handshake deadline, both collision rules, route preference, backoff |
+| `MeshFabricTests` | 9 | Three peers, links that arrive before identity, revocation |
+| `LinkSupervisorTests` | 9 | Reconciling, idempotence, and the watchdog over a wedged pass |
+| `MeshFabricLoopbackTests` | 4 | **Three devices over real sockets, through the fabric** |
 
 ## The tests that encode a rule rather than a behaviour
 
@@ -58,6 +64,14 @@ These are the ones to read before changing the thing they guard.
 - `A_payload_from_an_earlier_connection_does_not_open_on_a_later_one` - the same, from the
   attacker's side.
 - `Forgetting_a_device_revokes_a_live_session` - why `PeerSession.IsUsable` asks on every payload.
+- `A_peer_that_answers_but_never_identifies_is_dropped_at_the_grace` - the whole of the defect
+  where a device from somebody else's mesh held the standing link. See [[peer-link]].
+- `A_radio_link_to_one_peer_does_not_suppress_wifi_to_another` - why Wi-Fi demand is per peer.
+- `Two_links_to_two_different_peers_are_both_kept` - why the collision rule is scoped to one
+  `PeerLink`.
+- `A_pass_that_never_returns_is_abandoned_and_counted` - a loop that is alive but wedged.
+- `A_handshake_dropped_mid_flight_does_not_promote_itself_afterwards` - why `DisconnectAll` has to
+  clear the pending table as well as the link table.
 - `A_wrapped_key_is_not_replaced_by_a_build_that_cannot_unwrap_it` - the [[key-at-rest]] rule that
   a test caught before a person did.
 - `A_stranger_that_wins_the_race_is_queued_rather_than_trusted` - the whole point of
@@ -72,8 +86,23 @@ These are the ones to read before changing the thing they guard.
 
 ## Deliberate design decisions visible in the suite
 
-**`MeshLinksTests` and `TcpTransportConnectionTests` use real loopback sockets**, not fakes.
+**`MeshLinksTests`, `TcpTransportConnectionTests` and `MeshFabricLoopbackTests` use real loopback
+sockets**, not fakes.
 That is why they catch split frames and desynchronisation at all.
+
+They share one xUnit collection, `LoopbackCollection`, so they never run concurrently.
+Three classes each standing up several devices with listeners and dial loops contend for the
+thread pool rather than for anything they are testing, and under that load two of them failed
+together on a run that had passed three times in a row on an idle machine.
+A flaky test is worse than a missing one, because it teaches you to re-run rather than to look.
+
+**Everything above the transports is tested through fakes**, in `tests/CoreLib.Tests/Fakes`.
+`FakeRoute` drives the route state machine by hand and `FakeClock` moves time, so a case covering
+a twelve-second grace or a five-minute cooldown runs in microseconds and nothing in the suite
+sleeps.
+`FakeRoute.Establish()` throws unless a session has been agreed first, because there is no
+legitimate path from a connected link to a usable one that skips the key agreement - a fake that
+allowed it would let the fix silently regress.
 
 **`FileTransferSender` takes an `answerTimeout` override that only tests pass.**
 Waiting out the real half minute to prove a timeout works would put half a minute on every run,

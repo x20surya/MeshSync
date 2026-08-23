@@ -533,6 +533,31 @@ namespace CoreLib.Transport
         /// later field be added at all, and the protocol version above is what stops an older
         /// build reading the new shape as a very strangely spelled device name.
         /// </summary>
+        /// <summary>
+        /// A complete, framed hello, for a test that needs to control <em>when</em> one arrives.
+        ///
+        /// <para><c>internal</c> for the same reason <see cref="ProtocolVersion"/> is: a copy of a
+        /// wire format in a test file goes stale the moment the real one moves, and then the test
+        /// carries on passing for the wrong reason. That has happened twice here already.</para>
+        ///
+        /// <para>It exists because a real transport sends its hello the instant a socket exists,
+        /// which makes "an accepted socket whose hello has not arrived yet" - the window a link
+        /// used to survive <c>DisconnectAll</c> in - impossible to reach from the outside.</para>
+        /// </summary>
+        internal static byte[] BuildHelloFrame(string name, string publicKey, string meshName, string ephemeralKey)
+        {
+            byte[] payload = BuildHello(name, publicKey, meshName, ephemeralKey);
+            byte[] frame = new byte[HeaderSize + payload.Length];
+
+            BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(0, 2), Magic);
+            frame[2] = ProtocolVersion;
+            frame[3] = KindHello;
+            BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(4, 4), (uint)payload.Length);
+            Buffer.BlockCopy(payload, 0, frame, HeaderSize, payload.Length);
+
+            return frame;
+        }
+
         private static byte[] BuildHello(string name, string publicKey, string meshName, string ephemeralKey)
         {
             byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(name ?? "");

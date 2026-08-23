@@ -5,7 +5,7 @@ platforms: [windows, android, linux, macos]
 tier: either
 code:
   - src/CoreLib/Transport/SyncContent.cs
-  - src/CoreLib/Transport/TcpDiscoveryService.cs
+  - src/CoreLib/Transport/Fabric/WiFiRouteProvider.cs
 updated: 2026-08-23
 ---
 
@@ -26,13 +26,18 @@ Verified across a real hotspot subnet change: the subnet moved from `10.178.251.
 
 ## Why it replaced multicast discovery
 
-`src/CoreLib/Transport/TcpDiscoveryService.cs` is UDP discovery.
-It was built on both sides and consumed by neither.
+`TcpDiscoveryService` was UDP discovery.
+It was built on both sides and consumed by neither, and it was **deleted in v0.4** rather than
+left alongside its replacement.
 
 Handover over an existing link does the job better: no multicast, and it works on networks with
 client isolation.
-`HANDOFF.md` records the open decision that `TcpDiscoveryService` should probably be deleted, and
-`IDiscoveryService.cs` is the seam it sits behind.
+`IDiscoveryService.cs` remains as the seam, because `AndroidBleDiscovery` still sits behind it.
+
+The one case handover cannot cover is both devices changing address at once, because it needs a
+link that already exists.
+A mesh-scoped LAN beacon carrying the same tag as [[bluetooth-tier]]'s advertisement is the
+designed replacement for that, and it is deliberately outside the numbered v0.4 phases.
 
 ## The parsing rule
 

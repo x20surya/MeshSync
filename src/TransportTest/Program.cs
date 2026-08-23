@@ -42,7 +42,6 @@ namespace TransportTest
         {
             try
             {
-                var discovery = new TcpDiscoveryService();
                 var connection = new TcpTransportConnection();
 
                 // Listening moved to TcpAcceptor when a session-per-peer became possible, so
@@ -67,9 +66,10 @@ namespace TransportTest
                     }
                 };
 
-                // Start advertising presence via UDP
-                Console.WriteLine("[Device A] 📢 Advertising presence via UDP Broadcast...");
-                await discovery.StartAdvertisingAsync(publicId);
+                // There is no advertising step any more. UDP discovery was built on both sides
+                // and consumed by neither, and address handover over an existing link does the
+                // job better - no multicast, and it works on networks with client isolation.
+                _ = publicId;
 
                 // Wait until canceled
                 await Task.Delay(-1, token);
@@ -81,38 +81,23 @@ namespace TransportTest
         {
             try
             {
-                var discovery = new TcpDiscoveryService();
                 var connection = new TcpTransportConnection();
 
-                // Device B scans for devices
-                Console.WriteLine("[Device B] 🔍 Scanning for UDP Broadcasts...");
-                
-                bool found = false;
-                discovery.DeviceDiscovered += async (s, e) =>
-                {
-                    if (found) return;
-                    found = true;
+                // Dialled straight at loopback. The discovery half of this demo went with
+                // TcpDiscoveryService; in the real mesh a peer's address arrives over whichever
+                // link is already up, as content type Address.
+                _ = publicId;
+                await Task.Delay(500, token);
 
-                    string discoveredId = Encoding.UTF8.GetString(e.PublicIdentifer);
-                    Console.WriteLine($"[Device B] 🎯 Discovered {discoveredId} at IP {e.DeviceId}");
+                Console.WriteLine("[Device B] 🔌 Establishing TCP connection to 127.0.0.1...");
+                await connection.ConnectAsync("127.0.0.1", token);
+                Console.WriteLine("[Device B] 🔒 Connected! Encrypting payload...");
 
-                    Console.WriteLine($"[Device B] 🔌 Establishing TCP connection to {e.DeviceId}...");
-                    
-                    // In UDP localhost testing, the sender might report 127.0.0.1 or the local LAN IP.
-                    // To be safe in loopback tests, we connect to 127.0.0.1
-                    string targetIp = e.DeviceId == IPAddress.Broadcast.ToString() ? "127.0.0.1" : "127.0.0.1"; // Hardcoded loopback for test
+                string myClipboard = "Hello from Device B! Here is my top secret copied text.";
+                byte[] payload = CryptoEngine.Encrypt(Encoding.UTF8.GetBytes(myClipboard), aesKey);
 
-                    await connection.ConnectAsync("127.0.0.1", token);
-                    Console.WriteLine("[Device B] 🔒 Connected! Encrypting payload...");
-
-                    string myClipboard = "Hello from Device B! Here is my top secret copied text.";
-                    byte[] payload = CryptoEngine.Encrypt(Encoding.UTF8.GetBytes(myClipboard), aesKey);
-
-                    Console.WriteLine("[Device B] 🚀 Sending encrypted AES-256-GCM payload over TCP...");
-                    await connection.SendPayloadAsync(payload, token);
-                };
-
-                await discovery.StartScanningAsync();
+                Console.WriteLine("[Device B] 🚀 Sending encrypted AES-256-GCM payload over TCP...");
+                await connection.SendPayloadAsync(payload, token);
 
                 // Wait until canceled
                 await Task.Delay(-1, token);

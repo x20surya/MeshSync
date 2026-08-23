@@ -450,6 +450,17 @@ That parses as an address, reads perfectly well in a log, and can never be diall
 Seen as a connect timeout against a device that was plainly right there.
 Unwrapped both where addresses are recorded and where they are dialled, so a stored one self-heals.
 
+**`DisconnectAll` cleared the links and left the handshakes.**
+An accepted socket lives in `_pending` until its hello is read, not in `_links`, so dropping every
+link left one that was mid-handshake to be promoted a moment later by a hello already in flight -
+with nothing left to drop it again.
+Under Bluetooth standby that is a socket held open all night, which is precisely the cost the tier
+is arranged to avoid.
+It surfaced as `Dropping_links_leaves_the_device_listening` failing only on a loaded machine,
+because losing the race needs the host's hello processing to be slower than the caller.
+The regression test drives a raw socket and delivers the hello by hand, because a real transport
+sends its hello the instant the socket exists and the window is otherwise unreachable.
+
 **A heartbeat is not free, but an idle socket is.**
 The interval was 10s, chosen for fast drop detection before anything weighed the cost.
 For comparison, the push service every app on the phone shares heartbeats about every 15 minutes,
@@ -702,17 +713,21 @@ protocol decision rather than a fix.
 now rather than a phone and a host.
 Renaming would touch namespaces, the `meshsync://` scheme, tray text and registry keys.
 
-**`TcpDiscoveryService` is unused and should probably be deleted.**
+**~~`TcpDiscoveryService` is unused and should probably be deleted.~~ Deleted in v0.4.**
 Address handover over an existing link does the job better: no multicast, and it works on networks
 with client isolation.
+Its only consumer was the `TransportTest` console demo, which now dials loopback directly.
+`IDiscoveryService` stays, because `AndroidBleDiscovery` still sits behind it.
 
 **Introduction is designed but not surfaced.**
 `PeerRegistry.PeersToIntroduceTo` exists so a new device can learn the set from one scan instead of
 one scan per pair. It needs a confirmation step in the UI before it should be wired up.
 
-**Connection state is per app, not per peer.**
-Both apps know whether *anything* is reachable rather than which peers are, so a device list can
-only mark one device connected. That is the next thing to grow when a third device arrives.
+**~~Connection state is per app, not per peer.~~ Being fixed in v0.4.**
+Both apps knew whether *anything* was reachable rather than which peers were, so a device list
+could only mark one device connected.
+`CoreLib.Transport.Fabric` answers per peer for every head - see [[peer-link]] - and the heads
+migrate onto it phase by phase.
 
 **Renaming the mesh does not propagate.**
 It travels on joining only. A last-changed timestamp in the hello would fix it.

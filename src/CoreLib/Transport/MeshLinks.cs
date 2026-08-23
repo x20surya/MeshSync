@@ -117,16 +117,32 @@ namespace CoreLib.Transport
         /// This is what Bluetooth standby does when the screen goes off: Wi-Fi is put away
         /// while Bluetooth keeps holding presence. Listening continues, because a peer may
         /// still have something worth sending and dialling in costs this side nothing.
+        ///
+        /// <para><b>Pending connections go too, and that is not tidiness.</b> A socket that has
+        /// been accepted but whose hello has not been read yet lives in <c>_pending</c>, not in
+        /// <c>_links</c>. Clearing only the latter left it to be promoted a moment later by the
+        /// hello that was already in flight - so "drop everything" was followed by a link coming
+        /// back from the dead, with nothing left to drop it again. Under standby that is a socket
+        /// held open all night, which is precisely the cost the tier is arranged to avoid. It
+        /// surfaced as a test that failed only under load, because losing the race needs the
+        /// hello to be slower than the caller.</para>
         /// </summary>
         public void DisconnectAll()
         {
             List<KeyValuePair<string, TcpTransportConnection>> links;
+            List<TcpTransportConnection> pending;
 
             lock (_gate)
             {
                 links = _links.ToList();
                 _links.Clear();
+
+                pending = _pending.Keys.ToList();
+                foreach (var waiter in _pending.Values) waiter.TrySetCanceled();
+                _pending.Clear();
             }
+
+            foreach (var link in pending) Retire(link);
 
             foreach (var pair in links)
             {

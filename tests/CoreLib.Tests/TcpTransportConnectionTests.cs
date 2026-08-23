@@ -7,6 +7,7 @@ using CoreLib.Transport;
 
 namespace CoreLib.Tests;
 
+[Collection(LoopbackCollection.Name)]
 public class TcpTransportConnectionTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);

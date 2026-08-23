@@ -41,7 +41,7 @@ Things nobody asked for that every feature rests on.
 [[wifi-tier]] · [[bluetooth-tier]] · [[wire-formats]] · [[content-types]] · [[address-handover]]
 
 **Deciding things once**
-[[link-state]] · [[ble-link-arbitration]] · [[ble-role-negotiation]]
+[[peer-link]] · [[link-state]] · [[ble-link-arbitration]] · [[ble-role-negotiation]]
 
 **Everything else**
 [[echo-suppression]] · [[activity-log]] · [[dbus-ipc]]
@@ -87,6 +87,8 @@ If you are about to touch one of these, read the note first.
 
 - [[ble-link-arbitration]] - two devices in range will each dial the other unless something stops
   them, and a duplicate link delivers every clipboard twice.
+- [[peer-link]] - a route reaches `Established` only through a session, and the handshake has a
+  deadline. Two of the three heads once let a refused stranger hold the standing link.
 - [[session-keys]] - the key belongs to the connection, never to the peer. Caching it against the
   device has broken both forward secrecy and revocation before.
 - [[content-types]] - a new type goes in `SyncContent` and nowhere else, or a file chunk routes

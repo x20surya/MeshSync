@@ -90,6 +90,13 @@ phone reaches the internet, so `HasUsableNetwork` has to fall through to the int
 recognise an access-point interface.
 That bug broke Wi-Fi in the one topology where the peer was a single hop away.
 
+**`DisconnectAll` cleared the links and left the handshakes.**
+A socket that has been accepted but whose hello has not been read yet is not in the link table, so
+"drop everything" was followed by it promoting itself once the hello landed - and nothing was left
+to drop it again.
+That is a socket held open all night under standby.
+Found as a test that failed only under load.
+
 **A heartbeat is not free, but an idle socket is.**
 10s was chosen for fast drop detection before anything weighed the cost.
 Now 30s with a 90s timeout.
