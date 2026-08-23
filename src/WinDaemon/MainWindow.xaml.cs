@@ -36,7 +36,7 @@ namespace WinDaemon
         public event Action? ExitRequested;
 
         // The transport used to be passed in and never touched. It went when the single
-        // connection became a link per peer: the window reads ConnectionState, which is the
+        // connection became a link per peer: the window reads LinkState, which is the
         // one place that knows whether anything is reachable and over which tier.
         public MainWindow(string ipAddress, string pairingCode, SyncActivityLog activity)
         {
@@ -68,7 +68,7 @@ namespace WinDaemon
             }
 
             _suppressModeEvent = true;
-            TransportMode.SelectedIndex = TransportSettings.Current switch
+            TransportMode.SelectedIndex = Program.Transports.Current switch
             {
                 TransportPreference.WiFi => 1,
                 TransportPreference.Ble => 2,
@@ -76,7 +76,7 @@ namespace WinDaemon
             };
             _suppressModeEvent = false;
 
-            ConnectionState.Changed += ConnectionState_Changed;
+            Program.Links.Changed += LinkState_Changed;
             _activity.Changed += Activity_Changed;
             Ringer.Changed += Ringer_Changed;
             MirroredNotifications.Changed += Notifications_Changed;
@@ -159,7 +159,7 @@ namespace WinDaemon
         /// <summary>
         /// Redraws the device list from the registry and the live link state.
         ///
-        /// Only one device can be reported as connected, because <see cref="ConnectionState"/>
+        /// Only one device can be reported as connected, because <see cref="LinkState"/>
         /// tracks whether anything is reachable rather than which peers are. That is honest
         /// enough while the mesh is small and is the next thing to grow when it is not.
         /// </summary>
@@ -170,7 +170,7 @@ namespace WinDaemon
 
             if (peers != null)
             {
-                string? connectedName = ConnectionState.IsConnected ? ConnectionState.PeerName : null;
+                string? connectedName = Program.Links.IsConnected ? Program.Links.PeerName : null;
                 var accent = (System.Windows.Media.Brush)FindResource("B.Accent");
                 var faint = (System.Windows.Media.Brush)FindResource("B.TextFaint");
 
@@ -179,7 +179,7 @@ namespace WinDaemon
                     bool live = connectedName != null &&
                                 string.Equals(connectedName, peer.Name, StringComparison.OrdinalIgnoreCase);
 
-                    string via = ConnectionState.ActiveLink == LinkKind.Ble ? "Bluetooth" : "Wi-Fi";
+                    string via = Program.Links.ActiveLink == LinkKind.Ble ? "Bluetooth" : "Wi-Fi";
 
                     _devices.Add(new DeviceRow
                     {
@@ -369,7 +369,7 @@ namespace WinDaemon
 
         // ────────────────────────────── status
 
-        private void ConnectionState_Changed() =>
+        private void LinkState_Changed() =>
             Dispatcher.BeginInvoke(() => { RefreshStatus(); RefreshDevices(); });
 
         private void Peers_Changed() => Dispatcher.BeginInvoke(() => { RefreshDevices(); RefreshStatus(); });
@@ -379,8 +379,8 @@ namespace WinDaemon
 
         private void RefreshStatus()
         {
-            bool connected = ConnectionState.IsConnected;
-            bool overBle = ConnectionState.ActiveLink == LinkKind.Ble;
+            bool connected = Program.Links.IsConnected;
+            bool overBle = Program.Links.ActiveLink == LinkKind.Ble;
 
             IconTick.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
             IconSpinner.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
@@ -519,7 +519,7 @@ namespace WinDaemon
                 _ => TransportPreference.Both
             };
 
-            TransportSettings.Set(preference);
+            Program.Transports.Set(preference);
 
             TransportHint.Text = preference switch
             {
@@ -677,7 +677,7 @@ namespace WinDaemon
         /// </summary>
         private void Window_DragOver(object sender, System.Windows.DragEventArgs e)
         {
-            bool usable = ConnectionState.IsConnected && e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop);
+            bool usable = Program.Links.IsConnected && e.Data.GetDataPresent(System.Windows.DataFormats.FileDrop);
 
             e.Effects = usable ? System.Windows.DragDropEffects.Copy : System.Windows.DragDropEffects.None;
             e.Handled = true;
@@ -790,7 +790,7 @@ namespace WinDaemon
 
         public void Teardown()
         {
-            ConnectionState.Changed -= ConnectionState_Changed;
+            Program.Links.Changed -= LinkState_Changed;
             _activity.Changed -= Activity_Changed;
             Ringer.Changed -= Ringer_Changed;
             MirroredNotifications.Changed -= Notifications_Changed;

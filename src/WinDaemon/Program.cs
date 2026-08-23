@@ -54,6 +54,18 @@ namespace WinDaemon
         private static bool _trayHintShown;
 
         /// <summary>
+        /// Which link is carrying a peer, and whether anything is.
+        ///
+        /// The type is CoreLib's and the Linux head holds one of its own. It used to be a static
+        /// class here, which is safe in a process that is one device and is not safe anywhere
+        /// else - so the rule moved into shared code and only the instance stayed behind.
+        /// </summary>
+        public static LinkState Links { get; } = new();
+
+        /// <summary>Which links this computer is allowed to offer, kept in the registry.</summary>
+        public static TransportSettings Transports { get; } = new(new RegistryTransportPreferenceStore());
+
+        /// <summary>
         /// File transfer, both directions.
         ///
         /// Wi-Fi only: at roughly 6.7 KB/s a photograph would take a quarter of an hour over
@@ -165,11 +177,11 @@ namespace WinDaemon
 
             CreateTrayIcon();
 
-            // Both transports report into ConnectionState; the tray and the dashboard read
+            // Both transports report into LinkState; the tray and the dashboard read
             // only that, so a Bluetooth-only link shows as connected like any other.
             _mesh.PeerConnected += peer =>
             {
-                ConnectionState.SetWiFi(true, peer.Name);
+                Links.SetWiFi(true, peer.Name);
 
                 // Telling a peer where we are is what makes a lease change survivable; without
                 // it the address in the QR code is the only one it will ever know.
@@ -178,14 +190,14 @@ namespace WinDaemon
 
             _mesh.PeerDisconnected += fingerprint =>
             {
-                ConnectionState.SetWiFi(_mesh.IsConnectedToAny);
+                Links.SetWiFi(_mesh.IsConnectedToAny);
 
                 // A device that has gone is no longer showing what it was showing, and a stale
                 // mirror is worse than none - it invites you to act on something already dealt
                 // with, and dismissing it would reach nobody.
                 MirroredNotifications.ClearFrom(fingerprint);
             };
-            ConnectionState.Changed += UpdateTrayState;
+            Links.Changed += UpdateTrayState;
 
             if (!isStartup) _window.ShowDashboard();
 
@@ -233,7 +245,7 @@ namespace WinDaemon
 
             _app.Dispatcher.BeginInvoke(() =>
             {
-                bool connected = ConnectionState.IsConnected;
+                bool connected = Links.IsConnected;
                 var previous = _trayIcon.Icon;
                 _trayIcon.Icon = TrayIcons.Create(connected);
                 previous?.Dispose();
@@ -242,7 +254,7 @@ namespace WinDaemon
                 // the same sentence the window shows, and both are about the set rather than one
                 // member of it.
                 string mesh = _security?.Peers.MeshNameOrDefault ?? "your mesh";
-                string via = ConnectionState.ActiveLink == LinkKind.Ble ? " over Bluetooth" : "";
+                string via = Links.ActiveLink == LinkKind.Ble ? " over Bluetooth" : "";
                 _trayIcon.Text = connected
                     ? $"Mesh Sync - {mesh} connected{via}"
                     : $"Mesh Sync - {mesh} unreachable";
@@ -389,7 +401,7 @@ namespace WinDaemon
                 // No key derivation here any more. Keys are per peer and derived by agreement
                 // against the public key each one presents, so there is nothing to prepare
                 // until a peer actually turns up.
-                if (TransportSettings.AllowsWiFi)
+                if (Transports.AllowsWiFi)
                 {
                     await _mesh!.StartListeningAsync().ConfigureAwait(false);
                     StartDialLoop();
@@ -418,7 +430,7 @@ namespace WinDaemon
 
                 WireBleTransport(_bleTransport);
 
-                if (TransportSettings.AllowsBle)
+                if (Transports.AllowsBle)
                 {
                     await _bleTransport.StartListeningAsync().ConfigureAwait(false);
                     StartBleCentralLoop();
@@ -433,7 +445,7 @@ namespace WinDaemon
                 Log.Write("Daemon", "BLE unavailable, continuing on Wi-Fi only", ex);
             }
 
-            TransportSettings.Changed += ApplyTransportPreference;
+            Transports.Changed += ApplyTransportPreference;
         }
 
         /// <summary>
@@ -444,7 +456,7 @@ namespace WinDaemon
         {
             try
             {
-                if (TransportSettings.AllowsWiFi)
+                if (Transports.AllowsWiFi)
                 {
                     await _mesh!.StartListeningAsync().ConfigureAwait(false);
                     StartDialLoop();
@@ -457,7 +469,7 @@ namespace WinDaemon
 
                 if (_bleTransport != null)
                 {
-                    if (TransportSettings.AllowsBle)
+                    if (Transports.AllowsBle)
                     {
                         await _bleTransport.StartListeningAsync().ConfigureAwait(false);
                         StartBleCentralLoop();
@@ -508,13 +520,13 @@ namespace WinDaemon
             ble.ClientConnected += (_, _) =>
             {
                 Log.Write("Daemon", "Phone connected over BLE.");
-                ConnectionState.SetBle(true);
+                Links.SetBle(true);
             };
 
             ble.ConnectionClosed += (_, _) =>
             {
                 Log.Write("Daemon", "BLE link closed.");
-                ConnectionState.SetBle(false);
+                Links.SetBle(false);
             };
 
             ble.PayloadReceived += (_, e) => HandleIncomingPayload(e.EncryptedPayload, "BLE", ble.Peer);
@@ -523,14 +535,14 @@ namespace WinDaemon
             // right device rather than to whichever one happened to be the only one paired.
             ble.PeerIdentified += (_, e) =>
             {
-                ConnectionState.SetBle(true);
+                Links.SetBle(true);
 
                 // Bluetooth carries the peer's name in its hello now, so a device paired only
                 // over Bluetooth has something to be called in the tray and the dashboard.
                 if (!string.IsNullOrWhiteSpace(e.DeviceName))
                 {
                     _security?.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName);
-                    ConnectionState.SetBle(true, e.DeviceName);
+                    Links.SetBle(true, e.DeviceName);
                 }
 
                 // Announced here rather than on connect, because there is no key to seal it
@@ -1027,7 +1039,7 @@ namespace WinDaemon
                 {
                     try
                     {
-                        if (TransportSettings.AllowsBle &&
+                        if (Transports.AllowsBle &&
                             _bleCentral?.IsConnected != true &&
                             _bleTransport?.IsConnected != true &&
                             ShouldDialAnyPeerOverBluetooth())
@@ -1063,11 +1075,11 @@ namespace WinDaemon
             central.ConnectionClosed += (_, _) =>
             {
                 Log.Write("Daemon", "The outbound Bluetooth link closed.");
-                ConnectionState.SetBle(_bleTransport?.IsConnected == true);
+                Links.SetBle(_bleTransport?.IsConnected == true);
             };
             central.PeerIdentified += (_, e) =>
             {
-                ConnectionState.SetBle(true, e.DeviceName);
+                Links.SetBle(true, e.DeviceName);
 
                 if (!string.IsNullOrWhiteSpace(e.DeviceName))
                     _security?.Peers.NoteSeen(e.Fingerprint, null, e.DeviceName);
@@ -1095,7 +1107,7 @@ namespace WinDaemon
             {
                 await central.ConnectAsync(address.Value.ToString("X"), token).ConfigureAwait(false);
                 Log.Write("Daemon", "Connected to a peer over Bluetooth as the central.");
-                ConnectionState.SetBle(true);
+                Links.SetBle(true);
             }
             catch (Exception ex)
             {
@@ -1133,7 +1145,7 @@ namespace WinDaemon
                 {
                     try
                     {
-                        if (_mesh != null && TransportSettings.AllowsWiFi)
+                        if (_mesh != null && Transports.AllowsWiFi)
                         {
                             await _mesh.ConnectToAllAsync(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
                         }
