@@ -531,6 +531,35 @@ the service UUID they advertised at the time, and dialling one connects to an ad
 existing minutes ago. RSSI is the discriminator: BlueZ publishes it only while a device is being
 seen in the current discovery session and drops it when the device goes away.
 
+**`Console.In.ReadLineAsync` is not asynchronous, and it killed the whole Bluetooth tier.**
+This is the worst one in the file, because nothing failed and nothing was logged.
+`Console.In` is a *synchronized* `TextReader`: its async methods run the blocking read inline while holding the reader's monitor, so the await never yields and the thread it was called on stops servicing anything else.
+In `LinuxDaemon` that thread was one the D-Bus connection needed, so the moment the shell asked for input the scanner wedged mid-handshake - BlueZ had been asked to watch for property changes and the reply was never read.
+The symptom was a daemon that started cleanly, printed its banner, took commands, and simply never found a single device over Bluetooth, forever.
+It is a race, which is why it looked intermittent: whether it wedges depends on whether the shell reaches its first read before `AddMatch` completes, and running with `--no-shell` or `--quiet` changes the timing enough to hide it.
+`Shell.ReadLineOnItsOwnThread` now does the blocking read on a dedicated long-running thread and races it against the stopping token.
+**The rule: never `await` a `Console.In` read in a process that has anything else going on.**
+
+**Both halves of the Bluetooth tier ran at once with nothing deciding between them.**
+Every install advertises the same service UUID and every device also scans for it, so two devices in range each dialled the other, both links came up carrying the same peer, and the clipboard crossed twice - the echo suppressor is on the sending side, so the receiver has no defence.
+Windows had prevented this all along by gating its scan loop on `BleRoleRules`, and Android repaired it afterwards in `ResolveBleCollision`; the Linux head did neither, and the five comments in `DesktopCore` claiming the roles were "settled per link by BleRoleRules" described behaviour the code did not have.
+The decision now lives in `CoreLib.Transport.BleLinkArbiter`, which all three call: `ShouldDialAnyPeer` before scanning, and `KeepFor` to settle a collision when two devices dial inside the same moment.
+Advertising is never gated - only scanning - because a peer that cannot advertise depends on this device staying findable.
+
+**Report a capability honestly or the arbitration is worse than useless.**
+This box says it can advertise and then BlueZ refuses the exported GATT tree, so `LinuxBlePeripheral` stands aside.
+Telling the arbiter `BleCapability.Both` anyway makes it answer "you advertise" - and the device then neither advertises nor scans, which is a deadlock rather than a degraded state.
+`Daemon` sets the capability from whether the peripheral actually started, not from what the adapter claimed.
+
+**The scan cadence was 4 seconds and ungated; it is 30 with a 12-second window now.**
+That is the Windows interval, and discovery is stopped in a `finally` between rounds rather than started once and left running for the life of the process.
+An active scan alongside a live link contends with it for the same antenna, which is most of why an established link felt rough rather than merely duplicated.
+The old code also set `_discovering = true` inside the `catch`, so one transient refusal - an adapter powered off at launch - convinced the loop it was already scanning and it never tried again.
+
+**A refusal has to be remembered against the identity, not only the address.**
+The five-minute cooldown was keyed on the BlueZ object path, which encodes the LE address, and a phone rotating its address arrives under a path nothing has refused.
+It cannot stop the connection, because nothing knows who a device is until its hello arrives, but refusing on the hello costs one second instead of the full twelve-second identity grace.
+
 **D-Bus aligns every dict entry and every struct to eight bytes, and nothing here does it for you.**
 This cost most of the keyring work. A hand-rolled `a{ss}` with two pairs is malformed, because the
 second entry needs padding the writer has no API to emit - and dbus-daemon answers a malformed

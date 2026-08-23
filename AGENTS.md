@@ -209,10 +209,11 @@ made a phone shriek from across the street.
   device can learn the set from one scan instead of one scan per pair. Nothing consumes it yet.
 - **Bluetooth caps the mesh at a handful of peers.** A GATT central holds around seven on Android.
   Wi-Fi has no such limit.
-- **Connection state is per app, not per peer.** Both apps know whether *anything* is reachable
-  rather than which peers are, so a device list can only mark one device connected - and it
-  currently guesses which by comparing names, which breaks outright with two devices called the
-  same thing.
+- **Connection state is per app on Windows and Android, and per peer on the desktop head.**
+`CoreLib.Transport.LinkState` is the shared answer to "is anything reachable, and over what", and every screen reads it rather than a transport.
+It is still an aggregate: Windows can only mark one device connected, and guesses which by comparing names, which breaks with two devices called the same thing.
+The Linux and Mac head answers per peer as well, through `Daemon.IsConnectedTo` and `IsBluetoothConnectedTo`, so its device list names the tier each device is actually on.
+Bringing the same per-peer answer to Windows is the remaining half.
 - **Bluetooth splits Linux and macOS apart, and macOS is the one that leaves.**
   They share `DesktopCore` and `DesktopShell` today because Avalonia builds for both from one
   machine, which is the property that made it the right toolkit. Bluetooth breaks that. BlueZ is
@@ -224,10 +225,10 @@ made a phone shriek from across the street.
   its own target framework, keeping `DesktopCore` and `DesktopShell` shared and platform-free.
   Until then macOS stays Wi-Fi only and stays cross-published from Linux, which costs it nothing
   it does not already lack.
-- **The BLE service UUID is shared by every install**, so a scan finds every Mesh Sync device in
-  range and not only the ones in this mesh. Refusing them is not enough on its own: a refusal that
-  is not remembered is a reconnection four seconds later. Anything that scans must drop a link that
-  does not produce a session and then leave that device alone for a while.
+- **The BLE service UUID is shared by every install**, so a scan finds every Mesh Sync device in range and not only the ones in this mesh.
+Refusing them is not enough on its own: a refusal that is not remembered is a reconnection four seconds later.
+Anything that scans must drop a link that does not produce a session and then leave that device alone for a while, keyed by fingerprint as well as by address, because a phone rotating its LE address arrives under an address nothing has refused.
+And the cheapest refusal is not scanning at all: ask `BleLinkArbiter` first, because a device whose role is the peripheral has no business dialling anybody.
 - **Linux Bluetooth is the central half only.** The device scans, connects, exchanges the hello
   and holds the link; it does not yet advertise. BlueZ accepts the scan and rejects the exported
   GATT tree, so `LinuxBlePeripheral` registers, fails and stands aside. That is a supported
@@ -294,6 +295,13 @@ made a phone shriek from across the street.
 - **Both devices listen and dial**, so any change to connection handling must stay correct when two
   of them collide. `MeshLinks` settles that by fingerprint; do not add a second rule.
 - **Bluetooth role selection is capability first.** Do not simplify it to a fingerprint comparison.
+- **Never scan without asking `BleLinkArbiter` first, and never let both radio halves carry one peer.**
+Every device advertises the same service and every device also scans for it, so two in range will each dial the other unless something decides which one should.
+Windows prevents that by gating its scan loop, Android repairs it afterwards in `ResolveBleCollision`, and the Linux head does both; all three go through the same `BleLinkArbiter` over `BleRoleRules`.
+A duplicate link is not cosmetic - it delivers every clipboard twice, because the echo suppressor is on the sending side.
+- **Anything one head needs and another already has belongs in `CoreLib`, not written a second time.**
+`LinkState`, `TransportSettings` and `BleLinkArbiter` were all Windows-only code that the Linux head reimplemented differently or not at all, and every one of those divergences was a bug.
+A platform should be wiring and storage - a registry key here, a file there - and never its own copy of a rule.
 - Diagnostics go through `CoreLib.Diagnostics.Log`, never `Console.WriteLine`. The daemon is a
   `WinExe` with no console attached, so anything written there is discarded.
 - Kill `WinDaemon` before building or the build fails on a locked `CoreLib.dll`. It relaunches on
