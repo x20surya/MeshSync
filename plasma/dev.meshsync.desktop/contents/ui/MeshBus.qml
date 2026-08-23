@@ -55,6 +55,7 @@ QtObject {
     property string pairingUri: ""
     property bool connected: false
     property bool trayIconVisible: true
+    property bool showNotificationContent: false
     property bool dialling: false
     property bool ringing: false
     property int peerCount: 0
@@ -85,6 +86,7 @@ QtObject {
         bus.pairingUri = String(unwrap(map.PairingUri, ""));
         bus.connected = unwrap(map.IsConnected, false) === true;
         bus.trayIconVisible = unwrap(map.TrayIconVisible, true) === true;
+        bus.showNotificationContent = unwrap(map.ShowNotificationContent, false) === true;
         bus.dialling = unwrap(map.IsDialling, false) === true;
         bus.ringing = unwrap(map.IsRinging, false) === true;
         bus.peerCount = Number(unwrap(map.PeerCount, 0));
@@ -279,20 +281,83 @@ QtObject {
 
             for (const entry of (reply || [])) {
                 rows.push({
-                    values: {
-                        key: String(entry[0]),
-                        appName: String(entry[1]),
-                        from: String(entry[2]),
-                        at: Number(entry[3]),
-                        canReply: Boolean(entry[4]),
-                        replyLabel: String(entry[5]) || "Reply"
-                    },
-                    path: String(entry[0])
+                    key: String(entry[0]),
+                    appName: String(entry[1]),
+                    from: String(entry[2]),
+                    at: Number(entry[3]),
+                    canReply: Boolean(entry[4]),
+                    replyLabel: String(entry[5]) || "Reply",
+                    title: String(entry[6] || ""),
+                    text: String(entry[7] || "")
                 });
             }
 
-            bus.fill(bus.notifications, rows);
+            bus.regroup(rows);
         });
+    }
+
+    /*
+     * Groups the flat list the way a phone's shade does: by conversation where the daemon is
+     * telling us who it is from, and by application otherwise.
+     *
+     * The distinction matters. With ShowNotificationContent off there is no sender, so three
+     * WhatsApp notifications are indistinguishable and grouping them under one "WhatsApp" head
+     * with a count is the only honest rendering. With it on, "Aditya" and "Mum" are separate
+     * conversations and each gets its own reply box - which is the thing that makes replying from
+     * a panel feel like replying on the phone rather than answering a queue.
+     *
+     * Newest first, and the group carries the newest message's key, because that is the one a
+     * reply should thread onto.
+     */
+    function regroup(rows: var): void {
+        rows.sort((a, b) => b.at - a.at);
+
+        const order = [];
+        const byKey = {};
+
+        for (const row of rows) {
+            const groupKey = row.title.length > 0 ? row.appName + "\u0000" + row.title : row.appName;
+
+            if (byKey[groupKey] === undefined) {
+                byKey[groupKey] = {
+                    key: row.key,
+                    appName: row.appName,
+                    from: row.from,
+                    heading: row.title.length > 0 ? row.title : row.appName,
+                    subheading: row.title.length > 0 ? i18n("%1 on %2", row.appName, row.from)
+                                                     : i18n("on %1", row.from),
+                    preview: row.text,
+                    at: row.at,
+                    canReply: row.canReply,
+                    replyLabel: row.replyLabel,
+                    count: 1,
+                    keys: row.key
+                };
+                order.push(groupKey);
+                continue;
+            }
+
+            const group = byKey[groupKey];
+            group.count += 1;
+            group.keys += "\n" + row.key;
+
+            // A group can reply if any message in it can, and the newest one already won the
+            // heading, so nothing else is taken from the older ones.
+            if (row.canReply && !group.canReply) {
+                group.canReply = true;
+                group.replyLabel = row.replyLabel;
+                group.key = row.key;
+            }
+        }
+
+        bus.fill(bus.notifications, order.map(k => ({ path: k, values: byKey[k] })));
+    }
+
+    /// Dismisses every notification in a group, which is what tapping one away on a phone does.
+    function dismissGroup(keys: string): void {
+        for (const key of String(keys).split("\n")) {
+            if (key.length > 0) bus.dismiss(key);
+        }
     }
 
     // ──────────────────────────────── actions
@@ -336,6 +401,15 @@ QtObject {
             arguments: [DBus.string(bus.iface), DBus.string("TrayIconVisible"),
                         DBus.variant(visible)]
         }, () => {}, error => console.warn("meshsync: could not change the tray icon:", error));
+    }
+
+    function setNotificationContent(show: bool): void {
+        DBus.SessionBus.asyncCall({
+            service: bus.service, path: bus.root, iface: bus.propertiesIface,
+            member: "Set", signature: "ssv",
+            arguments: [DBus.string(bus.iface), DBus.string("ShowNotificationContent"),
+                        DBus.variant(show)]
+        }, () => {}, error => console.warn("meshsync: could not change notification detail:", error));
     }
 
     function setTransport(mode: string): void {

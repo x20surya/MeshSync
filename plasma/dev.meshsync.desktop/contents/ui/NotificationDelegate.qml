@@ -1,13 +1,15 @@
 /*
- * One mirrored phone notification, and a box to answer it from.
+ * One conversation from the phone, and a box to answer it in.
  *
- * What is deliberately not here: the title and the body. The daemon does not put them on the
- * session bus, because everything on that bus is readable by every program running as this user
- * and a mirrored notification is the most private thing Mesh Sync carries. So the panel says
- * which app and which device, and reading it means opening the window - where it already was.
+ * Grouped the way a phone's own shade groups: by conversation where the daemon is telling us who
+ * a message is from, and by application otherwise. Three messages from Aditya are one row with a
+ * count and one reply box, not three rows - which is the difference between a shade and a queue.
  *
- * The reply box appears only when the phone said the notification carried a reply action.
- * Offering one that did nothing would be a message the user believes they sent.
+ * What the daemon sends depends on one setting. With ShowNotificationContent off there is no
+ * sender and no text at all, because everything on the session bus is readable by every program
+ * running as this user and a mirrored notification is the most private thing Mesh Sync carries.
+ * The row then says which app and which device, and still offers the reply box - the phone told
+ * us the action exists without telling us what it is about.
  */
 
 pragma ComponentBehavior: Bound
@@ -23,8 +25,12 @@ Item {
 
     required property MeshBus bus
     required property string notificationKey
+    required property string groupKeys
     required property string appName
-    required property string from
+    required property string heading
+    required property string subheading
+    required property string preview
+    required property int count
     required property bool canReply
     required property string replyLabel
 
@@ -47,7 +53,7 @@ Item {
         id: layout
         anchors.fill: parent
         anchors.margins: Kirigami.Units.smallSpacing
-        spacing: Kirigami.Units.smallSpacing
+        spacing: Kirigami.Units.smallSpacing / 2
 
         RowLayout {
             Layout.fillWidth: true
@@ -57,10 +63,49 @@ Item {
                 Layout.fillWidth: true
                 spacing: 0
 
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    PlasmaComponents.Label {
+                        Layout.maximumWidth: parent.width - Kirigami.Units.gridUnit * 3
+                        elide: Text.ElideRight
+                        font.weight: Font.DemiBold
+                        text: root.heading
+                    }
+
+                    /* The count a phone shows on a collapsed conversation, right beside the name
+                       rather than stranded at the far edge - at arm's length the two have to read
+                       as one thing. Only when there is more than one, because "1" on every row is
+                       noise. */
+                    Rectangle {
+                        visible: root.count > 1
+                        Layout.alignment: Qt.AlignVCenter
+                        implicitWidth: Math.max(badge.implicitWidth + Kirigami.Units.smallSpacing * 1.5,
+                                                badge.implicitHeight + 4)
+                        implicitHeight: badge.implicitHeight + 2
+                        radius: height / 2
+                        color: Kirigami.Theme.highlightColor
+
+                        PlasmaComponents.Label {
+                            id: badge
+                            anchors.centerIn: parent
+                            font: Kirigami.Theme.smallFont
+                            color: Kirigami.Theme.highlightedTextColor
+                            text: root.count
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
                 PlasmaComponents.Label {
                     Layout.fillWidth: true
+                    visible: root.preview.length > 0
                     elide: Text.ElideRight
-                    text: root.appName
+                    maximumLineCount: 2
+                    wrapMode: Text.Wrap
+                    text: root.preview
                 }
 
                 PlasmaComponents.Label {
@@ -68,15 +113,16 @@ Item {
                     elide: Text.ElideRight
                     font: Kirigami.Theme.smallFont
                     opacity: 0.7
-                    text: i18n("on %1", root.from)
+                    text: root.subheading
                 }
             }
 
             PlasmaComponents.ToolButton {
                 icon.name: "dialog-close"
                 display: PlasmaComponents.AbstractButton.IconOnly
-                text: i18n("Dismiss")
-                onClicked: root.bus.dismiss(root.notificationKey)
+                text: root.count > 1 ? i18np("Dismiss %1 message", "Dismiss all %1 messages", root.count)
+                                     : i18n("Dismiss")
+                onClicked: root.bus.dismissGroup(root.groupKeys)
 
                 PlasmaComponents.ToolTip.text: text
                 PlasmaComponents.ToolTip.visible: hovered
@@ -85,6 +131,7 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.smallSpacing / 2
             spacing: Kirigami.Units.smallSpacing
             visible: root.canReply
 
@@ -92,7 +139,7 @@ Item {
                 id: draft
                 Layout.fillWidth: true
                 enabled: !root.sending
-                placeholderText: i18n("Reply to %1…", root.appName)
+                placeholderText: i18n("Reply to %1…", root.heading)
                 onAccepted: root.send()
             }
 
@@ -121,12 +168,15 @@ Item {
 
         root.sending = true;
         root.status = i18n("Sending…");
+
+        // Threaded onto the newest message in the group, which is the one whose reply action the
+        // phone still has open.
         root.bus.reply(root.notificationKey, text);
     }
 
-    /* The daemon answers asynchronously and the answer names the notification, so the right row
-       picks it up. Clearing the box only on success is deliberate: a reply that did not go must
-       still be there to try again, not retyped from memory. */
+    /* The daemon answers asynchronously and names the notification, so the right row picks it up.
+       The box is cleared only on success: a reply that did not go must still be there to try
+       again, not retyped from memory. */
     readonly property Connections __replies: Connections {
         target: root.bus
 

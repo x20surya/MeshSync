@@ -117,6 +117,26 @@ public sealed class Daemon : IDisposable
     public event Action<bool>? TrayIconVisibleChanged;
 
     /// <summary>
+    /// Whether a mirrored notification's sender and text go on the session bus.
+    ///
+    /// <para>Off unless the owner turns it on. See <see cref="TraySettings.ShowsContent"/> for
+    /// why the default is the strict one.</para>
+    /// </summary>
+    public bool ShowNotificationContent
+    {
+        get => TraySettings.ShowsContent(_paths.DataDirectory);
+        set
+        {
+            if (value == ShowNotificationContent) return;
+
+            TraySettings.SetShowsContent(_paths.DataDirectory, value);
+            NotificationContentChanged?.Invoke(value);
+        }
+    }
+
+    public event Action<bool>? NotificationContentChanged;
+
+    /// <summary>
     /// The Bluetooth tier, or null where there is no usable radio.
     ///
     /// <para>Central only for now: this device scans and connects out, which obliges the peer to

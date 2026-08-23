@@ -18,6 +18,53 @@ namespace DesktopCore.Platform;
 public static class TraySettings
 {
     private const string HiddenMarker = "tray.hidden";
+    private const string ContentMarker = "notifications.content";
+
+    /// <summary>
+    /// Whether mirrored notifications put their sender and text on the session bus.
+    ///
+    /// <para><b>Off by default, and that default is the whole point.</b> Everything on the
+    /// session bus is readable by every program running as this user, and a mirrored
+    /// notification is the most private thing Mesh Sync carries. With this off the panel gets a
+    /// key, an app name, a device and a time - enough to badge "3 from S21 FE" and draw a reply
+    /// box, and nothing to read.</para>
+    ///
+    /// <para>On, the panel can group by conversation and show a preview, which is what a phone's
+    /// own shade does. That is a reasonable thing to want on your own laptop and an unreasonable
+    /// default to impose, so it is a file the owner turns on.</para>
+    /// </summary>
+    public static bool ShowsContent(string dataDirectory)
+    {
+        try { return File.Exists(Path.Combine(dataDirectory, ContentMarker)); }
+        catch { return false; }
+    }
+
+    public static void SetShowsContent(string dataDirectory, bool show)
+    {
+        string marker = Path.Combine(dataDirectory, ContentMarker);
+
+        try
+        {
+            if (show)
+            {
+                File.WriteAllText(marker,
+                    "Mirrored notifications put their sender and text on the session bus, where\n" +
+                    "any program running as you can read them. Delete this file to stop that.\n");
+            }
+            else if (File.Exists(marker))
+            {
+                File.Delete(marker);
+            }
+
+            Log.Write("Notify", show
+                ? "Notification senders and text are now on the bus, for the panel to show."
+                : "Notification senders and text are off the bus again.");
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Notify", "Could not change the notification detail setting", ex);
+        }
+    }
 
     public static bool IsVisible(string dataDirectory)
     {

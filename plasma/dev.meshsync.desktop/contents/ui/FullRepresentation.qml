@@ -185,8 +185,12 @@ PlasmaExtras.Representation {
                         Layout.fillWidth: true
                         bus: root.bus
                         notificationKey: model.key
+                        groupKeys: model.keys
                         appName: model.appName
-                        from: model.from
+                        heading: model.heading
+                        subheading: model.subheading
+                        preview: model.preview
+                        count: model.count
                         canReply: model.canReply === true
                         replyLabel: model.replyLabel
                     }

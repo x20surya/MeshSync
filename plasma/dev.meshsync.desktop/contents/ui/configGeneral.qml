@@ -34,12 +34,20 @@ Kirigami.FormLayout {
         text: i18n("Notifications from your phone")
     }
 
+    QQC2.CheckBox {
+        id: showContent
+        text: i18n("Who each message is from, and a preview")
+        enabled: root.bus.available && showNotifications.checked
+        checked: root.bus.showNotificationContent
+        onToggled: root.bus.setNotificationContent(checked)
+    }
+
     QQC2.Label {
         Layout.maximumWidth: Kirigami.Units.gridUnit * 22
         wrapMode: Text.Wrap
         font: Kirigami.Theme.smallFont
         opacity: 0.7
-        text: i18n("The widget never shows what a notification says - only which app it came from, and a box to reply in. The text stays in Mesh Sync.")
+        text: i18n("Off, the widget groups by app and can still reply, but shows nothing a message says. On, it groups by conversation like your phone does - and the text is then on the session bus, where any program running as you can read it.")
     }
 
     Item { Kirigami.FormData.isSection: true }

@@ -70,6 +70,7 @@ internal sealed class MeshBusObject : IPathMethodHandler
             ["ReceivedCount"] = (uint)_daemon.Activity.ReceivedCount,
             ["PairingUri"] = _daemon.PairingUri,
             ["TrayIconVisible"] = _daemon.TrayIconVisible,
+            ["ShowNotificationContent"] = _daemon.ShowNotificationContent,
         };
     }
 
@@ -267,6 +268,14 @@ internal sealed class MeshBusObject : IPathMethodHandler
                 return;
             }
 
+            case "ShowNotificationContent":
+            {
+                bool show = reader.ReadVariantValue().GetBool();
+                _daemon.ShowNotificationContent = show;
+                context.Reply(context.CreateReplyWriter("").CreateMessage());
+                return;
+            }
+
             case "Transport":
             {
                 var preference = ParseTransport(reader.ReadVariantValue().GetString());
@@ -447,10 +456,20 @@ internal sealed class MeshBusObject : IPathMethodHandler
     /// body stay in the process, which is the rule <c>MirroredNotifications</c> was written
     /// under and does not stop being true because the reader is on the same machine.</para>
     /// </summary>
+    /// <summary>
+    /// What is mirrored, and - only if the owner has asked for it - what it says.
+    ///
+    /// <para>The sender and the text are empty unless <c>ShowNotificationContent</c> is on. With
+    /// it off a panel can group by app, badge a count and draw a reply box, which is most of
+    /// what a panel is for; with it on it can group by conversation and show a preview, which is
+    /// what a phone's own shade does. The strict answer is the default because everything on this
+    /// bus is readable by every program running as this user.</para>
+    /// </summary>
     private void ReplyNotifications(MethodContext context)
     {
-        var writer = context.CreateReplyWriter("a(sssxbs)");
+        var writer = context.CreateReplyWriter("a(sssxbsss)");
 
+        bool content = _daemon.ShowNotificationContent;
         var entries = _daemon.Notifications.Snapshot();
         var array = writer.WriteArrayStart(DBusType.Struct);
 
@@ -461,12 +480,14 @@ internal sealed class MeshBusObject : IPathMethodHandler
             writer.WriteString(entry.AppName ?? "");
             writer.WriteString(entry.From ?? "");
             writer.WriteInt64(new DateTimeOffset(entry.AtUtc, TimeSpan.Zero).ToUnixTimeSeconds());
-
-            // Whether a reply box should be offered, and what the app calls the button. Still no
-            // title and no body: a widget can say "WhatsApp, from S21 FE, replyable" and that is
-            // all it needs to draw the box.
             writer.WriteBool(entry.CanReply);
             writer.WriteString(entry.ReplyLabel ?? "");
+
+            // The conversation and the message. Empty strings rather than an absent field, so
+            // the signature does not change with the setting and a client written against one
+            // answer keeps working against the other.
+            writer.WriteString(content ? entry.Title ?? "" : "");
+            writer.WriteString(content ? entry.Text ?? "" : "");
         }
 
         writer.WriteArrayEnd(array);
@@ -734,6 +755,7 @@ internal sealed class MeshBusObject : IPathMethodHandler
           <property name="ReceivedCount" type="u" access="read"/>
           <property name="PairingUri" type="s" access="read"/>
           <property name="TrayIconVisible" type="b" access="readwrite"/>
+          <property name="ShowNotificationContent" type="b" access="readwrite"/>
           <method name="SendText">
             <arg name="text" type="s" direction="in"/><arg name="sent" type="u" direction="out"/>
           </method>
@@ -748,7 +770,7 @@ internal sealed class MeshBusObject : IPathMethodHandler
           </method>
           <method name="StopRinging"/>
           <method name="Notifications">
-            <arg name="notifications" type="a(sssxbs)" direction="out"/>
+            <arg name="notifications" type="a(sssxbsss)" direction="out"/>
           </method>
           <method name="ReplyToNotification">
             <arg name="key" type="s" direction="in"/><arg name="text" type="s" direction="in"/>

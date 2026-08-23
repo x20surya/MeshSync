@@ -177,6 +177,7 @@ public sealed class MeshBus : IDisposable
         _daemon.Ringer.StateChanged += _ => Nudge();
         _daemon.Security.PairingRequested += _ => Nudge();
         _daemon.TrayIconVisibleChanged += _ => Nudge();
+        _daemon.NotificationContentChanged += _ => { Nudge(); Signal("NotificationsChanged"); };
 
         _daemon.Notifications.Changed += () => { Nudge(); Signal("NotificationsChanged"); };
         _daemon.Activity.Changed += (_, _) => { Nudge(); Signal("ActivityChanged"); };
