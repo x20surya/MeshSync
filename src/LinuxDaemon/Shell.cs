@@ -58,6 +58,27 @@ public static class Shell
             : $"{bridge.Name}, polled";
     }
 
+    /// <summary>
+    /// Reads one line, on a thread of its own.
+    ///
+    /// <para><b>Not <c>Console.In.ReadLineAsync</c>.</b> <c>Console.In</c> is a synchronized
+    /// <c>TextReader</c>: its async methods run the blocking read <em>inline</em> while holding the
+    /// reader's monitor, so the await never yields and the thread it was called on stops
+    /// servicing anything else.</para>
+    ///
+    /// <para>In this process that thread is one the D-Bus connection needs, so asking for input
+    /// stopped the whole Bluetooth tier dead: BlueZ was asked to watch for property changes and
+    /// the reply was never read, leaving the scanner wedged before its first sweep. Nothing was
+    /// logged, because nothing failed - the call simply never came back. A dedicated long-running
+    /// thread costs one thread and keeps the async machinery free.</para>
+    ///
+    /// <para>The read itself cannot be cancelled; the caller races it against the stopping token
+    /// and the thread is a background one, so it does not hold the process open.</para>
+    /// </summary>
+    private static Task<string?> ReadLineOnItsOwnThread() =>
+        Task.Factory.StartNew(Console.ReadLine, CancellationToken.None,
+                              TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
     public static async Task RunAsync(Daemon daemon, CancellationTokenSource stopping)
     {
         while (!stopping.IsCancellationRequested)
@@ -65,7 +86,15 @@ public static class Shell
             Console.Write("> ");
 
             string? line;
-            try { line = await Console.In.ReadLineAsync(stopping.Token).ConfigureAwait(false); }
+            try
+            {
+                var read = ReadLineOnItsOwnThread();
+                var cancelled = Task.Delay(Timeout.Infinite, stopping.Token);
+
+                if (await Task.WhenAny(read, cancelled).ConfigureAwait(false) == cancelled) return;
+
+                line = await read.ConfigureAwait(false);
+            }
             catch (OperationCanceledException) { return; }
 
             if (line == null) return;             // stdin closed
@@ -137,6 +166,10 @@ public static class Shell
                 await ShowBluetoothAsync().ConfigureAwait(false);
                 return false;
 
+            case "transport":
+                Transport(daemon, rest);
+                return false;
+
             case "clip":
                 {
                     string? text = await daemon.ClipboardBridge.GetTextAsync(CancellationToken.None)
@@ -181,6 +214,40 @@ public static class Shell
                 Console.WriteLine($"  Unknown command `{command}`. Type `help`.");
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Shows or sets which links this device offers, the same three the Windows window offers.
+    ///
+    /// The daemon starts and stops each tier in place, so this takes effect at once rather than
+    /// at the next start.
+    /// </summary>
+    private static void Transport(Daemon daemon, string rest)
+    {
+        if (rest.Length > 0)
+        {
+            TransportPreference? wanted = rest.Trim().ToLowerInvariant() switch
+            {
+                "both" => TransportPreference.Both,
+                "wifi" or "wi-fi" => TransportPreference.WiFi,
+                "ble" or "bluetooth" => TransportPreference.Ble,
+                _ => null,
+            };
+
+            if (wanted == null)
+            {
+                Console.WriteLine($"  \"{rest}\" is not one of both, wifi or ble.");
+                return;
+            }
+
+            daemon.Transports.Set(wanted.Value);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  Transport   {daemon.Transports.Current}");
+        Console.WriteLine($"  Wi-Fi       {(daemon.Transports.AllowsWiFi ? "offered" : "off")}");
+        Console.WriteLine($"  Bluetooth   {(daemon.Transports.AllowsBle ? "offered" : "off")}  ({daemon.BluetoothStatus})");
+        Console.WriteLine();
     }
 
     private static async Task ShowBluetoothAsync()
@@ -232,6 +299,7 @@ public static class Shell
               reject  <prefix>    turn one away
               forget  <prefix>    unpair a device, which costs a re-pair to undo
               bt                  what this machine's Bluetooth radio can do
+              transport [mode]    show or set which links to offer: both, wifi, ble
               clip                print what is on this machine's clipboard
               clipset <text>      put text on this machine's clipboard
               send <text>         send text to every connected device
@@ -256,18 +324,27 @@ public static class Shell
 
         Console.WriteLine($"  Paired devices ({peers.Count})");
 
+        int reachable = 0;
+
         foreach (var peer in peers)
         {
-            bool connected = daemon.Mesh.IsConnectedTo(peer.Fingerprint);
+            // Both tiers. Asking only the socket called every Bluetooth-only device disconnected,
+            // which is the same thing the window used to get wrong.
+            bool wifi = daemon.Mesh.IsConnectedTo(peer.Fingerprint);
+            bool ble = daemon.IsBluetoothConnectedTo(peer.Fingerprint);
+            bool connected = wifi || ble;
+
+            if (connected) reachable++;
+
             string name = daemon.Mesh.NameOf(peer.Fingerprint) ?? peer.Name ?? "unnamed";
-            string seen = Ago(peer.LastSeenUtc);
+            string via = wifi ? peer.LastAddress ?? "no address" : ble ? "bluetooth" : peer.LastAddress ?? "no address";
 
             Console.WriteLine($"    {(connected ? "*" : " ")} {DeviceIdentity.Shorten(peer.Fingerprint)}  " +
-                              $"{name,-20}  {peer.LastAddress ?? "no address",-15}  {seen}");
+                              $"{name,-20}  {via,-15}  {Ago(peer.LastSeenUtc)}");
         }
 
-        Console.WriteLine(daemon.Mesh.ConnectedCount > 0
-            ? $"  * connected ({daemon.Mesh.ConnectedCount} of {peers.Count})"
+        Console.WriteLine(reachable > 0
+            ? $"  * connected ({reachable} of {peers.Count})"
             : "  none connected");
         Console.WriteLine();
     }
