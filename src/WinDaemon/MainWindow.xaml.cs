@@ -159,7 +159,7 @@ namespace WinDaemon
         /// <summary>
         /// Redraws the device list from the registry and the live link state.
         ///
-        /// Only one device can be reported as connected, because <see cref="LinkState"/>
+        /// Only one device can be reported as connected, because <see cref="CoreLib.Transport.LinkState"/>
         /// tracks whether anything is reachable rather than which peers are. That is honest
         /// enough while the mesh is small and is the next thing to grow when it is not.
         /// </summary>

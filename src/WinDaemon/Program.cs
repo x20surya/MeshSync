@@ -11,6 +11,9 @@ using CoreLib.Transport;
 using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 using Wpf = System.Windows;
+// WinForms has a LinkState of its own and this project's implicit usings pull it in, so the one
+// that matters here is named outright rather than left to the compiler to guess between.
+using LinkState = CoreLib.Transport.LinkState;
 
 namespace WinDaemon
 {
