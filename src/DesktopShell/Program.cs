@@ -18,8 +18,18 @@ namespace DesktopShell;
 public static class Program
 {
     [STAThread]
-    public static void Main(string[] args) =>
+    public static void Main(string[] args)
+    {
+        // One device per session. A second launch raises the first one's window and stops,
+        // rather than starting a device that cannot bind port 45001 and then sits there looking
+        // as though it is working. The diagnostic modes are exempt: they run against their own
+        // data directory and are meant to be startable alongside a real instance.
+        bool diagnostic = args.Contains("--selftest") || args.Contains("--screenshot");
+
+        if (!diagnostic && DesktopCore.Ipc.MeshBus.TryHandOverAsync().GetAwaiter().GetResult()) return;
+
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
 
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilder.Configure<App>()

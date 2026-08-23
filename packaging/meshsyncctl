@@ -1,0 +1,338 @@
+#!/bin/sh
+#
+# meshsyncctl - drive the running Mesh Sync device from a shell.
+#
+# Talks to dev.meshsync.Daemon on the session bus, which is the same interface the Plasma widget
+# and the tray applet read. Written in shell over gdbus rather than as a fourth .NET head: glib
+# is already a dependency - DesktopNotifier shells gdbus today - so this adds nothing to install,
+# and it is the regression test for the bus surface as well as a tool.
+#
+# Nothing here knows anything the interface does not expose. If a command cannot be written
+# against dev.meshsync.Daemon1, the interface is missing something.
+set -eu
+
+SERVICE=dev.meshsync.Daemon
+ROOT=/dev/meshsync/Daemon
+IFACE=dev.meshsync.Daemon1
+DEVICE_IFACE=dev.meshsync.Device1
+PAIRING_IFACE=dev.meshsync.Pairing1
+
+# ─────────────────────────────────────────────────────────────── plumbing
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+
+need_gdbus() {
+    command -v gdbus >/dev/null 2>&1 || die "meshsyncctl needs gdbus (glib2). Install glib and try again."
+}
+
+# Every call goes through here so a daemon that is not running produces one clear sentence
+# rather than a GDBus stack trace.
+call() {
+    path=$1 iface=$2 member=$3
+    shift 3
+    if ! out=$(gdbus call --session -d "$SERVICE" -o "$path" -m "$iface.$member" "$@" 2>&1); then
+        case "$out" in
+            *ServiceUnknown*|*"was not provided"*)
+                die "Mesh Sync is not running. Start it, or run: meshsync" ;;
+            *)
+                die "${out#Error: }" ;;
+        esac
+    fi
+    printf '%s' "$out"
+}
+
+get() { call "$ROOT" org.freedesktop.DBus.Properties Get "$2" "$3" 2>/dev/null | unwrap; }
+
+# gdbus prints a one-element tuple as (<'value'>,) or (<true>,) or (<uint32 3>,). This is the
+# only place that shape is understood.
+# Two things this has to get right.
+#
+# Order: the wrapping comes off before the type annotation, or "(uint32 1,)" keeps its "uint32 "
+# because the prefix rule ran while the string still began with a bracket.
+#
+# Quoting: gdbus prints a string in single quotes normally and in DOUBLE quotes when the value
+# contains an apostrophe - so a mesh called "Surya's Mesh" comes back quoted unless both are
+# handled, and every line that prints it looks subtly wrong.
+unwrap() {
+    sed -e 's/^(<//' -e 's/>,)$//' -e 's/^(//' -e 's/,)$//' \
+        -e 's/^uint32 //' -e 's/^int64 //' -e 's/^int32 //' \
+        -e "s/^'//" -e "s/'\$//" \
+        -e 's/^"//' -e 's/"$//'
+}
+
+property() { call "$ROOT" org.freedesktop.DBus.Properties Get "$IFACE" "$1" | unwrap; }
+
+running() { gdbus call --session -d "$SERVICE" -o "$ROOT" \
+                -m org.freedesktop.DBus.Properties.Get "$IFACE" DeviceName >/dev/null 2>&1; }
+
+# Every paired device's full fingerprint, one per line. The path element is the fingerprint with
+# hyphens as underscores, so it is turned back here and nowhere else.
+fingerprints() {
+    gdbus introspect --session -d "$SERVICE" -o "$ROOT/devices" --xml 2>/dev/null \
+        | sed -n 's/.*<node name="\([^"]*\)".*/\1/p' | tr '_' '-'
+}
+
+pending_fingerprints() {
+    gdbus introspect --session -d "$SERVICE" -o "$ROOT/pending" --xml 2>/dev/null \
+        | sed -n 's/.*<node name="\([^"]*\)".*/\1/p' | tr '_' '-'
+}
+
+path_for() { printf '%s/devices/%s' "$ROOT" "$(printf '%s' "$1" | tr '-' '_')"; }
+pending_path_for() { printf '%s/pending/%s' "$ROOT" "$(printf '%s' "$1" | tr '-' '_')"; }
+
+# Resolves a prefix, a name or a full fingerprint to exactly one device. Ambiguity is an error
+# rather than a guess: ringing the wrong phone is not a small mistake.
+resolve() {
+    want=$(printf '%s' "$1" | tr 'a-z' 'A-Z')
+    [ -n "$want" ] || die "Which device? Try: meshsyncctl devices"
+
+    found=""
+    count=0
+    for fp in $(fingerprints); do
+        upper=$(printf '%s' "$fp" | tr 'a-z' 'A-Z')
+        name=$(device_property "$fp" Name 2>/dev/null || printf '')
+        upname=$(printf '%s' "$name" | tr 'a-z' 'A-Z')
+
+        case "$upper" in "$want"*) found="$fp"; count=$((count + 1)); continue;; esac
+        case "$upname" in *"$want"*) found="$fp"; count=$((count + 1));; esac
+    done
+
+    [ "$count" -eq 0 ] && die "No paired device matches \"$1\". Try: meshsyncctl devices"
+    [ "$count" -gt 1 ] && die "\"$1\" matches $count devices. Use more of the fingerprint."
+    printf '%s' "$found"
+}
+
+device_property() { call "$(path_for "$1")" org.freedesktop.DBus.Properties Get "$DEVICE_IFACE" "$2" | unwrap; }
+
+# ─────────────────────────────────────────────────────────────── commands
+
+cmd_status() {
+    if ! running; then
+        [ "${1:-}" = "--json" ] && { printf '{"running":false}\n'; return; }
+        printf 'Mesh Sync is not running.\n'; return 1
+    fi
+
+    mesh=$(property MeshName)
+    device=$(property DeviceName)
+    connected=$(property IsConnected)
+    link=$(property ActiveLink)
+    peers=$(property PeerCount)
+    up=$(property ConnectedCount)
+    waiting=$(property PendingCount)
+    notes=$(property NotificationCount)
+    bt=$(property BluetoothStatus)
+    transport=$(property Transport)
+
+    if [ "${1:-}" = "--json" ]; then
+        printf '{"running":true,"mesh":"%s","device":"%s","connected":%s,"link":"%s",' \
+               "$mesh" "$device" "$connected" "$link"
+        printf '"peers":%s,"connectedPeers":%s,"pending":%s,"notifications":%s,' \
+               "$peers" "$up" "$waiting" "$notes"
+        printf '"transport":"%s","bluetooth":"%s"}\n' "$transport" "$bt"
+        return
+    fi
+
+    printf '%s - this device is %s\n' "$mesh" "$device"
+    if [ "$connected" = "true" ]; then
+        printf '  %s of %s devices reachable, over %s\n' "$up" "$peers" "$link"
+    else
+        printf '  nothing reachable (%s paired)\n' "$peers"
+    fi
+    [ "$waiting" != "0" ] && printf '  %s device(s) waiting to be allowed - meshsyncctl pending\n' "$waiting"
+    [ "$notes" != "0" ] && printf '  %s notification(s) mirrored\n' "$notes"
+    printf '  transport %s, bluetooth %s\n' "$transport" "$bt"
+    return 0
+}
+
+cmd_devices() {
+    any=0
+    for fp in $(fingerprints); do
+        any=1
+        name=$(device_property "$fp" Name)
+        short=$(device_property "$fp" ShortFingerprint)
+        conn=$(device_property "$fp" IsConnected)
+        link=$(device_property "$fp" ActiveLink)
+        addr=$(device_property "$fp" LastAddress)
+
+        if [ "$conn" = "true" ]; then state="connected over $link"; else state="not reachable"; fi
+        [ -n "$addr" ] && state="$state, last at $addr"
+        printf '%-24s %-22s %s\n' "$name" "$short" "$state"
+    done
+    [ "$any" = "0" ] && printf 'No paired devices. Show a pairing code with: meshsyncctl show devices\n'
+    return 0
+}
+
+cmd_pending() {
+    any=0
+    for fp in $(pending_fingerprints); do
+        any=1
+        p=$(pending_path_for "$fp")
+        name=$(call "$p" org.freedesktop.DBus.Properties Get "$PAIRING_IFACE" Name | unwrap)
+        short=$(call "$p" org.freedesktop.DBus.Properties Get "$PAIRING_IFACE" ShortFingerprint | unwrap)
+        printf '%-24s %s\n' "$name" "$short"
+    done
+    if [ "$any" = "0" ]; then
+        printf 'Nothing is asking to join.\n'
+    else
+        printf '\nCompare the fingerprint on the other device, then: meshsyncctl allow <fingerprint>\n'
+    fi
+    return 0
+}
+
+resolve_pending() {
+    want=$(printf '%s' "$1" | tr 'a-z' 'A-Z')
+    found=""; count=0
+    for fp in $(pending_fingerprints); do
+        upper=$(printf '%s' "$fp" | tr 'a-z' 'A-Z')
+        case "$upper" in "$want"*) found="$fp"; count=$((count + 1));; esac
+    done
+    [ "$count" -eq 0 ] && die "Nothing matching \"$1\" is asking to join."
+    [ "$count" -gt 1 ] && die "\"$1\" matches $count requests. Use more of the fingerprint."
+    printf '%s' "$found"
+}
+
+cmd_send() {
+    [ $# -gt 0 ] || die "Usage: meshsyncctl send <text>"
+    sent=$(call "$ROOT" "$IFACE" SendText "$*" | unwrap)
+    if [ "$sent" = "0" ]; then
+        printf 'Nothing is reachable, so nothing was sent.\n'; return 1
+    fi
+    printf 'Sent to %s device(s).\n' "$sent"
+    return 0
+}
+
+cmd_send_file() {
+    [ $# -eq 2 ] || die "Usage: meshsyncctl send-file <device> <path>"
+    [ -f "$2" ] || die "No such file: $2"
+    fp=$(resolve "$1")
+    file=$(cd "$(dirname "$2")" && printf '%s/%s' "$(pwd)" "$(basename "$2")")
+    out=$(call "$(path_for "$fp")" "$DEVICE_IFACE" SendFile "$file")
+    printf '%s\n' "$out" | sed -e "s/^((true, '//" -e "s/^((false, '//" -e "s/'),)$//"
+    case "$out" in *"(true,"*) return 0;; *) return 1;; esac
+}
+
+cmd_ring() {
+    [ $# -ge 1 ] || die "Usage: meshsyncctl ring <device> [off]"
+    fp=$(resolve "$1")
+    if [ "${2:-on}" = "off" ]; then on=false; else on=true; fi
+    ok=$(call "$(path_for "$fp")" "$DEVICE_IFACE" Ring "$on" | unwrap)
+    [ "$ok" = "true" ] || die "That device did not answer."
+    if [ "$on" = "true" ]; then printf 'Ringing.\n'; else printf 'Stopped.\n'; fi
+    return 0
+}
+
+# gdbus annotates a struct field's type on the first element only, so "int64 " is present in the
+# first row and absent in every later one. A pattern that requires it silently drops all but the
+# first notification, which reads as the daemon having lost them.
+cmd_notifications() {
+    out=$(call "$ROOT" "$IFACE" Notifications)
+
+    if [ "$out" = "(@a(sssxbs) [],)" ] || [ "$out" = "([],)" ]; then
+        printf 'Nothing mirrored right now.\n'
+        return 0
+    fi
+
+    # Three things this line has to get right, each of which silently loses a notification:
+    #   - the separator is US (0x1f), not a pipe and not a tab. The key is "<fingerprint>|<key>"
+    #     so it already contains a pipe; and a tab is IFS whitespace, so two empty fields in a
+    #     row collapse into one and every field after them shifts.
+    #   - the output is newline-terminated, or `read` drops the last row for want of one.
+    #   - "int64 " is optional: gdbus annotates the type on the first struct only.
+    sep=$(printf '\037')
+
+    printf '%s\n' "$out" \
+        | sed -e 's/^(\[//' -e 's/\],)$//' -e 's/), (/)\n(/g' \
+        | sed -En "s/^\(?'([^']*)', '([^']*)', '([^']*)', (int64 )?[0-9]+, (true|false), '([^']*)'\)?,?$/\2${sep}\3${sep}\5${sep}\6${sep}\1/p" \
+        | while IFS="$sep" read -r app from can label key; do
+              if [ "$can" = "true" ]; then answer="$label"; else answer="-"; fi
+              printf '%-18s %-14s %-10s %s\n' "$app" "$from" "$answer" "$key"
+          done
+
+    printf '\nReply with: meshsyncctl reply <key> <text>\n'
+    return 0
+}
+
+cmd_reply() {
+    [ $# -ge 2 ] || die "Usage: meshsyncctl reply <key> <text>"
+    key=$1; shift
+    out=$(call "$ROOT" "$IFACE" ReplyToNotification "$key" "$*")
+    printf '%s\n' "$out" | sed -e "s/^((true, '//" -e "s/^((false, '//" -e "s/'),)$//"
+    case "$out" in *"(true,"*) return 0;; *) return 1;; esac
+}
+
+cmd_transport() {
+    if [ $# -eq 0 ]; then property Transport; printf '\n'; return 0; fi
+    case "$1" in
+        both|wifi|ble) ;;
+        *) die "Transport is both, wifi or ble." ;;
+    esac
+    call "$ROOT" org.freedesktop.DBus.Properties Set "$IFACE" Transport "<'$1'>" >/dev/null
+    printf 'Transport set to %s.\n' "$1"
+    return 0
+}
+
+usage() { cat <<'EOF'
+meshsyncctl - drive the running Mesh Sync device.
+
+  status [--json]          what this device is doing
+  devices                  the paired devices and whether they are reachable
+  send <text>              put text on every reachable device's clipboard
+  send-file <dev> <path>   send one file
+  ring <dev> [off]         make a device sound an alarm, or stop it
+  stop-ringing             stop this device ringing
+  pending                  devices asking to join
+  allow <fingerprint>      let one in, after comparing the fingerprint
+  refuse <fingerprint>     turn one away
+  join <meshsync://…>      join a mesh from a pairing code
+  forget <dev>             remove a paired device
+  notifications            what is mirrored here
+  reply <key> <text>       reply to a mirrored notification
+  dismiss <key>            clear one, here and on the device it came from
+  dismiss-all              clear all of them
+  transport [both|wifi|ble]  which links this device offers
+  dial                     reconnect now
+  show [page]              raise the window
+  quit                     stop Mesh Sync
+
+<dev> is a fingerprint, the start of one, or part of a device's name.
+EOF
+}
+
+# ─────────────────────────────────────────────────────────────── entry
+
+need_gdbus
+command=${1:-status}
+[ $# -gt 0 ] && shift
+
+case "$command" in
+    status)        cmd_status "$@" ;;
+    devices|list)  cmd_devices ;;
+    send)          cmd_send "$@" ;;
+    send-file)     cmd_send_file "$@" ;;
+    ring)          cmd_ring "$@" ;;
+    stop-ringing)  call "$ROOT" "$IFACE" StopRinging >/dev/null; printf 'Stopped.\n' ;;
+    pending)       cmd_pending ;;
+    allow|confirm) [ $# -ge 1 ] || die "Usage: meshsyncctl allow <fingerprint>"
+                   call "$(pending_path_for "$(resolve_pending "$1")")" "$PAIRING_IFACE" Confirm \
+                       | sed -e "s/^((true, '//" -e "s/^((false, '//" -e "s/'),)$//" ; printf '\n' ;;
+    refuse|reject) [ $# -ge 1 ] || die "Usage: meshsyncctl refuse <fingerprint>"
+                   call "$(pending_path_for "$(resolve_pending "$1")")" "$PAIRING_IFACE" Reject \
+                       | sed -e "s/^((true, '//" -e "s/^((false, '//" -e "s/'),)$//" ; printf '\n' ;;
+    join)          [ $# -ge 1 ] || die "Usage: meshsyncctl join <meshsync://…>"
+                   call "$ROOT" "$IFACE" Join "$1" \
+                       | sed -e "s/^((true, '//" -e "s/^((false, '//" -e "s/'),)$//" ; printf '\n' ;;
+    forget)        [ $# -ge 1 ] || die "Usage: meshsyncctl forget <device>"
+                   call "$(path_for "$(resolve "$1")")" "$DEVICE_IFACE" Forget >/dev/null
+                   printf 'Forgotten.\n' ;;
+    notifications) cmd_notifications ;;
+    reply)         cmd_reply "$@" ;;
+    dismiss)       [ $# -ge 1 ] || die "Usage: meshsyncctl dismiss <key>"
+                   call "$ROOT" "$IFACE" DismissNotification "$1" >/dev/null; printf 'Dismissed.\n' ;;
+    dismiss-all)   call "$ROOT" "$IFACE" DismissAllNotifications >/dev/null; printf 'Cleared.\n' ;;
+    transport)     cmd_transport "$@" ;;
+    dial)          call "$ROOT" "$IFACE" Dial >/dev/null; printf 'Dialling.\n' ;;
+    show)          call "$ROOT" "$IFACE" Show "${1:-home}" >/dev/null ;;
+    quit)          call "$ROOT" "$IFACE" Quit >/dev/null; printf 'Stopping Mesh Sync.\n' ;;
+    -h|--help|help) usage ;;
+    *)             printf 'Unknown command "%s".\n\n' "$command" >&2; usage >&2; exit 2 ;;
+esac

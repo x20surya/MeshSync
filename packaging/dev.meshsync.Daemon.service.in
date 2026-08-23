@@ -1,0 +1,8 @@
+# D-Bus activation for Mesh Sync.
+#
+# Lets the Plasma widget and meshsyncctl start the daemon by asking for it, rather than by
+# knowing where its binary is - so the same widget works whether Mesh Sync came from the .deb,
+# the tarball or the AppImage. @EXEC@ is filled in at install time.
+[D-BUS Service]
+Name=dev.meshsync.Daemon
+Exec=@EXEC@
