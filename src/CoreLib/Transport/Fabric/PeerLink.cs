@@ -36,6 +36,7 @@ namespace CoreLib.Transport.Fabric
         private readonly Dictionary<RouteKind, IPeerRoute> _routes = new();
         private readonly Dictionary<RouteKind, int> _failures = new();
         private readonly Dictionary<RouteKind, DateTime> _retryAt = new();
+        private readonly Dictionary<RouteKind, string> _lastFailure = new();
 
         private PeerRecord _peer;
         private bool _disposed;
@@ -117,6 +118,30 @@ namespace CoreLib.Transport.Fabric
         public DateTime RetryAt(RouteKind kind)
         {
             lock (_gate) return _retryAt.TryGetValue(kind, out var until) ? until : DateTime.MinValue;
+        }
+
+        /// <summary>
+        /// Why this kind of route last went away, kept after the route object is gone.
+        ///
+        /// <para>A retired route takes its own <c>LastFailure</c> with it, so without this the
+        /// health surface can say a peer is unreachable and never say why - which is most of what
+        /// makes the connection layer hard to diagnose in the first place.</para>
+        /// </summary>
+        public string? FailureOf(RouteKind kind)
+        {
+            lock (_gate) return _lastFailure.TryGetValue(kind, out var reason) ? reason : null;
+        }
+
+        /// <summary>Route kinds that have failed and are waiting out a backoff.</summary>
+        public IReadOnlyList<RouteKind> Backoffs
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _retryAt.Keys.Where(k => !_routes.ContainsKey(k)).ToList();
+                }
+            }
         }
 
         // ──────────────────────────────── taking routes in
@@ -267,7 +292,7 @@ namespace CoreLib.Transport.Fabric
 
                     expired.Add(route);
                     _routes.Remove(route.Kind);
-                    NoteFailureLocked(route.Kind, screenOn: false);
+                    NoteFailureLocked(route.Kind, screenOn: false, "no session inside the handshake grace");
                 }
             }
 
@@ -330,14 +355,17 @@ namespace CoreLib.Transport.Fabric
             {
                 _failures.Remove(kind);
                 _retryAt.Remove(kind);
+                _lastFailure.Remove(kind);
             }
         }
 
-        private void NoteFailureLocked(RouteKind kind, bool screenOn)
+        private void NoteFailureLocked(RouteKind kind, bool screenOn, string? reason = null)
         {
             int failures = _failures.TryGetValue(kind, out var count) ? count + 1 : 1;
             _failures[kind] = failures;
             _retryAt[kind] = _clock.UtcNow + BackoffFor(failures, screenOn);
+
+            if (!string.IsNullOrWhiteSpace(reason)) _lastFailure[kind] = reason!;
         }
 
         /// <summary>
@@ -427,6 +455,8 @@ namespace CoreLib.Transport.Fabric
             if (!removed) return;
 
             string reason = route.LastFailure ?? "the link closed";
+            lock (_gate) _lastFailure[route.Kind] = reason;
+
             Log.Write("Fabric", $"{Describe(route)} lost: {reason}");
             Detach(route);
             Raise(RouteLost, route.Kind, reason);

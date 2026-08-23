@@ -31,6 +31,16 @@ namespace CoreLib.Identity
         /// </summary>
         public string? IntroducedBy { get; set; }
 
+        /// <summary>
+        /// Which halves of a GATT link this peer's radio can take, as it last announced.
+        ///
+        /// <para>Remembered rather than asked for, because the arbiter needs it <em>before</em> a
+        /// radio link exists - and the answer usually arrives over Wi-Fi, long before the two
+        /// devices ever meet on the air. Null means never announced, which is read as both halves:
+        /// the optimistic reading, and the one every build before wire version 4 used.</para>
+        /// </summary>
+        public Transport.BleCapability? BleCapability { get; set; }
+
         [JsonIgnore]
         public string Fingerprint => DeviceIdentity.FingerprintOf(PublicKey);
     }
@@ -38,8 +48,20 @@ namespace CoreLib.Identity
     /// <summary>Shape of the file on disk. Versioned so the format can move later.</summary>
     internal sealed class PeerFile
     {
-        public int Version { get; set; } = 1;
+        /// <summary>2 added <see cref="MeshKey"/>. A version 1 file still reads, and costs no re-pair.</summary>
+        public int Version { get; set; } = 2;
+
         public string? MeshName { get; set; }
+
+        /// <summary>
+        /// Base64 of the 32-byte discovery key this mesh shares, or null before one is minted.
+        ///
+        /// <para><b>It is not a credential.</b> It decides which advertisements are worth
+        /// connecting to and nothing else. Nothing authorises on it, and no session key is ever
+        /// derived from it - see <c>MeshBeacon</c>.</para>
+        /// </summary>
+        public string? MeshKey { get; set; }
+
         public List<PeerRecord> Peers { get; set; } = new();
     }
 
@@ -70,6 +92,7 @@ namespace CoreLib.Identity
         private readonly string? _path;
 
         private string _meshName = "";
+        private byte[]? _meshKey;
 
         /// <summary>Raised whenever the set changes, so a dashboard can redraw its device list.</summary>
         public event Action? Changed;
@@ -120,6 +143,78 @@ namespace CoreLib.Identity
             MeshName = name!;
         }
 
+        /// <summary>
+        /// The 32-byte key every device in this mesh shares, so a scan can tell them apart from
+        /// everybody else's before it connects. Null until one has been minted.
+        /// </summary>
+        public byte[]? MeshKey
+        {
+            get { lock (_gate) return _meshKey?.ToArray(); }
+        }
+
+        public bool HasMeshKey { get { lock (_gate) return _meshKey != null; } }
+
+        /// <summary>
+        /// Mints one if this device has none, and returns whatever it now holds.
+        ///
+        /// Called on the first v0.4 run. The key is then offered to every connected peer over the
+        /// existing authenticated links, so upgrading costs no re-pair.
+        /// </summary>
+        public byte[] MintMeshKeyIfMissing()
+        {
+            lock (_gate)
+            {
+                if (_meshKey != null) return _meshKey.ToArray();
+                _meshKey = System.Security.Cryptography.RandomNumberGenerator.GetBytes(Transport.Ble.MeshBeacon.KeyLength);
+            }
+
+            Diagnostics.Log.Write("Peers", "Minted a mesh discovery key.");
+            Save();
+            Changed?.Invoke();
+
+            lock (_gate) return _meshKey!.ToArray();
+        }
+
+        /// <summary>
+        /// Takes a key offered by a peer, if it should win.
+        ///
+        /// <para><b>Lowest key wins, compared as 32 unsigned bytes.</b> Deterministic, with no
+        /// timestamps and no coordinator, so two halves of a mesh that minted separately converge
+        /// the first time any device from each can reach the other - and converge on the same
+        /// answer without exchanging another message. A device that adopts a new key re-advertises
+        /// within one beacon epoch.</para>
+        ///
+        /// <para>A paired device could push an all-zero key and steer which advertisements this
+        /// mesh bothers with. That is true and it changes nothing: a paired device is already
+        /// trusted with the clipboard, the notifications and the files, and the key affects who
+        /// this mesh <em>looks for</em>, never who it lets in.</para>
+        /// </summary>
+        public bool AdoptMeshKey(byte[]? offered)
+        {
+            if (offered == null || offered.Length != Transport.Ble.MeshBeacon.KeyLength) return false;
+
+            lock (_gate)
+            {
+                if (_meshKey != null && Compare(_meshKey, offered) <= 0) return false;
+                _meshKey = offered.ToArray();
+            }
+
+            Diagnostics.Log.Write("Peers", "Adopted a mesh discovery key from a peer.");
+            Save();
+            Changed?.Invoke();
+            return true;
+        }
+
+        private static int Compare(byte[] left, byte[] right)
+        {
+            for (int i = 0; i < left.Length && i < right.Length; i++)
+            {
+                if (left[i] != right[i]) return left[i] < right[i] ? -1 : 1;
+            }
+
+            return left.Length.CompareTo(right.Length);
+        }
+
         private PeerRegistry(string? path) => _path = path;
 
         /// <summary>Loads the registry, starting empty if there is nothing saved yet.</summary>
@@ -139,6 +234,23 @@ namespace CoreLib.Identity
                 if (file == null) return registry;
 
                 registry._meshName = (file.MeshName ?? "").Trim();
+
+                // Absent in a version 1 file, which loads unchanged. The beacon simply stays off
+                // until a key is minted or offered, which is exactly how every build before this
+                // one behaved.
+                if (!string.IsNullOrWhiteSpace(file.MeshKey))
+                {
+                    try
+                    {
+                        var key = Convert.FromBase64String(file.MeshKey!);
+                        if (key.Length == Transport.Ble.MeshBeacon.KeyLength) registry._meshKey = key;
+                        else Diagnostics.Log.Write("Peers", "Ignoring a stored mesh key that is the wrong length.");
+                    }
+                    catch (FormatException)
+                    {
+                        Diagnostics.Log.Write("Peers", "Ignoring a stored mesh key that will not decode.");
+                    }
+                }
 
                 if (file.Peers == null) return registry;
 
@@ -163,6 +275,30 @@ namespace CoreLib.Identity
             }
 
             return registry;
+        }
+
+        /// <summary>
+        /// What each peer announced its radio can do, for the route policy.
+        ///
+        /// Peers that have never said are simply absent, and the arbiter reads an absent entry as
+        /// both halves - the same optimistic reading it has always used, now confined to peers
+        /// that genuinely have not told us rather than applied to every peer unconditionally.
+        /// </summary>
+        public IReadOnlyDictionary<string, Transport.BleCapability> Capabilities
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    var map = new Dictionary<string, Transport.BleCapability>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var peer in _peers.Values)
+                    {
+                        if (peer.BleCapability.HasValue) map[peer.Fingerprint] = peer.BleCapability.Value;
+                    }
+
+                    return map;
+                }
+            }
         }
 
         /// <summary>Creates an in-memory registry that is never written to disk. For tests.</summary>
@@ -244,7 +380,8 @@ namespace CoreLib.Identity
         }
 
         /// <summary>Records that a peer was reachable, and where. Cheap enough to call on every connect.</summary>
-        public void NoteSeen(string fingerprint, string? address = null, string? name = null)
+        public void NoteSeen(string fingerprint, string? address = null, string? name = null,
+                             Transport.BleCapability? capability = null)
         {
             bool changed = false;
 
@@ -264,6 +401,15 @@ namespace CoreLib.Identity
                 if (!string.IsNullOrWhiteSpace(name) && peer.Name != name)
                 {
                     peer.Name = name;
+                    changed = true;
+                }
+
+                // Kept so the arbiter has an answer before a radio link exists. It is usually
+                // learned over Wi-Fi, which is the point: a device that cannot advertise says so
+                // long before the two ever meet on the air.
+                if (capability.HasValue && peer.BleCapability != capability)
+                {
+                    peer.BleCapability = capability;
                     changed = true;
                 }
             }
@@ -347,7 +493,12 @@ namespace CoreLib.Identity
             try
             {
                 PeerFile file;
-                lock (_gate) file = new PeerFile { MeshName = _meshName, Peers = _peers.Values.ToList() };
+                lock (_gate) file = new PeerFile
+                {
+                    MeshName = _meshName,
+                    MeshKey = _meshKey == null ? null : Convert.ToBase64String(_meshKey),
+                    Peers = _peers.Values.ToList(),
+                };
 
                 string json = JsonSerializer.Serialize(file, PeerFileContext.Default.PeerFile);
 

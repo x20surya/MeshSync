@@ -129,5 +129,21 @@ namespace CoreLib.Transport
         /// is the case that makes the feature worth having rather than a convenience.</para>
         /// </summary>
         public const byte NotificationReply = 0x0C;
+
+        /// <summary>
+        /// "This is the key my mesh advertises under." The 32 raw bytes.
+        ///
+        /// <para>How a mesh discovery key reaches every device without a re-pair. The first v0.4
+        /// device to run mints one and offers it over the links that already exist; a device that
+        /// holds a different key keeps whichever compares lower, so two halves that minted
+        /// separately converge with no coordinator and no extra round trip.</para>
+        ///
+        /// <para><b>It is not a credential and must never become one.</b> It decides which
+        /// advertisements are worth connecting to. Authorisation stays in the peer registry, the
+        /// per-connection key agreement and the human comparing fingerprints, and no session key
+        /// is ever derived from it. Riding the ordinary authenticated path means only a paired
+        /// device can offer one, which is the whole security requirement here.</para>
+        /// </summary>
+        public const byte MeshKeyOffer = 0x0D;
     }
 }

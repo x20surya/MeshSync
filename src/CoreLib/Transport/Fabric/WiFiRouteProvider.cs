@@ -64,6 +64,14 @@ namespace CoreLib.Transport.Fabric
         /// <summary>How long a dial may take. <c>TcpClient.ConnectAsync</c> has no default at all.</summary>
         public TimeSpan DialTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
+        /// <summary>
+        /// What this device's radio can do, announced in the socket hello.
+        ///
+        /// A function rather than a value because it is only known once the peripheral half has
+        /// tried to start, which happens after the listener is already up.
+        /// </summary>
+        public Func<BleCapability> LocalCapability { get; set; } = () => BleCapability.Both;
+
         public bool IsListening => _acceptor.IsListening;
 
         public int Port => _acceptor.Port;
@@ -134,6 +142,7 @@ namespace CoreLib.Transport.Fabric
                 LocalDeviceName = LocalDeviceName,
                 LocalPublicKey = _security.Identity.PublicKey,
                 LocalMeshName = _security.Peers.MeshName,
+                LocalCapability = LocalCapability(),
 
                 // Authorising and agreeing a key are one step: a peer this device has not paired
                 // with never reaches the point of having a session to encrypt with.
@@ -150,7 +159,7 @@ namespace CoreLib.Transport.Fabric
 
         private void OnIdentified(WiFiRoute route, PeerIdentifiedEventArgs e)
         {
-            _security.Peers.NoteSeen(e.Fingerprint, e.Address, e.DeviceName);
+            _security.Peers.NoteSeen(e.Fingerprint, e.Address, e.DeviceName, e.Capability);
 
             // Adopted only by a device that has none of its own, which is what stops two devices
             // that disagree overwriting each other on every reconnect.

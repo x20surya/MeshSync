@@ -192,13 +192,22 @@ namespace CoreLib.Transport
         /// </para>
         /// </summary>
         public static byte[] BuildHelloPayload(string publicKey, string? deviceName,
-                                               string? meshName = null, string? ephemeralKey = null)
+                                               string? meshName = null, string? ephemeralKey = null,
+                                               BleCapability? capability = null)
         {
             string name = Clean(deviceName);
             string mesh = Clean(meshName);
             string ephemeral = (ephemeralKey ?? "").Replace('\n', ' ').Trim();
 
-            if (ephemeral.Length > 0) return System.Text.Encoding.UTF8.GetBytes($"{publicKey}\n{name}\n{mesh}\n{ephemeral}");
+            if (ephemeral.Length > 0)
+            {
+                // The capability is a fifth field for the same reason the fourth exists: a peer
+                // that predates it reads four and stops, and one that expects it reads a shorter
+                // payload as "not announced" rather than as malformed.
+                string tail = capability.HasValue ? $"\n{(byte)capability.Value}" : "";
+                return System.Text.Encoding.UTF8.GetBytes($"{publicKey}\n{name}\n{mesh}\n{ephemeral}{tail}");
+            }
+
             if (name.Length == 0 && mesh.Length == 0) return System.Text.Encoding.UTF8.GetBytes(publicKey);
             if (mesh.Length == 0) return System.Text.Encoding.UTF8.GetBytes($"{publicKey}\n{name}");
 
@@ -235,12 +244,25 @@ namespace CoreLib.Transport
         /// </summary>
         public static bool TryParseHelloPayload(byte[] payload, out string publicKey,
                                                 out string deviceName, out string meshName,
-                                                out string ephemeralKey)
+                                                out string ephemeralKey) =>
+            TryParseHelloPayload(payload, out publicKey, out deviceName, out meshName,
+                                 out ephemeralKey, out _);
+
+        /// <summary>
+        /// The same, including the capability field the fifth position carries.
+        ///
+        /// A payload that stops short answers <see cref="BleCapability.Both"/>, which is the
+        /// optimistic reading every build before this one applied to every peer unconditionally.
+        /// </summary>
+        public static bool TryParseHelloPayload(byte[] payload, out string publicKey,
+                                                out string deviceName, out string meshName,
+                                                out string ephemeralKey, out BleCapability capability)
         {
             publicKey = "";
             deviceName = "";
             meshName = "";
             ephemeralKey = "";
+            capability = BleCapability.Both;
 
             if (payload == null || payload.Length == 0) return false;
 
@@ -254,6 +276,12 @@ namespace CoreLib.Transport
             if (parts.Length > 1) deviceName = parts[1].Trim();
             if (parts.Length > 2) meshName = parts[2].Trim();
             if (parts.Length > 3) ephemeralKey = parts[3].Trim();
+
+            if (parts.Length > 4 && byte.TryParse(parts[4].Trim(), out byte announced))
+            {
+                // Masked, because a newer peer may set bits this build does not know about.
+                capability = (BleCapability)(announced & (byte)BleCapability.Both);
+            }
 
             return publicKey.Length > 0;
         }

@@ -43,6 +43,23 @@ namespace CoreLib.Transport.Fabric
         /// <summary>How long a device that refused a session is left alone.</summary>
         public TimeSpan RefusalCooldown { get; init; } = TimeSpan.FromMinutes(5);
 
+        /// <summary>
+        /// How often a scan round runs while some peer is still owed a link.
+        ///
+        /// <para>Windows and Linux already agree on 30 seconds. It was 4 and ungated once, which is
+        /// most of why an established link felt rough rather than merely duplicated: an active scan
+        /// contends with every live link for the same antenna.</para>
+        /// </summary>
+        public TimeSpan ScanInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// How long one discovery window stays open.
+        ///
+        /// A window rather than a subscription, and stopped in a <c>finally</c> between rounds
+        /// rather than started once and left running for the life of the process.
+        /// </summary>
+        public TimeSpan ScanWindow { get; init; } = TimeSpan.FromSeconds(12);
+
         /// <summary>How often the radio reconsiders which peers hold its central links.</summary>
         public TimeSpan RotationInterval { get; init; } = TimeSpan.FromMinutes(2);
 

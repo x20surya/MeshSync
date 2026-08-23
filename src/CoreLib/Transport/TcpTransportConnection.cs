@@ -27,7 +27,7 @@ namespace CoreLib.Transport
         private const ushort Magic = 0x4D53;
 
         /// <summary>
-        /// Bumped to 2 when the hello frame grew a public key, and to 3 when it grew an
+        /// Bumped to 2 when the hello frame grew a public key, to 3 when it grew an
         /// ephemeral one for forward secrecy. An older build reading the new shape would take
         /// the length prefixes for the start of a device name, so the version byte is what
         /// turns that into "update both devices" instead of a mystery.
@@ -40,7 +40,7 @@ namespace CoreLib.Transport
         /// version mismatch drops a connection in exactly the way most of those tests are trying
         /// to provoke - so they carry on passing for entirely the wrong reason.</para>
         /// </summary>
-        internal const byte ProtocolVersion = 3;
+        internal const byte ProtocolVersion = 4;
 
         private const int HeaderSize = 8;
 
@@ -133,6 +133,20 @@ namespace CoreLib.Transport
         /// existed can adopt it rather than showing a placeholder for ever.
         /// </summary>
         public string? LocalMeshName { get; set; }
+
+        /// <summary>
+        /// What this device's radio can actually do, announced so the peer need not assume.
+        ///
+        /// <para>Taken from whether the peripheral half <em>started</em>, never from what the
+        /// adapter claimed. Reporting <see cref="BleCapability.Both"/> from an adapter that then
+        /// fails to advertise makes the arbiter answer "you advertise", and the device neither
+        /// advertises nor scans - a deadlock rather than a degraded state.</para>
+        ///
+        /// <para>Carrying it over the socket is the half that matters: a Linux box that cannot
+        /// advertise tells the phone so long before the two ever meet on the radio, so the phone
+        /// knows to advertise for it instead of both of them scanning.</para>
+        /// </summary>
+        public BleCapability LocalCapability { get; set; } = BleCapability.Both;
 
         /// <summary>
         /// Authorises a peer and agrees the key this connection is encrypted with, given the
@@ -267,7 +281,7 @@ namespace CoreLib.Transport
             {
                 await SendFrameAsync(session, KindHello,
                     BuildHello(LocalDeviceName, LocalPublicKey ?? "", LocalMeshName ?? "",
-                               session.Ephemeral.PublicKey), session.Token)
+                               session.Ephemeral.PublicKey, LocalCapability), session.Token)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -456,7 +470,8 @@ namespace CoreLib.Transport
 
         private void HandleHello(Session session, byte[] payload)
         {
-            if (!TryParseHello(payload, out string name, out string publicKey, out string meshName, out string ephemeralKey))
+            if (!TryParseHello(payload, out string name, out string publicKey, out string meshName,
+                               out string ephemeralKey, out BleCapability capability))
             {
                 Log.Write("Transport", "Malformed hello - dropping the connection.");
                 CloseSession(session);
@@ -519,7 +534,8 @@ namespace CoreLib.Transport
                     PublicKey = publicKey,
                     Fingerprint = fingerprint,
                     Address = session.RemoteAddress,
-                    MeshName = meshName
+                    MeshName = meshName,
+                    Capability = capability
                 });
             }
             catch (Exception ex) { Log.Write("Transport", "PeerIdentified handler threw", ex); }
@@ -544,9 +560,10 @@ namespace CoreLib.Transport
         /// which makes "an accepted socket whose hello has not arrived yet" - the window a link
         /// used to survive <c>DisconnectAll</c> in - impossible to reach from the outside.</para>
         /// </summary>
-        internal static byte[] BuildHelloFrame(string name, string publicKey, string meshName, string ephemeralKey)
+        internal static byte[] BuildHelloFrame(string name, string publicKey, string meshName, string ephemeralKey,
+                                               BleCapability capability = BleCapability.Both)
         {
-            byte[] payload = BuildHello(name, publicKey, meshName, ephemeralKey);
+            byte[] payload = BuildHello(name, publicKey, meshName, ephemeralKey, capability);
             byte[] frame = new byte[HeaderSize + payload.Length];
 
             BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(0, 2), Magic);
@@ -558,7 +575,8 @@ namespace CoreLib.Transport
             return frame;
         }
 
-        private static byte[] BuildHello(string name, string publicKey, string meshName, string ephemeralKey)
+        private static byte[] BuildHello(string name, string publicKey, string meshName, string ephemeralKey,
+                                         BleCapability capability = BleCapability.Both)
         {
             byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(name ?? "");
             if (nameBytes.Length > MaxDeviceNameBytes) nameBytes = nameBytes.AsSpan(0, MaxDeviceNameBytes).ToArray();
@@ -572,7 +590,7 @@ namespace CoreLib.Transport
             byte[] ephBytes = System.Text.Encoding.UTF8.GetBytes(ephemeralKey ?? "");
             if (ephBytes.Length > MaxPublicKeyBytes) ephBytes = Array.Empty<byte>();
 
-            var payload = new byte[1 + nameBytes.Length + 2 + keyBytes.Length + 1 + meshBytes.Length + 2 + ephBytes.Length];
+            var payload = new byte[1 + nameBytes.Length + 2 + keyBytes.Length + 1 + meshBytes.Length + 2 + ephBytes.Length + 1];
 
             payload[0] = (byte)nameBytes.Length;
             Buffer.BlockCopy(nameBytes, 0, payload, 1, nameBytes.Length);
@@ -589,6 +607,11 @@ namespace CoreLib.Transport
             BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(ephOffset, 2), (ushort)ephBytes.Length);
             Buffer.BlockCopy(ephBytes, 0, payload, ephOffset + 2, ephBytes.Length);
 
+            // What this device's radio can actually do, so the peer's role arbitration stops
+            // having to assume. The assumption is the reason two devices that both cannot
+            // advertise sit waiting for each other, and it resolves only by luck today.
+            payload[ephOffset + 2 + ephBytes.Length] = (byte)capability;
+
             return payload;
         }
 
@@ -603,12 +626,25 @@ namespace CoreLib.Transport
         /// shipped - the phone sat there calling it "your mesh" for ever.
         /// </summary>
         internal static bool TryParseHello(byte[] payload, out string name, out string publicKey,
-                                           out string meshName, out string ephemeralKey)
+                                           out string meshName, out string ephemeralKey) =>
+            TryParseHello(payload, out name, out publicKey, out meshName, out ephemeralKey, out _);
+
+        /// <summary>
+        /// Reads a hello, including the capability byte version 4 appended.
+        ///
+        /// <para>Trailing fields stay optional on parse, so a shorter payload still reads and the
+        /// capability simply comes back as unknown - which the arbiter treats as "assume both
+        /// halves", the same optimistic reading it has always used.</para>
+        /// </summary>
+        internal static bool TryParseHello(byte[] payload, out string name, out string publicKey,
+                                           out string meshName, out string ephemeralKey,
+                                           out BleCapability capability)
         {
             name = "";
             publicKey = "";
             meshName = "";
             ephemeralKey = "";
+            capability = BleCapability.Both;
 
             if (payload.Length < 1) return false;
 
@@ -650,6 +686,13 @@ namespace CoreLib.Transport
                 try { ephemeralKey = System.Text.Encoding.UTF8.GetString(payload, ephOffset + 2, ephLength).Trim(); }
                 catch { ephemeralKey = ""; }
             }
+
+            int capOffset = ephOffset + 2 + ephLength;
+            if (payload.Length <= capOffset) return true;
+
+            // Masked rather than cast: a newer peer may set bits this build does not know, and
+            // the two flags that exist must still be read out of the byte correctly.
+            capability = (BleCapability)(payload[capOffset] & (byte)BleCapability.Both);
 
             return true;
         }

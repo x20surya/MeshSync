@@ -65,7 +65,8 @@ public class SyncContentTests
             nameof(SyncContent.BrowseRequest),
             nameof(SyncContent.BrowseReply),
             nameof(SyncContent.FetchRequest),
-            nameof(SyncContent.NotificationReply)
+            nameof(SyncContent.NotificationReply),
+            nameof(SyncContent.MeshKeyOffer)
         };
 
         Assert.Equal(expected.OrderBy(n => n), AllContentTypes().Keys.OrderBy(n => n));

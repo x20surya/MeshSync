@@ -40,6 +40,19 @@ namespace CoreLib.Transport
         /// so it cannot ping-pong between two devices that disagree.
         /// </summary>
         public string MeshName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Which halves of a GATT link the peer's radio can take.
+        ///
+        /// <para>Announced rather than assumed since wire version 4. Every call site used to pass
+        /// <c>BleCapability.Both</c> for the peer, which is documented as "the optimistic reading"
+        /// and is the reason two devices that both cannot advertise sit waiting for each other -
+        /// it resolves by luck, and only once a link already exists.</para>
+        ///
+        /// <para>A peer that predates version 4 sends nothing and is read as
+        /// <see cref="BleCapability.Both"/>, which is exactly the behaviour it had before.</para>
+        /// </summary>
+        public BleCapability Capability { get; set; } = BleCapability.Both;
     }
 
     /// <summary>
