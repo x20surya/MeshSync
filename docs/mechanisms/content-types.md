@@ -5,7 +5,7 @@ platforms: [windows, android, linux, macos]
 tier: either
 code:
   - src/CoreLib/Transport/SyncContent.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Content types
@@ -30,8 +30,11 @@ Everything rides this, so **a new feature inherits authentication rather than ar
 | `0x0A` | `BrowseReply` | a listing | Wi-Fi |
 | `0x0B` | `FetchRequest` | ask for one file | Wi-Fi |
 | `0x0C` | `NotificationReply` | a key and reply text | Either |
+| `0x0D` | `MeshKeyOffer` | the 32-byte mesh discovery key | Either |
 
-> `NotificationReply` (0x0C) is **in flight** and uncommitted as of 2026-08-23.
+`MeshKeyOffer` is how [[mesh-beacon]] reaches a mesh without a re-pair.
+It rides the ordinary authenticated path, so only a paired device can offer one - and it is
+**not a credential**: it decides which advertisements are worth connecting to and nothing else.
 
 Which tier carries what is arithmetic, not preference.
 At about 6.7 KB/s Bluetooth carries anything small and nothing large.

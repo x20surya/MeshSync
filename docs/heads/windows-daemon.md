@@ -6,7 +6,7 @@ tier: either
 code:
   - src/WinDaemon/Program.cs
   - src/WinDaemon/MainWindow.xaml
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Windows daemon

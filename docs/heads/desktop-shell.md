@@ -6,7 +6,7 @@ tier: either
 code:
   - src/DesktopShell/App.axaml.cs
   - src/DesktopShell/MainWindow.axaml
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Desktop shell

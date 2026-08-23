@@ -4,11 +4,11 @@ status: shipped
 platforms: [windows, android, linux, macos]
 tier: either
 code:
+  - src/CoreLib/Transport/Fabric/RouteTimings.cs
   - src/CoreLib/Transport/TcpTransportConnection.cs
   - src/CoreLib/Transport/BleProtocol.cs
-  - src/DesktopCore/Daemon.cs
-  - src/DesktopCore/Bluetooth/LinuxBleCentral.cs
-updated: 2026-08-23
+  - src/CoreLib/Transport/Ble/MeshBeacon.cs
+updated: 2026-08-24
 ---
 
 # Every timeout and interval
@@ -16,6 +16,38 @@ updated: 2026-08-23
 Collected by reading the source.
 Nothing else in the repo lists these together, and most of them have a reason that is not
 guessable from the number.
+
+**Since v0.4 most of them live in one record**, `CoreLib/Transport/Fabric/RouteTimings.cs`, so a
+test can shrink them to milliseconds and nothing in the suite sleeps. The values are the ones that
+were already in the field, not fresh choices.
+
+## The fabric
+
+| Constant | Value | What it does |
+|---|---|---|
+| `HandshakeGrace` | 12s | How long a connected route has to agree a session before it is closed. **The single value that stops a stranger holding the standing link**, and it applies to every route kind on every head. |
+| `MinBackoff` / `MaxBackoff` | 1s / 60s | Per peer, per route kind, keyed on fingerprint so an LE address rotation cannot reset it |
+| `ActiveCeiling` | 8s | Backoff ceiling while somebody is at the device |
+| `IdleCeiling` | 60s | Backoff ceiling with the screen off |
+| `RefusalCooldown` | 5 min | How long a device that produced no session is left alone |
+| `ScanInterval` / `ScanWindow` | 30s / 12s | One discovery window, stopped in a `finally` between rounds |
+| `RotationInterval` | 2 min | How often the radio reconsiders which peers hold its central links |
+| `MaxBleCentralLinks` | 4 | Concurrent outbound radio links |
+| `ReconcileInterval` | 15s | How often the supervisor runs with nothing signalling it |
+| `SupervisorWatchdog` | 60s | A pass that has not finished in this long means the loop is wedged |
+
+`SupervisorWatchdog` exists because `Console.In.ReadLineAsync` is not asynchronous: it ran a
+blocking read inline on a thread D-Bus needed and stopped the entire Bluetooth tier while logging
+nothing. A loop that is alive but wedged looks exactly like a loop that is working.
+
+## The mesh beacon
+
+| Constant | Value | Why |
+|---|---|---|
+| Epoch | 15 min | Matched to the LE private-address rotation window, so it adds no linkability the radio does not already have |
+| Epoch tolerance | &plusmn;1 | 45 minutes of clock skew in total |
+
+See [[mesh-beacon]].
 
 ## Wi-Fi tier
 
@@ -25,10 +57,9 @@ guessable from the number.
 | Peer timeout | 90s | `TcpTransportConnection` |
 | Hello deadline | 10s | `TcpTransportConnection` |
 | Connect timeout, desktop | 6s | `Daemon.DialTimeout` |
-| Connect timeout, bounded | 5s | `MeshLinks`, over `TcpClient.ConnectAsync` which has **no default** |
+| Connect timeout, bounded | 5s | `WiFiRouteProvider.DialTimeout`, over `TcpClient.ConnectAsync` which has **no default** |
 | TCP keepalive | 15s idle, 5s interval, 3 retries | Advisory only |
-| Dial loop, desktop | 15s | `Daemon.DialInterval` |
-| Dial loop, Windows | 20s | `WinDaemon/Program.cs` |
+| Reconcile interval | 15s | `RouteTimings`, one value for every head |
 | Wi-Fi wake timeout | 15s | Both heads, deliberately the same |
 
 The heartbeat was 10s/30s and is now 30s/90s.
@@ -43,11 +74,10 @@ Bluetooth carries presence anyway and notices a vanished peer in 24s.
 | Heartbeat interval | 8s | `BleProtocol` |
 | Peer timeout | 24s | `BleProtocol` |
 | Chunk receipt timeout | 5s | `BleProtocol.AckTimeout` |
-| Scan interval | 30s | `LinuxBleCentral`, matching Windows |
-| Scan window | 12s | `LinuxBleCentral.FindWindow` |
-| Loop tick | 2s | `LinuxBleCentral.Tick` |
-| Identity grace | 12s | `LinuxBleCentral` |
-| Rejection cooldown | 5 min | `LinuxBleCentral` |
+| Scan interval | 30s | `RouteTimings`, shared by every head |
+| Scan window | 12s | `RouteTimings` |
+| Handshake grace | 12s | `RouteTimings`, and it is now the same value on all three |
+| Refusal cooldown | 5 min | `RouteTimings` |
 | Reassembly stale | 30s | `BleReassembler` |
 
 **The scan interval was 4 seconds and ungated.**

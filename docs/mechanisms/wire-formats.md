@@ -6,7 +6,7 @@ tier: either
 code:
   - src/CoreLib/Transport/TcpTransportConnection.cs
   - src/CoreLib/Transport/BleProtocol.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Wire formats

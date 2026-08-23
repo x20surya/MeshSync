@@ -1,12 +1,12 @@
 ---
 type: head
 status: shipped
-platforms: [linux, macos]
+platforms: [linux]
 tier: either
 code:
   - src/DesktopCore/Daemon.cs
   - src/DesktopCore/Paths.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Desktop core

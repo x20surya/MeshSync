@@ -7,6 +7,35 @@ Read this alongside [AGENTS.md](AGENTS.md), which describes the architecture and
 
 ## The most recent session, in short
 
+**v0.4: the connection layer is one shape on every head.**
+440 tests, up from 300; all seven projects build with no warnings.
+
+The Wi-Fi tier was rebuilt into a mesh in v0.2 and the Bluetooth tier never was. Every radio link
+in the project was a nullable field - `_bleLink` and `_blePeripheralLink`, `_bleCentral` and
+`_bleTransport`, `Ble` and `BleServer` - so a device held one radio link whatever the peer count,
+and every question about them was asked of the app rather than of a peer.
+
+`CoreLib.Transport.Fabric` holds one `PeerLink` per paired device now, owning every route to it,
+with one `LinkSupervisor` where five loops used to signal each other through semaphores.
+`CoreLib.Transport.Ble` holds one scheduler over one adapter, several links at a time, and a mesh
+beacon that tells this mesh from anyone else's before a connection is opened.
+
+**The defect this was named after**: a device from somebody else's mesh connected, answered pings -
+ping is answered before identity by design - failed the key agreement, and was *left holding the
+link*. `_ready` stayed true, so `BleConnected` stayed true, so the Bluetooth loop parked on a
+semaphore with no timeout and `WiFiWanted()` concluded Wi-Fi was unnecessary. A phone with no
+working link to anything, indefinitely, reporting "Connected over Bluetooth".
+
+Verified on this machine against a real stranger's phone: it connected, negotiated MTU 517, never
+said who it was, and was dropped at the twelve-second grace and cooled for five minutes. Once the
+mesh key was set the same device was skipped without connecting at all - the round went from
+"1 seen, 1 ours" to "1 seen, 0 ours".
+
+The findings from that session are in **Hard-won findings** under
+[The v0.4 connection refactor](#the-v04-connection-refactor).
+
+### The session before that
+
 **v0.2.3: eighteen connection defects in the Linux and Mac head, and the shared arbitration that
 replaced them.**
 286 tests, up from 252; every project builds with no warnings.
@@ -76,13 +105,15 @@ What is still open is Doze survival overnight, which only time can answer.
 
 ## Where things stand
 
-The whole plan in `.lavish/ble-standby-build-order.html` is implemented.
-The solution builds with **0 warnings** and passes **286 tests**, up from 57 when this began.
+The plan in `.lavish/v04_connection_refactor.html` is implemented through phase seven.
+All seven projects build with **0 warnings** and the suite passes **440 tests**, up from 57 when
+this began.
 
 The shape of the project changed completely.
 It was a phone that dialled one hardcoded laptop, both sharing a single key baked into the source.
-It is now a named mesh of equal devices that authenticate each other by keypair, hold a link per
-peer, and treat Bluetooth as the standing link with Wi-Fi raised on demand.
+It is now a named mesh of equal devices that authenticate each other by keypair, hold **a link
+object per peer owning every route to it**, and treat Bluetooth as the standing link with Wi-Fi
+raised per peer on demand.
 
 ### What changed, in order of how much it matters
 
@@ -668,6 +699,79 @@ with no listener and no links, and the only clue was the absence of `Listening o
 log.
 Worth remembering that a screenshot is evidence of what was drawn, not of what was running.
 
+### The v0.4 connection refactor
+
+**Every head held exactly one radio link, and none of them said so.**
+The scan and the link were the same object on all three platforms, so a device could reach one peer
+over Bluetooth and no more - and all three stopped scanning the moment that one link existed rather
+than when every peer was served. On a three-device mesh with no network, exactly one pair synced
+and the third device was invisible, with nothing in any log saying why.
+
+**A refused peer was not disconnected, and was reported as connected.**
+The Android central and the Windows peripheral both returned from a failed `OpenSession` leaving
+the link up. On Android that meant `_ready` stayed true, `BleConnected` stayed true, the Bluetooth
+loop parked on a semaphore with no timeout, and `WiFiWanted()` - which ended in `!BleConnected` -
+concluded Wi-Fi was unnecessary and dropped every socket. On Windows `_hasSubscriber` stayed true,
+and the central scan loop was gated on it, so a stranger subscribing stopped the machine looking
+for its own peers. Only Linux dropped it.
+
+**`AGENTS.md` claimed all three heads called `BleLinkArbiter`. Two call sites, both in
+`DesktopCore`.**
+Windows called `BleRoleRules.DecideFor` directly with `BleCapability.Both` hardcoded on *both*
+sides; Android called it only to repair a collision and gated its scan on nothing at all. Checking
+a claim like that is one `grep`, and it is worth doing before trusting a document that has been
+right about everything else.
+
+**Android's scan resolved on the first advertisement and remembered nothing.**
+Every install advertises the same service UUID, so the first packet is whoever happened to be
+nearest - and with no cooldown of any kind, a foreign phone sitting closer than your own won every
+round, and the next, and the one after. Linux had fixed exactly this a commit earlier, for itself
+only; `BleCooldowns` is that fix promoted to `CoreLib`.
+
+**Android's collision rule compared no fingerprints.**
+It guarded on "a central link exists and a peripheral link exists" and then dropped one, using the
+fingerprint from whichever hello had just arrived. Phone dialling laptop A while laptop B dials the
+phone is two *good* links, and it would have torn one down. Nobody had run three devices over the
+radio, so nobody had seen it.
+
+**`DisconnectAll` cleared the links and left the handshakes.**
+An accepted socket lives in `_pending` until its hello is read, not in `_links`, so dropping every
+link left one mid-handshake to be promoted a moment later by a hello already in flight - with
+nothing left to drop it again. Under standby that is a socket held open all night. It surfaced as
+a test that failed only on a loaded machine, because losing the race needs the host's hello
+processing to be slower than the caller.
+
+**A route that has been dialled and has not identified itself is still a route.**
+Found by running two daemons, not by reading: the log showed several sockets to one peer inside a
+second. A pending route lives outside the peer's own table - it has no fingerprint yet, so there is
+nowhere to put it - and counting only the adopted ones made every reconcile pass open another.
+
+**The mesh key was minted at startup, when a fresh install has nothing paired.**
+So it was never minted at all. The first pairing is the moment a device becomes a mesh, and that is
+where it mints now. Also found by running it.
+
+**`FirstOrDefault()` on a struct returns `default`, not null.**
+The rotation code held `CentralLink?` and assigned `FirstOrDefault()` to it, which produced a
+non-null nullable wrapping a default struct with a null `Route` inside - so the null check passed
+and the next line threw. Cast to the nullable *before* the call. Caught by the test written in the
+same sitting.
+
+**The beacon cannot be a gate, because not every stack has room for one.**
+Android and BlueZ let a caller put manufacturer data beside the service UUID inside the 31-byte
+legacy advertisement. A Windows `GattServiceProvider` advertises what it likes and has no such
+hook. If a missing beacon meant "not ours", Windows would have been partitioned out of every mesh
+the moment one other device minted a key - a far worse failure than the one the beacon fixes. It is
+a ranking: verified first, silent after, and only a beacon that is present and does not verify is
+refused.
+
+**All three heads build on this machine, which nobody had tried.**
+`dotnet build src/WinDaemon/WinDaemon.csproj -p:EnableWindowsTargeting=true` compiles the WPF and
+WinRT code on Linux, and the Android workload is installed. That turned "CI will tell us" into
+two real errors caught in the same minute they were written: two missing usings, and two methods
+deleted along with the code that called them.
+
+---
+
 ## Testing gotchas
 
 **Global mutable state breaks test isolation before it breaks anything else.**
@@ -700,13 +804,11 @@ are already gone. `--noredact` and reading `android.title` for the live record w
 
 ## Open decisions
 
-**The central announces itself before it knows who it is talking to.**
-The Bluetooth handshake has the central connect, subscribe and send its hello - public key, device
-name and mesh name - and only then does either end authorise. So two meshes in range learn each
-other's device and mesh names, even though nothing is let in and nothing readable crosses. Closing
-it means the central waits for the peripheral's hello, checks whether that key is paired, and only
-answers if it is. Strictly better, and it changes the handshake on all three platforms, so it is a
-protocol decision rather than a fix.
+**~~The central announces itself before it knows who it is talking to.~~ Closed in v0.4.**
+It was closed at the discovery layer rather than by reordering the handshake, which is strictly
+better: the advertisement now carries a mesh beacon, so a scanner tells its own mesh from somebody
+else's *before* it opens a connection and there is nothing to announce to a stranger at all.
+See `docs/mechanisms/mesh-beacon.md`.
 
 **The app name.**
 "Mesh Sync" throughout, including the brand assets, and it has grown more apt: it really is a mesh
@@ -722,6 +824,18 @@ Its only consumer was the `TransportTest` console demo, which now dials loopback
 **Introduction is designed but not surfaced.**
 `PeerRegistry.PeersToIntroduceTo` exists so a new device can learn the set from one scan instead of
 one scan per pair. It needs a confirmation step in the UI before it should be wired up.
+
+**A GATT server serves one central at a time.**
+One reassembler, one ephemeral keypair, one session, on Windows and Android alike. A second
+subscriber's writes land in the same reassembler, so a sequence gap from one discards the other's
+in-flight message and neither peer is told. Both heads say so out loud now rather than corrupting
+silently, and capability-first arbitration makes it the uncommon case - but making that half
+genuinely per subscriber is the work that is left.
+
+**A real Bluetooth SIG company identifier.**
+The mesh beacon ships under `0xFFFF`, the reserved/test id, in `MeshBeacon.CompanyId` so it can be
+swapped without a protocol change. Fine for a self-distributed build and not something to leave in
+a public release indefinitely.
 
 **~~Connection state is per app, not per peer.~~ Being fixed in v0.4.**
 Both apps knew whether *anything* was reachable rather than which peers were, so a device list
@@ -767,8 +881,11 @@ Deleting either forces a re-pair.
 ```
 src/CoreLib/
   Identity/           DeviceIdentity, PeerRegistry, PeerSecurity, PairingWindow
-  Transport/          TcpAcceptor, TcpTransportConnection, MeshLinks, SyncContent,
+  Transport/          TcpAcceptor, TcpTransportConnection, SyncContent,
                       BleFragmenter, BleProtocol, BleRole
+  Transport/Fabric/   MeshFabric, PeerLink, IPeerRoute, RoutePolicy, LinkSupervisor,
+                      RouteTimings, MeshHealth, WiFiRoute
+  Transport/Ble/      BleRadioScheduler, IBleRadio, BleCooldowns, MeshBeacon, MeshDiscovery
 src/WinDaemon/        WPF window with sidebar and device list, GATT server and client,
                       clipboard worker, tray
 src/AndroidClient/    MAUI app with a navigation drawer: Home, Activity, Devices, Settings,
@@ -776,8 +893,10 @@ src/AndroidClient/    MAUI app with a navigation drawer: Home, Activity, Devices
                       network and screen watchers; boot receiver; notification listener; ringer;
                       GATT client and server; Quick Settings tile, PROCESS_TEXT and share targets
 src/assets/           brand handoff: SVG, PNG, style sheet
-tests/CoreLib.Tests/  286 tests: crypto, key agreement, identity, key storage, the registry,
-                      and mesh links over real loopback sockets
+tests/CoreLib.Tests/  440 tests: crypto, key agreement, identity, key storage, the registry,
+                      the per-peer route state machine, the mesh beacon, and a three-device
+                      mesh over real loopback sockets
+                      Fakes/  FakeRoute, FakeBleRadio, FakeClock - nothing in the suite sleeps
 ```
 
 `TrustManager` and `WindowsBleDiscovery` were deleted rather than left alongside their

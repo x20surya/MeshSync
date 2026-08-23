@@ -6,7 +6,7 @@ tier: wifi
 code:
   - src/CoreLib/Transport/TcpTransportConnection.cs
   - src/CoreLib/Transport/TcpAcceptor.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # TCP wire protocol
@@ -25,7 +25,7 @@ Header is 8 bytes (`HeaderSize`).
 | Field | Value |
 |---|---|
 | `magic` | `0x4D53`. Detects a desynchronised stream instead of acting on it |
-| `version` | **3** (`ProtocolVersion`) |
+| `version` | **4** (`ProtocolVersion`) |
 | `kind` | `0` data, `1` ping, `2` pong, `3` hello |
 | `length` | Bounds-checked against `MaxPayloadBytes` **before a byte is allocated** |
 
@@ -43,9 +43,13 @@ body and desynchronised the stream permanently.
 | 1 | Name only |
 | 2 | Hello grew a static public key |
 | 3 | Hello grew an ephemeral key, for forward secrecy |
+| 4 | Hello grew a capability byte, so role arbitration stops assuming |
 
-There is no mixed-version mesh at 3: a peer that cannot offer an ephemeral key cannot agree a
-session key at all, so there is nothing to negotiate down to.
+There is no mixed-version mesh at 3 or above: a peer that cannot offer an ephemeral key cannot
+agree a session key at all, so there is nothing to negotiate down to.
+Version 4 changes nothing about that - the byte is a trailing optional field and a version 3 peer
+simply reads as "both halves", which is the assumption every call site made unconditionally
+before it existed.
 
 `ProtocolVersion` is `internal`, not `private`, **specifically so the tests read it from here**.
 A copy in a test file goes stale the moment it is bumped, and a version mismatch drops a
@@ -55,10 +59,17 @@ for the wrong reason. This has happened twice.
 ## Hello payload (kind 3)
 
 ```
-[nameLen u8][name][keyLen u16][static key][meshLen u8][mesh][ephLen u16][ephemeral key]
+[nameLen u8][name][keyLen u16][static key][meshLen u8][mesh][ephLen u16][ephemeral][caps u8]
 ```
 
 All strings UTF-8. Trailing fields are optional on parse, so a shorter payload still reads.
+
+`caps` is a `BleCapability`: bit 0 central, bit 1 peripheral. Unknown bits are masked off, so a
+newer peer can add one without breaking this build.
+
+**The socket hello is the half of the capability exchange that matters.** A Linux box that cannot
+advertise says so over Wi-Fi, long before the two devices ever meet on the radio - so the phone
+knows to advertise for it rather than both of them scanning. See [[ble-role-negotiation]].
 
 | Field | Cap |
 |---|---|
@@ -83,7 +94,7 @@ would be worse.
 | `HelloTimeout` | 10s | An unidentified socket is dropped |
 | `HeartbeatInterval` | 30s | Ping cadence |
 | `PeerTimeout` | 90s | Silence beyond this is a dead link |
-| Connect timeout | 5s | Bounded in `MeshLinks`, not here |
+| Connect timeout | 5s | Bounded in `WiFiRouteProvider`, not here |
 
 **Do not shorten the heartbeat without reading the comment on it.**
 It was 10s/30s, chosen for fast drop detection before anything weighed the cost.

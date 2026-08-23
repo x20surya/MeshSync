@@ -5,14 +5,13 @@ platforms: [windows, android, linux, macos]
 tier: n/a
 code:
   - tests/CoreLib.Tests
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # What the tests cover
 
-**27 files, 291 `[Fact]`/`[Theory]` attributes, 348 cases** once the theories expand.
-Verified by running it on 2026-08-23: `Failed: 0, Passed: 348`, ten consecutive runs under build
-load, 2 s each.
+**33 files, 375 `[Fact]`/`[Theory]` attributes, 440 cases** once the theories expand.
+Verified by running it on 2026-08-24: `Failed: 0, Passed: 440`, 2 s.
 
 > **The root documents say 286.** They are right about the last commit and wrong about the working
 > tree: the uncommitted notification-reply work adds ten cases across `NotificationProtocolTests`,
@@ -50,6 +49,12 @@ found and no test could have.
 | `KeyProtectionTests` | 5 | Wrap, migrate, refuse-to-replace |
 | `SyncContentTests` | 3 | **Every content type is accounted for** |
 | `RoutePolicyTests` | 14 | Wi-Fi demand per peer, roles, when to scan, when to advertise |
+| `BleRadioSchedulerTests` | 19 | When to scan, who to try, what to remember, who yields a slot, adapter recovery |
+| `MeshBeaconTests` | 17 | Build, verify, rotation, the 31-byte budget, pairing, and the rule |
+| `CapabilityExchangeTests` | 14 | The capability byte on both wires, and forward compatibility |
+| `MeshKeyTests` | 12 | Minting, lowest-key-wins, and a version 1 registry still loading |
+| `MeshDiscoveryTests` | 13 | Ours, unknown and foreign; pairing beacons; adoption |
+| `MeshHealthTests` | 11 | Per peer, why a route is not up, and two devices with one name |
 | `PeerLinkTests` | 11 | The handshake deadline, both collision rules, route preference, backoff |
 | `MeshFabricTests` | 9 | Three peers, links that arrive before identity, revocation |
 | `LinkSupervisorTests` | 9 | Reconciling, idempotence, and the watchdog over a wedged pass |
@@ -70,6 +75,14 @@ These are the ones to read before changing the thing they guard.
 - `Two_links_to_two_different_peers_are_both_kept` - why the collision rule is scoped to one
   `PeerLink`.
 - `A_pass_that_never_returns_is_abandoned_and_counted` - a loop that is alive but wedged.
+- `The_mesh_key_never_reaches_a_session_key` - the beacon is a filter, not a credential, and this
+  is the assertion that keeps it one.
+- `The_advertisement_fits_in_the_legacy_limit` - 31 bytes exactly, so a future field cannot break
+  discovery silently.
+- `A_silent_advertisement_is_still_tried_just_not_first` - why the beacon is a ranking rather than
+  a gate: treating silence as a refusal would partition the mesh.
+- `A_route_already_being_opened_is_not_opened_again` - found by running two daemons, not by
+  reading.
 - `A_handshake_dropped_mid_flight_does_not_promote_itself_afterwards` - why `DisconnectAll` has to
   clear the pending table as well as the link table.
 - `A_wrapped_key_is_not_replaced_by_a_build_that_cannot_unwrap_it` - the [[key-at-rest]] rule that
@@ -97,9 +110,14 @@ together on a run that had passed three times in a row on an idle machine.
 A flaky test is worse than a missing one, because it teaches you to re-run rather than to look.
 
 **Everything above the transports is tested through fakes**, in `tests/CoreLib.Tests/Fakes`.
-`FakeRoute` drives the route state machine by hand and `FakeClock` moves time, so a case covering
-a twelve-second grace or a five-minute cooldown runs in microseconds and nothing in the suite
-sleeps.
+`FakeRoute` drives the route state machine by hand, `FakeBleRadio` scripts advertisements, and
+`FakeClock` moves time - so a case covering a twelve-second grace or a five-minute cooldown runs
+in microseconds and nothing in the suite sleeps.
+
+`FakeBleRadio` is the highest-value piece. Every finding in `HANDOFF.md` under "Bluetooth" is a
+scripted scenario there: a device that answers pings and never identifies itself, a ghost object
+with no RSSI, a phone that rotates its address mid-cooldown, a foreign mesh sitting closer than
+your own.
 `FakeRoute.Establish()` throws unless a session has been agreed first, because there is no
 legitimate path from a connected link to a usable one that skips the key agreement - a fake that
 allowed it would let the fix silently regress.

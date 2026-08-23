@@ -6,9 +6,11 @@ tier: ble
 code:
   - src/CoreLib/Transport/BleProtocol.cs
   - src/CoreLib/Transport/BleFragmenter.cs
+  - src/CoreLib/Transport/Ble/BleRadioScheduler.cs
+  - src/CoreLib/Transport/Ble/IBleRadio.cs
   - src/DesktopCore/Bluetooth/
-  - src/WinDaemon/WindowsBleTransport.cs
-updated: 2026-08-23
+  - src/WinDaemon/WindowsBleRadio.cs
+updated: 2026-08-24
 ---
 
 # Bluetooth tier
@@ -27,9 +29,29 @@ Every other tool here needs a LAN.
 | Framing and the message id counter | `src/CoreLib/Transport/BleProtocol.cs` |
 | Chunking and reassembly | `src/CoreLib/Transport/BleFragmenter.cs` |
 | Roles | `src/CoreLib/Transport/BleRole.cs`, see [[ble-role-negotiation]] |
-| Windows | `src/WinDaemon/WindowsBleTransport.cs`, `WindowsBleCentral.cs` |
-| Linux, over BlueZ and D-Bus | `src/DesktopCore/Bluetooth/` |
-| Android | `AndroidBleTransport.cs`, `AndroidBlePeripheral.cs` |
+| **One radio, many peers** | `src/CoreLib/Transport/Ble/BleRadioScheduler.cs` |
+| **The platform seam** | `src/CoreLib/Transport/Ble/IBleRadio.cs` |
+| **Refusals, remembered three ways** | `src/CoreLib/Transport/Ble/BleCooldowns.cs` |
+| Windows | `WindowsBleRadio.cs`, `WindowsBleCentral.cs`, `WindowsBleTransport.cs` |
+| Linux, over BlueZ and D-Bus | `LinuxBleRadio.cs`, `LinuxBleLink.cs`, `LinuxBleServer.cs` |
+| Android | `AndroidBleRadio.cs`, `AndroidBleTransport.cs`, `AndroidBlePeripheral.cs` |
+
+## One radio, many peers
+
+**Every head used to hold exactly one link.** The scan and the link were the same object, so a
+device could reach one peer over the radio and no more - and all three stopped scanning the moment
+that one link existed rather than when every peer was served.
+
+`BleRadioScheduler` owns the adapter and the peers ask it for what they want. It scans while some
+peer is owed a link, fills the free slots in a round rather than taking a single candidate, and
+rotates peer five in every two minutes by last payload carried - never mid-transfer.
+
+The cap is four. That covers a phone, a laptop and a desktop with headroom and sits inside every
+platform ceiling; a GATT central holds around seven on Android.
+
+What a platform supplies below `IBleRadio` is a scan window, a connect, an advertisement, and an
+honest answer about what the radio can do. Nothing about which peer to reach, when to scan, how
+long to wait, or what to do about a refusal.
 
 ## Why it is held open
 
@@ -108,12 +130,19 @@ Whatever the cause, it is below this code, and the reconnect path covers it.
 
 ## What is still open
 
-- **Bluetooth caps the mesh at a handful of peers.** A GATT central holds around seven on Android.
+- **Bluetooth caps the mesh at a handful of peers.** A GATT central holds around seven on Android,
+  and the scheduler caps at four and rotates.
 - **A phone acting as peripheral carrying real traffic is unverified.** With one phone the role
   rule correctly makes it the central, so nothing has crossed that link.
-- **The central announces itself before it knows who it is talking to.** See the open decision in
-  `HANDOFF.md`: two meshes in range learn each other's device and mesh names.
+- **A GATT server serves one central at a time**, on Windows and Android alike. It holds one
+  reassembler, one ephemeral keypair and one session, so a second subscriber's writes land in the
+  same reassembler and a sequence gap from one discards the other's in-flight message. Both heads
+  now say so out loud rather than corrupting silently. Capability-first arbitration makes this the
+  uncommon case, not the normal one.
+- ~~**The central announces itself before it knows who it is talking to.**~~ Closed by
+  [[mesh-beacon]]: a scanner tells its own mesh from somebody else's before it opens a
+  connection, so nothing is announced to a stranger at all.
 
 ## See also
 
-[[ble-link-arbitration]] · [[ble-role-negotiation]] · [[wire-formats]] · [[wifi-tier]] · [[link-state]]
+[[mesh-beacon]] · [[peer-link]] · [[ble-link-arbitration]] · [[ble-role-negotiation]] · [[wire-formats]] · [[wifi-tier]]

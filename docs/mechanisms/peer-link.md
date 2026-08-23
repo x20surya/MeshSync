@@ -1,6 +1,6 @@
 ---
 type: mechanism
-status: partial
+status: shipped
 platforms: [windows, android, linux]
 tier: either
 code:
@@ -9,7 +9,7 @@ code:
   - src/CoreLib/Transport/Fabric/IPeerRoute.cs
   - src/CoreLib/Transport/Fabric/RoutePolicy.cs
   - src/CoreLib/Transport/Fabric/LinkSupervisor.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Peer links and the fabric
@@ -92,12 +92,43 @@ killed the entire Bluetooth tier - while failing nothing and logging nothing.
 A loop that is alive but wedged looks exactly like a loop that is working.
 A timestamp and a race are the whole cost of catching that class of failure.
 
+## The supervisor's own liveness
+
+`LinkSupervisor` races each reconcile pass against `SupervisorWatchdog` and counts the passes it
+had to abandon, which `MeshHealth` reports.
+
+This exists because `Console.In.ReadLineAsync` is a synchronized reader whose async methods run
+the blocking read inline, so an await that never yielded stopped the thread D-Bus needed and killed
+the entire Bluetooth tier - while failing nothing and logging nothing.
+A loop that is alive but wedged looks exactly like a loop that is working.
+A timestamp and a race are the whole cost of catching that class of failure.
+
+## Seeing it from outside
+
+`MeshHealth` is the projection: every peer, every route, its state, how long it has been in it, and
+why it is not up.
+`meshsyncd`'s `links` command prints it as a table.
+
+```
+PEER            ROUTE            STATE          SINCE   DETAIL
+S21 FE          ble-central      Established    04:12   
+                wifi             Wanted         -       no address recorded; waiting for this peer to dial in
+Framework 13    ble-central      Backoff        00:22   no session inside the handshake grace · retry in 14s
+
+RADIO  scanning · 1/4 links · advertising · last round 4 seen, 1 ours
+SUPERVISOR  last pass 00:01 ago · 412 passes · 0 restarts
+```
+
+"4 seen, 1 ours" is the row that earns the type.
+Diagnosing this used to mean three log files on three devices, one of them through `adb logcat`,
+and inferring state no head could actually report.
+
 ## Status
 
-`CoreLib` and its tests are done, and the socket tier runs through it in a three-device loopback
-test.
-The radio tier, the heads and the mesh beacon are the phases after this one.
+Shipped on all three heads in v0.4.
+The socket tier and the radio tier both run through it, and it is exercised by a three-device
+loopback test and by two daemons on one machine against a real radio.
 
 ## See also
 
-[[link-state]] · [[ble-link-arbitration]] · [[wifi-tier]] · [[bluetooth-tier]] · [[timings]]
+[[mesh-beacon]] · [[link-state]] · [[ble-link-arbitration]] · [[wifi-tier]] · [[bluetooth-tier]] · [[timings]]

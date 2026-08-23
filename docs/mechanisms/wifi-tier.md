@@ -6,9 +6,9 @@ tier: wifi
 code:
   - src/CoreLib/Transport/TcpAcceptor.cs
   - src/CoreLib/Transport/TcpTransportConnection.cs
-  - src/CoreLib/Transport/MeshLinks.cs
-  - src/CoreLib/Transport/NetworkUtil.cs
-updated: 2026-08-23
+  - src/CoreLib/Transport/Fabric/WiFiRoute.cs
+  - src/CoreLib/Transport/Fabric/WiFiRouteProvider.cs
+updated: 2026-08-24
 ---
 
 # Wi-Fi tier
@@ -24,21 +24,29 @@ Carries anything, and is the only tier that carries images or files.
 |---|---|
 | Listener | `src/CoreLib/Transport/TcpAcceptor.cs` |
 | One framed session with one peer | `src/CoreLib/Transport/TcpTransportConnection.cs` |
-| One session per paired device, fanning out on send | `src/CoreLib/Transport/MeshLinks.cs` |
+| That session as a route | `src/CoreLib/Transport/Fabric/WiFiRoute.cs` |
+| Listening and dialling, both producing routes | `src/CoreLib/Transport/Fabric/WiFiRouteProvider.cs` |
+| One route per peer, fanning out on send | `src/CoreLib/Transport/Fabric/MeshFabric.cs`, see [[peer-link]] |
 | Is there a network at all | `src/CoreLib/Transport/NetworkUtil.cs` |
 
 ## When Wi-Fi is wanted
 
-Any one of these:
+**Per peer, since v0.4.** Any one of these, asked about one device:
 
 - the screen is on
-- a send needs it
-- a peer has asked for it, through a `ControlWakeWiFi` frame
-- **Bluetooth is not up**
+- a send is holding it *for that peer*
+- *that peer* has asked for it, through a `ControlWakeWiFi` frame
+- **nothing is carrying presence for that peer**
 
 That last condition is load-bearing.
 Without it, losing Bluetooth would leave a device with no link at all, and inverting the tiers
 would have been a regression rather than an improvement.
+
+It used to be one boolean for the whole device, ending in `!BleConnected`, so a radio link to the
+laptop made a phone conclude Wi-Fi was unnecessary and drop its socket to the desktop as well - a
+device the radio link could not reach and never claimed to.
+The rule now lives in `RoutePolicy.WiFiWantedFor`, which is a pure function and therefore a table
+of test cases.
 
 The wake frame exists because a device cannot simply dial its peer on demand: either end may be
 the listener.
@@ -58,6 +66,9 @@ instead of evicting the first.
 Both devices listen and dial, so two can dial each other at once.
 The link opened by the **lower fingerprint** survives.
 Both ends compute that from values they already exchanged, so there is no negotiation round trip.
+
+Since v0.4 the rule lives in `PeerLink.SettleSameKind`, which is scoped to one peer - so two links
+to two *different* peers can never be mistaken for a collision.
 
 `AGENTS.md` requires that any change to connection handling stays correct when two devices collide,
 and forbids adding a second rule beside this one.
@@ -103,4 +114,4 @@ Now 30s with a 90s timeout.
 
 ## See also
 
-[[bluetooth-tier]] · [[wire-formats]] · [[link-state]] · [[address-handover]] · [[file-transfer]]
+[[peer-link]] · [[bluetooth-tier]] · [[wire-formats]] · [[link-state]] · [[address-handover]] · [[file-transfer]]

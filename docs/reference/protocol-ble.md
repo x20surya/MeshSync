@@ -6,7 +6,7 @@ tier: ble
 code:
   - src/CoreLib/Transport/BleProtocol.cs
   - src/CoreLib/Transport/BleFragmenter.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Bluetooth wire protocol
@@ -29,6 +29,10 @@ is used or needed** and "forget this device" in Bluetooth settings changes nothi
 
 **Every install shares this service UUID.** That is what makes a scan find other people's meshes,
 and it is the whole reason [[ble-link-arbitration]] has a cooldown.
+
+Since v0.4 the advertisement also carries six bytes of [[mesh-beacon]] in a manufacturer-data
+section, where the platform has room for one, so a scanner can tell its own mesh from somebody
+else's *before* it connects.
 
 ## Frame discrimination
 
@@ -101,8 +105,12 @@ Newline-separated, which a base64 key can never contain, so fields are read posi
 shorter payload still parses:
 
 ```
-publicKey \n deviceName \n meshName \n ephemeralKey
+publicKey \n deviceName \n meshName \n ephemeralKey \n capability
 ```
+
+The fifth field arrived with wire version 4 and is a `BleCapability` in decimal. A payload that
+stops at four reads as "both halves", which is what every call site assumed unconditionally
+before it existed.
 
 A hello is written **in one go rather than through `BleFragmenter`**, because an extended frame is
 marked by a leading zero and a fragmented chunk starts with its message id instead, so the two
@@ -167,4 +175,4 @@ It sends `0x03` over the link that is already open and the peer raises Wi-Fi in 
 
 ## See also
 
-[[bluetooth-tier]] · [[ble-link-arbitration]] · [[ble-role-negotiation]] · [[protocol-payloads]] · [[protocol-tcp]]
+[[mesh-beacon]] · [[bluetooth-tier]] · [[ble-link-arbitration]] · [[ble-role-negotiation]] · [[protocol-payloads]] · [[protocol-tcp]]

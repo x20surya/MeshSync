@@ -48,7 +48,7 @@ dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj -- --data ~/dev2 --port 
 `--data` moves the whole data directory; `--port` moves the listener.
 Both are needed: they cannot share either.
 
-This arrangement is what found the `MeshLinks` port bug and the `WouldLosePort` bug, because in
+This arrangement is what found the two-ports bug and the `WouldLosePort` bug, because in
 the field every device listens on 45001 and neither one shows.
 See [[on-disk-formats]].
 
@@ -91,7 +91,18 @@ FUSE, such as a CI runner or a container.
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-296 cases as of 2026-08-23, in under a second. See [[testing]].
+440 cases as of 2026-08-24, in about two seconds. See [[testing]].
+
+**All three heads build on Linux**, which is worth knowing before assuming CI is the only check
+for the two that are not native here.
+
+```bash
+dotnet build src/WinDaemon/WinDaemon.csproj -p:EnableWindowsTargeting=true -warnaserror
+dotnet build src/AndroidClient/AndroidClient.csproj -f net10.0-android -warnaserror
+```
+
+Without `EnableWindowsTargeting` the Windows daemon fails at `NETSDK1100` before it compiles a
+line, which reads like an unsupported project rather than a missing flag.
 
 **Every project holds a zero-warning bar.**
 An incremental build will not re-report warnings, so use `-t:Rebuild` when you need to be sure.

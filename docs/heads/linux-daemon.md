@@ -6,7 +6,7 @@ tier: either
 code:
   - src/LinuxDaemon/Program.cs
   - src/LinuxDaemon/Shell.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Linux daemon
@@ -53,7 +53,7 @@ Both are needed: two devices can share neither a data directory nor a listening 
 dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj -- --data ~/dev2 --port 45002
 ```
 
-This setup is what found the `MeshLinks` port bug: the second device dialled its peer's bare
+This setup is what found the two-ports bug: the second device dialled its peer's bare
 address on its own listening port, which is itself, and logged
 `Refusing a connection from this device's own identity` in a loop.
 See [[wifi-tier]].

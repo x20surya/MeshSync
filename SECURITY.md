@@ -75,12 +75,31 @@ These are real and stated deliberately.
   everything you copy. There is no partial trust and no per-device permission.
 - **Denial of service.** Anything within Bluetooth range can occupy the GATT server or make
   connection attempts. Nothing rate-limits that.
-- **Your device name and mesh name, to anything in Bluetooth range running this app.**
-  Every install advertises the same service UUID, so a scan finds every Mesh Sync device nearby and not only the ones in your mesh.
-  The Bluetooth handshake sends a hello - public key, device name, mesh name - before either end has authorised the other, so two meshes in one room learn each other's names.
-  Nothing is let in and nothing you copy crosses, but the names are disclosed.
-  Closing it means the connecting device waits for the other's hello, checks whether that key is paired, and answers only if it is.
-  That changes the handshake on all three platforms, so it is a protocol decision rather than a fix, and HANDOFF.md records it as an open one.
+- **That a Mesh Sync device is present, to anything in Bluetooth range.**
+  Every install advertises the same service UUID, so a scan finds every Mesh Sync device nearby.
+  The six-byte mesh beacon beside it rotates every fifteen minutes, matched to how often an LE
+  private address rotates, so it adds no way of following a device that the radio does not already
+  give away.
+
+  ~~Your device name and mesh name~~ are no longer disclosed. Until v0.4 the Bluetooth handshake
+  sent a hello - public key, device name, mesh name - before either end had authorised the other,
+  so two meshes in one room learned each other's names. A scanner now tells its own mesh from
+  somebody else's before it opens a connection, so there is nothing to announce to a stranger.
+
+  Where a platform cannot publish a beacon - a Windows GATT service provider has no room for one
+  beside a 128-bit service UUID - a scanner still connects to it and the old disclosure still
+  applies in that direction.
+
+- **The mesh beacon is a filter, not a credential, and must not be read as one.**
+  Every device in a mesh shares a 32-byte discovery key, distributed over already-authenticated
+  links. It decides which advertisements are worth connecting to and **nothing else**: no session
+  key is derived from it, nothing authorises on it, and a device holding it is no closer to reading
+  anything. Forging or replaying a beacon buys one wasted connection attempt, which is what every
+  stranger cost before it existed.
+
+  It ships under Bluetooth SIG company identifier `0xFFFF`, the reserved/test value. That is
+  honest for a self-distributed build and should be replaced with a registered identifier before
+  any wider release; it is a single constant and changing it is not a protocol change.
 
 ## Pairing, and the thing it used to get wrong
 

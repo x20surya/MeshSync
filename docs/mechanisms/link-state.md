@@ -1,11 +1,11 @@
 ---
 type: mechanism
-status: partial
+status: shipped
 platforms: [windows, android, linux, macos]
 tier: n/a
 code:
   - src/CoreLib/Transport/LinkState.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Link state
@@ -24,22 +24,25 @@ It is one of the three things that moved out of `src/WinDaemon` into `CoreLib` i
 [[transport-preference]] and [[ble-link-arbitration]], because the Linux head had reimplemented
 each of them differently or not at all and **every one of those divergences was a bug**.
 
-## The gap that is left
+## It is a view now, not a source
 
-`LinkState` is still an *aggregate*: it answers per app.
+`LinkState` is still an *aggregate* - "is anything reachable, and over what" - and that is the
+right question for a tray icon and a status line.
 
-| Head | Granularity |
+What changed in v0.4 is where it gets its answer. Two transports used to write into it directly,
+so it was the only thing that knew, and it could hold exactly one connected peer name. Every head
+now derives it from [[peer-link]], and anything that needs the per-peer answer asks the fabric
+instead.
+
+| Question | Ask |
 |---|---|
-| Linux and macOS | **per peer**, through `Daemon.IsConnectedTo` and `IsBluetoothConnectedTo` |
-| Windows | per app |
-| Android | per app |
+| Is anything reachable, and over what | `LinkState` |
+| Is *this peer* reachable, and over what | `MeshFabric.LinkTo(fingerprint)` |
+| Why is this peer not reachable | `MeshHealth` |
 
-So the desktop head's device list names the tier each device is actually on.
-Windows can only mark one device connected, and **guesses which by comparing names**, which breaks
-with two devices called the same thing.
-
-Bringing the per-peer answer to Windows is the remaining half, and it is the thing that has to
-grow when a third device arrives.
+**The gap this note used to record is closed.** Windows and Android answered per app, so each
+could mark only one device connected and guessed which by comparing names - which broke outright
+with two devices called the same thing. Both device lists ask per peer now.
 
 ## The rule this note exists to carry
 
@@ -50,4 +53,4 @@ copy of a rule.
 
 ## See also
 
-[[ble-link-arbitration]] · [[transport-preference]] · [[wifi-tier]] · [[bluetooth-tier]]
+[[peer-link]] · [[ble-link-arbitration]] · [[transport-preference]] · [[wifi-tier]] · [[bluetooth-tier]]

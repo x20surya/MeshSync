@@ -73,10 +73,10 @@ dotnet run --project src/WinDaemon/WinDaemon.csproj
 
 It runs in the tray and enables run-on-startup the first time.
 
-### Linux and macOS
+### Linux
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
-The window and the tray icon are Avalonia, so the same build runs on both.
+The window and the tray icon are Avalonia.
 
 ```bash
 dotnet run --project src/DesktopShell/DesktopShell.csproj
@@ -90,7 +90,7 @@ dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj
 
 On Wayland the clipboard needs nothing installed: the app speaks `ext-data-control` to the
 compositor itself, so it is told when the selection changes rather than polling for it.
-X11 sessions fall back to `xclip` or `xsel`, and macOS uses `pbcopy` and `pbpaste`.
+X11 sessions fall back to `xclip` or `xsel`.
 With none of those the desktop still holds links and still sends; it just cannot reach the
 clipboard.
 
@@ -99,9 +99,11 @@ service, connects, and holds the link, so text still crosses with no network at 
 advertise yet, which means the phone takes the peripheral role - the role rules were built for
 exactly that.
 
-macOS is Wi-Fi only and will stay that way for longer. CoreBluetooth can only be reached from a
-target framework that needs macOS and Xcode to build, so giving the Mac head Bluetooth means
-splitting it out of the shared Linux build. That split is planned rather than done.
+macOS is parked. Nothing has ever launched the Mac binary, it has no radio, no key protector and
+no clipboard watcher, and carrying an unverified platform through the v0.4 transport refactor was
+maintaining a claim nobody had checked. The cross-publish target is still in the solution, and the
+radio interface is shaped so CoreBluetooth drops in behind it when somebody wants it - which needs
+macOS and Xcode to build, and therefore splits the Mac head out of the shared Linux build.
 
 ### Packages
 
@@ -159,10 +161,10 @@ it does not.
   and the logging sink.
 - **`src/WinDaemon`** - WPF window with a sidebar and a tray icon.
   Win32 clipboard listener, TCP listener and dialler, Bluetooth GATT server and client.
-- **`src/DesktopCore`** - the running device for Linux and macOS, with no UI.
-  Identity and registry loading, the Wi-Fi links, payload dispatch, the dial loop, pairing, and
-  the clipboard behind an interface so a session with no helper still runs.
-- **`src/DesktopShell`** - Avalonia window and tray icon for Linux and macOS.
+- **`src/DesktopCore`** - the running device for Linux, with no UI.
+  Identity and registry loading, the route providers, payload dispatch, pairing, the Bluetooth
+  tier over BlueZ, and the clipboard behind an interface so a session with no helper still runs.
+- **`src/DesktopShell`** - Avalonia window and tray icon for Linux.
   The same sidebar, palette and type scale as the Windows daemon.
 - **`src/LinuxDaemon`** - the same core with a terminal in front of it, for a headless machine or
   for driving from a script.
@@ -171,8 +173,10 @@ it does not.
   screen watchers; a boot receiver; a notification listener; TCP listener and dialler; Bluetooth
   GATT client and server; and the Quick Settings tile, `PROCESS_TEXT` and share targets.
 - **`src/assets`** - brand handoff: the mark, the palette and the illustrations.
-- **`tests/CoreLib.Tests`** - transport tests over real loopback sockets, key agreement, wire
-  formats, Bluetooth role rules and the peer registry.
+- **`tests/CoreLib.Tests`** - 440 tests: a three-device mesh over real loopback sockets, the
+  per-peer route state machine, the mesh beacon and its advertisement budget, key agreement, wire
+  formats, Bluetooth role rules and the peer registry. A fake radio replays every hard-won
+  Bluetooth finding as a scripted scenario.
 
 ## Status
 
@@ -180,15 +184,23 @@ Clipboard, files, find-my-device and notification mirroring are built and covere
 The clipboard tier has been exercised on real hardware; the rest has not been near a phone since
 it was written, which [HANDOFF.md](HANDOFF.md) sets out honestly.
 
-Windows and Android are the finished platforms.
-Linux and macOS share a desktop shell that is built and runs.
+Windows, Android and Linux all run the same connection layer as of v0.4: one link object per
+paired device owning every route to it, one supervisor over the lot, and a radio scheduler that
+holds several Bluetooth links at once rather than one.
 Clipboard, files, find my device and notification mirroring all work, mirrored notifications land
 in the desktop's own notification centre, and the clipboard needs nothing installed on Wayland.
 Linux has the Bluetooth tier as a central and wraps its identity key with the desktop keyring.
-Devices from another mesh are found by any scan, because the service is the same everywhere; they are refused, remembered, and then left alone.
-Which device dials and which advertises is settled by the same rule on all three platforms, so two devices in range no longer each open a link to the other.
-macOS has neither, and will be separated from the Linux build when it gets Bluetooth.
-The Linux head has been proven against a phone over Bluetooth with no network between the two, as well as between two Linux devices.
+
+**A device from another mesh is now told apart before anything connects.** Every install
+advertises the same service UUID, so a scan finds all of them; the advertisement carries six bytes
+that say which mesh a device belongs to, and a scanner skips anything whose tag it cannot open.
+It decides who to *try* and never who is let in - pairing and the per-connection key agreement are
+unchanged.
+
+Two devices can now pair with no network at all, which was the last step that did not honour this
+project's own central claim.
+
+macOS is parked; see the note above.
 
 An iOS companion is planned as receive-mostly, because iOS does not let any app watch the
 clipboard in the background and a backgrounded iPhone cannot be found over Bluetooth by anything

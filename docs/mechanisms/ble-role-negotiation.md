@@ -5,7 +5,7 @@ platforms: [windows, android, linux]
 tier: ble
 code:
   - src/CoreLib/Transport/BleRole.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # BLE role negotiation

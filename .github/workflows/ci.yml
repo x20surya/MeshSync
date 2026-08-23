@@ -105,9 +105,10 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      # Cross-published from Linux during development, but built here on a real Mac so the
-      # Cocoa backend and the osx-arm64 runtime pack are exercised on the platform that has
-      # to run them. Signing and notarising are not done here and still need a certificate.
+      # macOS is parked as a supported platform - nothing has ever launched this binary, and
+      # docs/platform-matrix.md no longer claims it. The job stays because keeping the target
+      # compiling costs one runner and is what makes picking it back up cheap; letting it rot
+      # is what makes it expensive. Signing and notarising are not done here.
       - name: Build
         run: dotnet build src/DesktopShell/DesktopShell.csproj -r osx-arm64 -warnaserror
 

@@ -1,6 +1,6 @@
 ---
 type: meta
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Platform matrix
@@ -10,39 +10,49 @@ This is where the vault earns its keep: nothing else in the repo says all of thi
 
 Legend: **Y** works · **P** partial, see the note · **-** not built · **n** never will be
 
+**macOS is out of this table for now.** Nothing has ever launched the Mac binary, it has no radio,
+no key protector and no clipboard watcher, and carrying an unverified column through the v0.4
+transport refactor was maintaining a claim nobody had checked.
+The cross-publish target stays in the solution and `IBleRadio` is shaped so CoreBluetooth drops in
+behind it. See [[desktop-core]].
+
 ## Features by head
 
-| | Windows | Android | Linux | macOS |
-|---|---|---|---|---|
-| [[clipboard-sync]] receive | Y | Y | P | P |
-| [[clipboard-sync]] send, automatic | Y | n | P | P |
-| [[clipboard-sync]] send, user-initiated | Y | Y | Y | Y |
-| [[file-transfer]] | Y | Y | Y | Y |
-| [[notification-mirroring]] source | - | Y | - | - |
-| [[notification-mirroring]] display | Y | Y | Y | P |
-| [[find-my-device]] | Y | Y | Y | Y |
-| [[remote-browse]] | Y | Y | Y | Y |
-| [[pairing]] | Y | Y | Y | Y |
-| [[transport-preference]] | Y | - | Y | Y |
+| | Windows | Android | Linux |
+|---|---|---|---|
+| [[clipboard-sync]] receive | Y | Y | P |
+| [[clipboard-sync]] send, automatic | Y | n | P |
+| [[clipboard-sync]] send, user-initiated | Y | Y | Y |
+| [[file-transfer]] | Y | Y | Y |
+| [[notification-mirroring]] source | - | Y | - |
+| [[notification-mirroring]] display | Y | Y | Y |
+| [[find-my-device]] | Y | Y | Y |
+| [[remote-browse]] | Y | Y | Y |
+| [[pairing]] over Wi-Fi | Y | Y | Y |
+| [[pairing]] with no network | Y | Y | P |
+| [[transport-preference]] | Y | - | Y |
 
 ## Tiers by head
 
-| | Windows | Android | Linux | macOS |
-|---|---|---|---|---|
-| [[wifi-tier]] | Y | Y | Y | Y |
-| [[bluetooth-tier]] central | Y | Y | Y | n |
-| [[bluetooth-tier]] peripheral | Y | Y | - | n |
-| [[ble-link-arbitration]] | Y | Y | Y | n |
+| | Windows | Android | Linux |
+|---|---|---|---|
+| [[wifi-tier]] | Y | Y | Y |
+| [[bluetooth-tier]] central | Y | Y | Y |
+| [[bluetooth-tier]] peripheral | Y | Y | - |
+| [[bluetooth-tier]] several links at once | Y | Y | Y |
+| [[ble-link-arbitration]] | Y | Y | Y |
+| [[mesh-beacon]] published | - | Y | Y |
+| [[mesh-beacon]] checked before connecting | Y | Y | Y |
 
 ## Storage and platform services
 
-| | Windows | Android | Linux | macOS |
-|---|---|---|---|---|
-| [[key-at-rest]] wrapping | DPAPI | Keystore | Keyring | - |
-| [[transport-preference]] store | Registry | - | File | File |
-| [[link-state]] answers per peer | - | - | Y | Y |
-| [[dbus-ipc]] | n | n | P | n |
-| Autostart | Y | Y | Y | Y |
+| | Windows | Android | Linux |
+|---|---|---|---|
+| [[key-at-rest]] wrapping | DPAPI | Keystore | Keyring |
+| [[transport-preference]] store | Registry | - | File |
+| [[peer-link]] answers per peer | Y | Y | Y |
+| [[dbus-ipc]] | n | n | P |
+| Autostart | Y | Y | Y |
 
 ## The entries worth explaining
 
@@ -60,14 +70,17 @@ GNOME implements neither data-control protocol, so GNOME Wayland has no backgrou
 BlueZ accepts the scan and rejects the exported GATT tree, so the peripheral half stands aside.
 That is a supported arrangement rather than a missing half, because
 [[ble-role-negotiation]] is capability first.
+It also means two Linux machines still cannot meet over Bluetooth, and pairing with no network is
+therefore `P` there: a Linux box can join a phone that way, but not another Linux box.
 
-**macOS has no Bluetooth and will not get it here.**
-CoreBluetooth needs a target framework that only builds on a Mac with Xcode, which would end the
-cross-publish from Linux.
-The Mac head is to be split out when its radio is built.
-See [[desktop-core]].
+**Windows publishes no beacon and is still found.**
+A Windows GATT service provider advertises what it likes and has no room for manufacturer data
+beside a 128-bit service UUID.
+A missing beacon is read as "unknown, try after anything that verified" rather than as a refusal -
+which is the whole reason [[mesh-beacon]] is a ranking and not a gate.
+Windows still checks every beacon it *sees*, so it refuses other meshes as well as anything else.
 
-**`link-state` per peer on Windows is the remaining half.**
-Windows answers per app, so it can mark only one device connected and guesses which by name,
-which breaks with two devices called the same thing.
-See [[link-state]].
+**Every head answers per peer now.**
+Windows and Android used to answer per app, so each could mark only one device connected and
+guessed which by comparing names - which broke outright with two devices called the same thing.
+See [[peer-link]].

@@ -64,6 +64,8 @@ dotnet run --project src/LinuxDaemon/LinuxDaemon.csproj
 Its shell takes `pair`, `uri`, `join`, `confirm`, `reject`, `forget`, `peers`, `status`, `send`,
 `clip`, `clipset`, `ring`, `unring`, `bt`, `bluetooth`, `transport`, `name`, `help` and `quit`.
 `transport` shows or sets which links this device offers - `both`, `wifi` or `ble` - and applies it without a restart.
+`links` prints every route to every peer and why any of them is not up, which is the fastest way to
+tell "Bluetooth is broken" from "two devices seen, neither in this mesh".
 `--no-shell` holds the links open with nobody to take commands from, which is what a service manager wants and what to reach for when driving it from a script.
 
 `--data` and `--port` together run a second device on one machine, which is how the mesh is
@@ -87,8 +89,16 @@ dotnet publish src/DesktopShell/DesktopShell.csproj -c Release -r osx-arm64 --se
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-286 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
+440 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
 warnings, so use `-t:Rebuild` when you need to be sure.
+
+**All three heads build on Linux**, which is worth knowing before assuming CI is the only check.
+The Windows daemon needs one flag, and the Android workload is already installed here.
+
+```bash
+dotnet build src/WinDaemon/WinDaemon.csproj -p:EnableWindowsTargeting=true -warnaserror
+dotnet build src/AndroidClient/AndroidClient.csproj -f net10.0-android -warnaserror
+```
 
 `src/CryptoTest` and `src/TransportTest` are console demos kept from early development.
 They print to the screen and assert nothing; the real coverage is in `tests/CoreLib.Tests`.
@@ -134,17 +144,24 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
 - `src/CoreLib`: cross-platform logic shared by both apps.
   - `Identity/`: the device keypair, the peer registry, per-connection session keys and the
     agreement behind them, key-at-rest wrapping, the pairing window and its confirmation queue.
-  - `Transport/`: the TCP acceptor and framed session, the per-peer mesh link table, Bluetooth
-    fragmentation, protocol constants and role negotiation, content types, file transfer and
-    notification framing.
-    Also the three things every head shares rather than answers for itself: `LinkState` (is anything reachable and over which link, Wi-Fi winning when both are up), `TransportSettings` with `ITransportPreferenceStore` (which links a device may offer, kept in the registry on Windows and in a file elsewhere), and `BleLinkArbiter` (should this device be scanning at all, and which of two links to one peer dies).
+  - `Transport/Fabric/`: **the connection layer every head runs on.** One `PeerLink` per paired
+    device owning every route to it, one supervisor with a watchdog reconciling what exists
+    against what `RoutePolicy` wants, and the socket route.
+  - `Transport/Ble/`: one scheduler over one adapter holding several links at a time, refusals
+    remembered three ways, and the mesh beacon that tells this mesh from anyone else's before a
+    connection is opened.
+  - `Transport/`: the TCP acceptor and framed session, Bluetooth fragmentation, protocol constants
+    and role negotiation, content types, file transfer and notification framing.
+    Also the shared answers no head may reimplement: `LinkState` (is anything reachable and over which link, derived from the fabric now), `TransportSettings` with `ITransportPreferenceStore` (which links a device may offer), and `BleLinkArbiter` (which half of a radio link this device takes for a given peer).
   - Crypto (AES-256-GCM, Argon2id for the future vault), echo suppression, the in-memory activity
     log, and the logging sink.
-- `src/DesktopCore`: the running device, shared by both Linux and Mac heads.
-  Identity and registry loading, the Wi-Fi links, payload dispatch, the dial loop, pairing and
-  the pluggable clipboard bridge.
-  On Linux it also holds the Bluetooth tier over BlueZ, gated by `BleLinkArbiter` so it never dials a peer it should be advertising to.
-  No UI and no platform assumptions beyond POSIX paths.
+- `src/DesktopCore`: the running device for Linux.
+  Identity and registry loading, the route providers, payload dispatch, pairing and the pluggable
+  clipboard bridge. The connection layer itself is `CoreLib.Transport.Fabric`; this supplies
+  conditions and storage.
+  It also holds the Bluetooth tier over BlueZ - `LinuxBleRadio` scans and connects, `LinuxBleLink`
+  is one link - central only, because BlueZ rejects the exported GATT tree.
+  No UI and no platform assumptions beyond POSIX paths. macOS is parked; see `docs/platform-matrix.md`.
 - `src/DesktopShell`: the Avalonia window and tray icon for Linux and macOS.
   The same sidebar, palette and type scale as the Windows daemon, on a toolkit that builds on
   either platform.
@@ -161,4 +178,6 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
   and dialler, Bluetooth GATT client and server, the ringer, and the Quick Settings tile,
   `PROCESS_TEXT` and share targets.
 - `src/assets`: brand handoff, the source of truth for the mark, palette and illustrations.
-- `tests/CoreLib.Tests`: 286 tests, including transport tests over real loopback sockets, the link-state and transport-preference rules, and the arbitration that stops two devices opening two Bluetooth links to each other.
+- `tests/CoreLib.Tests`: 440 tests, including a three-device mesh over real loopback sockets, the
+  per-peer route state machine, the mesh beacon and its 31-byte advertisement budget, and a fake
+  radio that replays every Bluetooth finding in `HANDOFF.md` as a scripted scenario.

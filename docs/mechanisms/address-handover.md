@@ -6,7 +6,7 @@ tier: either
 code:
   - src/CoreLib/Transport/SyncContent.cs
   - src/CoreLib/Transport/Fabric/WiFiRouteProvider.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Address handover

@@ -7,7 +7,7 @@ code:
   - src/CoreLib/Transport/TransportPreference.cs
   - src/WinDaemon/RegistryTransportPreferenceStore.cs
   - src/DesktopCore/Platform/FileTransportPreferenceStore.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Transport preference

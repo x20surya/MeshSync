@@ -26,7 +26,7 @@ Every note has the same four sections, in the same order:
 - **One note, one thing.** A feature, a mechanism, a head, or a reference page.
 - **A `reference/` page may restate the code**, because being exact is its job: byte layouts,
   constants, timings. Everywhere else, cite the file instead.
-- **Never restate code.** Cite `src/CoreLib/Transport/MeshLinks.cs` and let the reader jump.
+- **Never restate code.** Cite `src/CoreLib/Transport/Fabric/MeshFabric.cs` and let the reader jump.
 - **Never restate `AGENTS.md` or `HANDOFF.md`.** Link to the heading.
   Those two are the source of truth for rules and findings; this vault indexes them.
 - **Link generously.** A wikilink to a note that does not exist yet is a to-do, not an error -

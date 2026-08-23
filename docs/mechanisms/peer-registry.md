@@ -6,7 +6,7 @@ tier: n/a
 code:
   - src/CoreLib/Identity/PeerRegistry.cs
   - src/CoreLib/Identity/PeerSecurity.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Peer registry

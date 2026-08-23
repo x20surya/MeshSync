@@ -6,7 +6,7 @@ tier: either
 code:
   - src/AndroidClient/SyncManager.cs
   - src/AndroidClient/Platforms/Android/SyncForegroundService.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Android client

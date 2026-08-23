@@ -59,10 +59,12 @@ That second step is what closes the race an attacker on the same network could o
   Length-prefixed TCP on port 45001.
   Carries anything, and is the only tier that carries images.
 
-Wi-Fi is wanted when any of these hold: the screen is on, a send needs it, a peer has asked for
-it, or Bluetooth is not up.
+Wi-Fi is wanted **per peer**, when any of these hold for that device: the screen is on, a send is
+holding it for that peer, that peer has asked for it, or nothing is carrying presence for it.
 **That last one is load-bearing.** Without it, losing Bluetooth would leave a device with no link
 at all, and inverting the tiers would have been a regression rather than an improvement.
+It was one boolean for the whole device until v0.4, so a radio link to one peer dropped the socket
+to every other.
 
 A device holding something Bluetooth cannot carry sends a `ControlWakeWiFi` frame over the open
 link, and its peer raises Wi-Fi in response.
@@ -81,16 +83,55 @@ Every device listens **and** dials on both tiers.
   central whatever its fingerprint sorts to.
   The naive "lower fingerprint advertises" rule agrees on an arrangement neither device can
   perform.
+  Each device **announces** its capability in both hellos since wire version 4, so the rule stops
+  assuming `Both` for the peer - which is what made two devices that both cannot advertise sit
+  waiting for each other.
 
-### 4. One session per peer, and no relaying
+### 4. One link object per peer, and no relaying
 
-`TcpAcceptor` listens, `TcpTransportConnection` is one framed session with one peer, and
-`MeshLinks` holds one of those per paired device and fans out on send.
+**`CoreLib.Transport.Fabric` is the whole connection layer, and every head runs on it.**
+
+`MeshFabric` holds one `PeerLink` per paired device, and a `PeerLink` owns every route to that
+device - a socket, a radio link this device opened, a radio link the peer opened. A route is one
+small interface with one state machine, and `LinkSupervisor` reconciles what exists against what
+`RoutePolicy` wants.
+
+**The state machine is the design, not an implementation detail.** There is no transition into
+`Established` that does not pass through a session, and `Handshaking` has a deadline. A device that
+connects, answers pings and never agrees a session therefore cannot reach a state anything will
+park on. Two of the three heads used to let exactly that happen.
+
+**Every question is asked of a peer.** "Is anything reachable" is still a real question and
+`LinkState` still answers it, but it is derived now rather than being the only thing that knows.
+Anything that needs to know about one device asks the fabric.
 
 Every device talks to every other directly and nobody forwards anything, so there is no routing
 and no loops to prevent.
 The trade is that it assumes a complete graph: two devices that cannot reach each other simply do
 not sync, rather than being bridged by a third.
+
+### 4b. One radio, many peers, and a beacon that says which mesh
+
+`BleRadioScheduler` owns the adapter, because N peers cannot each own a scan: Android silently
+throttles an app past about five scan start/stops in thirty seconds, and an active scan contends
+with every live link for the same antenna.
+
+It scans while **some peer is owed a link** - not while no link exists, which is what stopped the
+second and third device in a mesh from ever being reached over the radio. It fills the free slots
+in a round rather than taking a single candidate, caps at four concurrent links, and rotates a
+waiting peer in every two minutes by last payload carried.
+
+**The advertisement carries six bytes that say which mesh a device belongs to.** A scanner
+verifies the tag against a 32-byte mesh key and skips anything that does not match, before opening
+a connection. That closes the leak where a central announced its device and mesh name to anything
+that answered.
+
+**The beacon decides who to *try*, never who is let in**, and it is a **ranking, not a gate**: a
+verified beacon is tried first, a missing one is tried after exactly as before, and only a beacon
+that is present and does not verify is refused. Treating silence as a refusal would partition the
+mesh the moment one platform could not publish one - which is the case on Windows.
+
+See `docs/mechanisms/mesh-beacon.md`.
 
 ### 5. Wire formats
 
@@ -98,8 +139,11 @@ not sync, rather than being bridged by a third.
 `[magic u16][version u8][kind u8][length u32][payload]`.
 The magic detects a desynchronised stream instead of acting on it, and the length is
 bounds-checked before a byte is allocated.
-The hello carries a device name, a public key and the mesh name, the last two length-prefixed and
-the mesh name optional so an older peer still parses.
+The hello carries a device name, a public key, the mesh name, an ephemeral key and a capability
+byte, with the trailing fields optional so an older peer still parses.
+**Wire version 4** added the capability, so role arbitration stops assuming what a peer's radio can
+do - and the socket is the half that matters, because a device that cannot advertise says so long
+before the two ever meet on the air.
 
 **Bluetooth** has the inverse problem: a GATT write is already a message and arrives in order, but
 is hard-capped at 512 octets whatever the MTU claims.
@@ -177,6 +221,13 @@ made a phone shriek from across the street.
 
 ## Current Status
 
+- **Phase 5 (the v0.4 connection refactor)**: COMPLETED.
+Every head runs on `CoreLib.Transport.Fabric`: one `PeerLink` per peer, one supervisor with a
+watchdog over it, one radio scheduler holding several links at once, and a mesh beacon that tells
+this mesh from anyone else's before a connection is opened.
+Wire version 4, no re-pair. 440 tests.
+See `docs/mechanisms/peer-link.md` and `docs/mechanisms/mesh-beacon.md`.
+
 - **Phase 1 (Foundation)**: COMPLETED.
 - **Phase 2 (Crypto Engine)**: COMPLETED.
 - **Phase 3 & 4 (Transport & Ephemeral Sync)**: COMPLETED.
@@ -216,12 +267,15 @@ Both offer Wi-Fi and Bluetooth, Wi-Fi only, or Bluetooth only, applied without a
 - **Introduction is designed but not surfaced.** `PeerRegistry.PeersToIntroduceTo` exists so a new
   device can learn the set from one scan instead of one scan per pair. Nothing consumes it yet.
 - **Bluetooth caps the mesh at a handful of peers.** A GATT central holds around seven on Android.
-  Wi-Fi has no such limit.
-- **Connection state is per app on Windows and Android, and per peer on the desktop head.**
-`CoreLib.Transport.LinkState` is the shared answer to "is anything reachable, and over what", and every screen reads it rather than a transport.
-It is still an aggregate: Windows can only mark one device connected, and guesses which by comparing names, which breaks with two devices called the same thing.
-The Linux and Mac head answers per peer as well, through `Daemon.IsConnectedTo` and `IsBluetoothConnectedTo`, so its device list names the tier each device is actually on.
-Bringing the same per-peer answer to Windows is the remaining half.
+  The scheduler caps at four and rotates a waiting peer in every two minutes, so a fifth device is
+  reachable with latency rather than not at all. Wi-Fi has no such limit.
+- **A GATT server serves one central at a time**, on Windows and Android alike: one reassembler,
+  one ephemeral keypair, one session. A second subscriber's writes land in the same reassembler,
+  so a sequence gap from one discards the other's in-flight message. Both heads say so out loud
+  now rather than corrupting silently, and capability-first arbitration makes it the uncommon case.
+  Making that half genuinely per subscriber is the work that is left.
+- ~~**Connection state is per app on Windows and Android.**~~ Closed in v0.4.
+Every head answers per peer through `MeshFabric`, and `LinkState` is derived from it rather than being the only thing that knows. Both device lists stopped guessing by name.
 - **Bluetooth splits Linux and macOS apart, and macOS is the one that leaves.**
   They share `DesktopCore` and `DesktopShell` today because Avalonia builds for both from one
   machine, which is the property that made it the right toolkit. Bluetooth breaks that. BlueZ is
@@ -234,9 +288,8 @@ Bringing the same per-peer answer to Windows is the remaining half.
   Until then macOS stays Wi-Fi only and stays cross-published from Linux, which costs it nothing
   it does not already lack.
 - **The BLE service UUID is shared by every install**, so a scan finds every Mesh Sync device in range and not only the ones in this mesh.
-Refusing them is not enough on its own: a refusal that is not remembered is a reconnection four seconds later.
-Anything that scans must drop a link that does not produce a session and then leave that device alone for a while, keyed by fingerprint as well as by address, because a phone rotating its LE address arrives under an address nothing has refused.
-And the cheapest refusal is not scanning at all: ask `BleLinkArbiter` first, because a device whose role is the peripheral has no business dialling anybody.
+Since v0.4 the cheapest refusal is one comparison: the advertisement carries a mesh beacon, and a scanner skips anything whose tag it cannot open. That still leaves the case where a platform cannot publish one - Windows - so the cooldowns remain, in `CoreLib.Transport.Ble.BleCooldowns`, keyed by address, identity **and** advertised name because a phone rotating its LE address arrives under an address nothing has refused.
+Anything that scans must still drop a link that does not produce a session, and the shared state machine does that on every head.
 - **Linux Bluetooth is the central half only.** The device scans, connects, exchanges the hello
   and holds the link; it does not yet advertise. BlueZ accepts the scan and rejects the exported
   GATT tree, so `LinuxBlePeripheral` registers, fails and stands aside. That is a supported
@@ -307,8 +360,19 @@ The capability must be reported from whether the peripheral *started*, not from 
 - **Bluetooth role selection is capability first.** Do not simplify it to a fingerprint comparison.
 - **Never scan without asking `BleLinkArbiter` first, and never let both radio halves carry one peer.**
 Every device advertises the same service and every device also scans for it, so two in range will each dial the other unless something decides which one should.
-Windows prevents that by gating its scan loop, Android repairs it afterwards in `ResolveBleCollision`, and the Linux head does both; all three go through the same `BleLinkArbiter` over `BleRoleRules`.
+No head asks it directly any more: `RoutePolicy` asks once per peer and `PeerLink` asks again when both halves end up holding the same one. A head supplies conditions and storage and never its own copy of the rule.
 A duplicate link is not cosmetic - it delivers every clipboard twice, because the echo suppressor is on the sending side.
+**Scanning is wanted while some peer is owed a link, not while no link exists.** Asking about the app rather than the peers is what stopped the second and third device in a mesh from ever being reached over the radio.
+
+- **A route becomes usable only through a session, and the handshake has a deadline.**
+That is the whole of the defect where a device from somebody else's mesh held the standing link: two heads returned from a failed key agreement leaving the link up and reporting connected. The state machine in `CoreLib.Transport.Fabric` makes it unrepresentable, and it must stay that way - do not add a path that reports a route usable before its session exists.
+
+- **The mesh beacon decides who to *try*, never who is let in.**
+It is not a credential and must never become one: the mesh key must not enter a session key derivation, and nothing may authorise on it. `The_mesh_key_never_reaches_a_session_key` asserts it.
+It is also a **ranking, not a gate**. A missing beacon means "unknown, try after anything that verified", because treating silence as a refusal would partition the mesh the moment one platform could not publish one - which is the case on Windows today.
+
+- **Two links to one peer are a collision; two links to two peers are a mesh.**
+The rule lives inside one `PeerLink`, which makes the second case unrepresentable. Do not lift it back out - the Android version guarded on "a central link exists and a peripheral link exists" without comparing fingerprints, and with three devices it would have torn down a good link.
 - **Anything one head needs and another already has belongs in `CoreLib`, not written a second time.**
 `LinkState`, `TransportSettings` and `BleLinkArbiter` were all Windows-only code that the Linux head reimplemented differently or not at all, and every one of those divergences was a bug.
 A platform should be wiring and storage - a registry key here, a file there - and never its own copy of a rule.

@@ -1,6 +1,6 @@
 ---
 type: meta
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Mesh Sync
@@ -41,7 +41,7 @@ Things nobody asked for that every feature rests on.
 [[wifi-tier]] · [[bluetooth-tier]] · [[wire-formats]] · [[content-types]] · [[address-handover]]
 
 **Deciding things once**
-[[peer-link]] · [[link-state]] · [[ble-link-arbitration]] · [[ble-role-negotiation]]
+[[peer-link]] · [[mesh-beacon]] · [[link-state]] · [[ble-link-arbitration]] · [[ble-role-negotiation]]
 
 **Everything else**
 [[echo-suppression]] · [[activity-log]] · [[dbus-ipc]]
@@ -71,9 +71,11 @@ The five runnable applications.
 |---|---|---|---|
 | [[windows-daemon]] | Windows | WPF window and tray | Yes |
 | [[android-client]] | Android 8+ | MAUI drawer | Yes |
-| [[desktop-core]] | Linux, macOS | None, it is a library | Linux only |
-| [[desktop-shell]] | Linux, macOS | Avalonia window and tray | Linux only |
-| [[linux-daemon]] | Linux, macOS | Terminal | Linux only |
+| [[desktop-core]] | Linux | None, it is a library | Central only |
+| [[desktop-shell]] | Linux | Avalonia window and tray | Central only |
+| [[linux-daemon]] | Linux | Terminal | Central only |
+
+macOS is parked for this cycle - see [[platform-matrix]].
 
 ## The three root documents
 
@@ -87,6 +89,8 @@ If you are about to touch one of these, read the note first.
 
 - [[ble-link-arbitration]] - two devices in range will each dial the other unless something stops
   them, and a duplicate link delivers every clipboard twice.
+- [[mesh-beacon]] - it decides who to *try*, never who is let in, and it is a ranking rather than a
+  gate for a reason: treating a missing beacon as a refusal would partition the mesh.
 - [[peer-link]] - a route reaches `Established` only through a session, and the handshake has a
   deadline. Two of the three heads once let a refused stranger hold the standing link.
 - [[session-keys]] - the key belongs to the connection, never to the peer. Caching it against the

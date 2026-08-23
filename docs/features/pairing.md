@@ -1,14 +1,14 @@
 ---
 type: feature
 status: shipped
-platforms: [windows, android, linux, macos]
-tier: wifi
+platforms: [windows, android, linux]
+tier: either
 code:
   - src/CoreLib/Identity/PairingWindow.cs
   - src/CoreLib/Identity/PeerSecurity.cs
   - src/CoreLib/Identity/PendingPairing.cs
   - src/CoreLib/Identity/PeerRegistry.cs
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Pairing
@@ -38,6 +38,22 @@ Then the device being joined displays the four-group fingerprint of the device a
 check it matches what that device is showing.
 That second step closes the race an attacker on the same network could otherwise win by connecting
 first.
+
+## Pairing with no network
+
+Since v0.4 the QR is not the only route. The **inviting** device - the one showing the code -
+advertises a [[mesh-beacon]] derived from the pairing secret already in the `meshsync://` payload,
+and the joiner computes the same tag from the code it scanned and finds exactly that device.
+
+A joiner that knows which device it wants treats every other pairing beacon as foreign, so a
+second pairing screen open in the same room is told apart rather than connected to.
+
+Both steps are unchanged: the fingerprint comparison still has to happen, and a stranger is still
+queued rather than trusted.
+
+This was the last step of the project that did not honour its own central claim - the QR pinned an
+address, so pairing needed a LAN. Linux is the exception, because BlueZ rejects the exported GATT
+tree and a Linux box therefore cannot be the inviter over the radio.
 
 ## The rule
 
@@ -69,4 +85,4 @@ Nothing consumes it yet, and it needs a confirmation step in the UI before it sh
 
 ## See also
 
-[[device-identity]] · [[peer-registry]] · [[session-keys]] · [[mesh-name]]
+[[device-identity]] · [[peer-registry]] · [[session-keys]] · [[mesh-name]] · [[mesh-beacon]]
