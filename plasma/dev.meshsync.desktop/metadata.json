@@ -1,0 +1,25 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "suryanshuc659@gmail.com",
+                "Name": "Surya"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Your mesh on the panel: devices, clipboard, pairing and phone notifications",
+        "EnabledByDefault": true,
+        "Icon": "meshsync",
+        "Id": "dev.meshsync.desktop",
+        "License": "GPL-3.0",
+        "Name": "Mesh Sync",
+        "Version": "0.3.0",
+        "Website": "https://github.com/x20surya/MeshSync"
+    },
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-MainScript": "ui/main.qml",
+    "X-Plasma-NotificationArea": "true",
+    "X-Plasma-NotificationAreaCategory": "Hardware"
+}

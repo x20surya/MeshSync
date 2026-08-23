@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <defs>
+    <style id="current-color-scheme" type="text/css">.ColorScheme-Text { color: #232629; }</style>
+    <mask id="badge-gap">
+      <rect width="24" height="24" fill="white"/>
+      <circle cx="19.44" cy="4.56" r="5.45" fill="black"/>
+    </mask>
+  </defs>
+  <g class="ColorScheme-Text" color="#232629" fill="currentColor" opacity="1.0">
+    <g mask="url(#badge-gap)">
+      <circle cx="8.16" cy="12.00" r="6.00" fill="none" stroke="currentColor" stroke-width="2.28"/>
+      <circle cx="15.84" cy="12.00" r="6.00" fill="none" stroke="currentColor" stroke-width="2.28"/>
+      <path d="M 12.00 7.39 A 6.00 6.00 0 0 1 12.00 16.61 A 6.00 6.00 0 0 1 12.00 7.39 Z" fill="currentColor"/>
+    </g>
+  <circle cx="19.44" cy="4.56" r="3.84" fill="currentColor" class="ColorScheme-Text" color="#232629"/>
+  </g>
+</svg>
