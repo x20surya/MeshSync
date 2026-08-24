@@ -1,4 +1,4 @@
-using CoreLib.Transport;
+﻿using CoreLib.Transport;
 using CoreLib.Transport.Ble;
 using CoreLib.Transport.Fabric;
 
@@ -41,6 +41,16 @@ public sealed class FakeBleRadio : IBleRadio
 
     /// <summary>Candidates whose connect should fail outright rather than produce a route.</summary>
     public HashSet<string> RefuseConnect { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Candidates whose route is already established by the time <see cref="ConnectAsync"/>
+    /// returns, mapped to the fingerprint it identified as.
+    ///
+    /// <para>Not a contrivance: a peripheral sends its hello the instant a central subscribes, and
+    /// a real connect does not return until it has subscribed. The fast path is the normal one on
+    /// a responsive peer.</para>
+    /// </summary>
+    public Dictionary<string, string> LiveOnArrival { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Routes handed out by <see cref="ConnectAsync"/>, keyed by the address dialled.</summary>
     public Dictionary<string, FakeRoute> Opened { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -104,6 +114,12 @@ public sealed class FakeBleRadio : IBleRadio
         if (RefuseConnect.Contains(candidate.Address)) return Task.FromResult<IPeerRoute?>(null);
 
         var route = new FakeRoute(RouteKind.BleCentral, _clock).Connect();
+
+        if (LiveOnArrival.TryGetValue(candidate.Address, out var fingerprint))
+        {
+            route.Identify(fingerprint).Establish();
+        }
+
         Opened[candidate.Address] = route;
         return Task.FromResult<IPeerRoute?>(route);
     }

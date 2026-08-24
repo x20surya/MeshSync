@@ -553,6 +553,19 @@ namespace AndroidClient.Platforms.Android
 
             Log.Write("BlePeripheral", $"Peer identified as {DeviceIdentity.Shorten(RemoteFingerprint)}.");
 
+            // Answered in kind, as the Windows server has always done.
+            //
+            // The hello sent when a central subscribes can be lost: the central's ATT exchange
+            // lands some milliseconds *after* the subscription, so a peripheral that answers
+            // immediately can put a 300-byte notification through a 23-byte MTU and have it
+            // truncated. The central then holds a link it can never agree a session on, drops it
+            // at the handshake grace, and cools this device down for five minutes - while this
+            // side logs a peer identified perfectly happily.
+            //
+            // Sending again here costs one notification and closes the race, because by the time
+            // a central's own hello arrives its MTU has certainly settled.
+            _ = SendHelloAsync();
+
             try
             {
                 PeerIdentified?.Invoke(this, new PeerIdentifiedEventArgs

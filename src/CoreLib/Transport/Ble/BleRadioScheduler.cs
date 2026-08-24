@@ -402,6 +402,14 @@ namespace CoreLib.Transport.Ble
             route.StateChanged += OnAttemptState;
             route.PayloadReceived += OnRoutePayload;
 
+            // Caught up by hand, because the link can already be established by the time the
+            // handler is attached: a peripheral sends its hello the instant a central subscribes,
+            // and the connect above does not return until it has subscribed. Missing that
+            // transition left the link out of the budget entirely - the cap was never enforced
+            // and rotation never ran, both silently, with the health surface reporting 0 links
+            // beside a route that had been up for minutes.
+            OnAttemptState(route, RouteState.Connecting, route.State);
+
             // Handed straight to the fabric, which holds it under the handshake deadline until it
             // says who it is. That window is where a device from another mesh used to live for as
             // long as it stayed in range.
@@ -415,6 +423,10 @@ namespace CoreLib.Transport.Ble
 
             route.StateChanged += OnInboundState;
             route.PayloadReceived += OnRoutePayload;
+
+            // Same catch-up as the outbound half, for the same reason.
+            OnInboundState(route, RouteState.Connecting, route.State);
+
             ((BleProvider)InboundRoutes).Publish(route);
         }
 

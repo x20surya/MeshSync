@@ -272,6 +272,33 @@ public class BleRadioSchedulerTests
         Assert.Equal(new byte[] { 2 }, radio.Published[1].Beacon);
     }
 
+    /// <summary>
+    /// <b>A link that is already established when it is handed over still counts.</b>
+    ///
+    /// <para>A peripheral sends its hello the instant a central subscribes, and a real connect
+    /// does not return until it has subscribed - so the route can reach <c>Established</c> before
+    /// the scheduler attaches its handler. Missing that transition left the link out of the budget
+    /// entirely: the cap was never enforced, rotation never ran, and the health surface reported
+    /// no links beside a route that had been up for minutes.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_link_established_before_the_handover_is_still_counted()
+    {
+        var (scheduler, radio, _) = Rig();
+        await using var _s = scheduler;
+
+        string peer = Fingerprint();
+
+        radio.Place("fast peer", rssi: -40);
+        radio.LiveOnArrival["fast peer"] = peer;
+        scheduler.SetWanted(new HashSet<string> { peer });
+
+        await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Equal(RouteState.Established, radio.Opened["fast peer"].State);
+        Assert.Equal(1, scheduler.LiveCentralLinks);
+    }
+
     // ── the link budget ──────────────────────────────────────────────────────
 
     [Fact]
