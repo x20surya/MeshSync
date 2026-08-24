@@ -75,6 +75,19 @@ and forbids adding a second rule beside this one.
 
 ## Findings worth knowing
 
+**A dial is aimed at an address, and who answers is only known afterwards.**
+A phone acting as a hotspot handed one laptop `10.137.49.172`, and days later handed the same
+address to a different machine; both records survived in the registry.
+Every reconcile pass dialled that address for the device that had moved away, the device that now
+held it answered, and the route was adopted under whoever answered - which made it a second link of
+the same kind and dropped the healthy one.
+The peer the dial was for still had no route, so the next pass dialled again.
+A working link was torn down and rebuilt every fifteen seconds, indefinitely, and the log read as
+though the two devices simply could not hold a connection.
+Two things fix it, and both are needed: an address another peer is already established on is never
+dialled, and a dial that is answered by somebody else forgets the address it was aimed at.
+See [[peer-link]].
+
 **`MeshLinks` used one port for two different things.**
 The constructor took a single `port` and used it both to bind the listener and as the port to dial
 when a stored address carried none.

@@ -379,6 +379,33 @@ namespace CoreLib.Identity
             return true;
         }
 
+        /// <summary>
+        /// Forgets where a peer was last seen, leaving it paired.
+        ///
+        /// <para>For the one case where the stored address is not merely old but provably wrong:
+        /// a dial to it was answered by a different paired device. That happens whenever a DHCP
+        /// lease is reused - routine on a phone acting as a hotspot, where two devices that were
+        /// both once at the same address are both still in the registry.</para>
+        ///
+        /// <para>Clearing it rather than overwriting it is deliberate: this device has just
+        /// learned where the peer is <i>not</i>, and nothing about where it is. The peer supplies
+        /// a real address the next time it connects or announces one, so the registry heals
+        /// itself without a re-pair.</para>
+        /// </summary>
+        public void ForgetAddress(string fingerprint)
+        {
+            lock (_gate)
+            {
+                if (!_peers.TryGetValue(fingerprint, out var peer)) return;
+                if (string.IsNullOrWhiteSpace(peer.LastAddress)) return;
+
+                peer.LastAddress = null;
+            }
+
+            Save();
+            Changed?.Invoke();
+        }
+
         /// <summary>Records that a peer was reachable, and where. Cheap enough to call on every connect.</summary>
         public void NoteSeen(string fingerprint, string? address = null, string? name = null,
                              Transport.BleCapability? capability = null)

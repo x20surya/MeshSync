@@ -89,6 +89,24 @@ The collision rule lives inside `PeerLink`, which makes the second case unrepres
 The Android version guarded on "a central link exists and a peripheral link exists" without
 comparing fingerprints, so with three devices it would have torn down a good link.
 
+## A misdirected dial may add a route, never replace one
+
+Two peers can hold the same stored address, because a DHCP lease outlives the record that names it.
+The dial then reaches the wrong device, and the far end sees a second socket from a peer it is
+already linked to - which its collision rule settles by keeping the newcomer and dropping the link
+that works.
+
+So the fabric remembers which peer each pending route was dialled for, and checks it against
+whoever actually answers.
+`TryOpen` will not dial an address another peer is already established on, which stops the mistake
+before a socket exists; and when a dial is answered by somebody else anyway, that peer's address is
+forgotten and the arriving route is dropped rather than adopted over a working link.
+
+Both halves matter.
+The first is what stops the loop, the second is what stops the very first attempt - and it was the
+first attempt that killed the link.
+Recorded in [[wifi-tier]] as it was found on hardware.
+
 ## The policy is a pure function
 
 `RoutePolicy.Plan(peers, conditions, now)` returns the set of routes that should exist, the peers

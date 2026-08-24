@@ -257,4 +257,57 @@ public class MeshFabricLoopbackTests : IAsyncDisposable
         Assert.Single(a.Fabric.LinkTo(b.Fingerprint)!.LiveRoutes);
         Assert.Single(b.Fabric.LinkTo(a.Fingerprint)!.LiveRoutes);
     }
+
+    // ── a stale address that now belongs to somebody else ────────────────────
+
+    /// <summary>
+    /// <b>A dial aimed at one peer, answered by another, must not cost the link to the one that
+    /// answered.</b>
+    ///
+    /// <para>Found on hardware. A phone acting as a hotspot had handed one laptop an address, and
+    /// days later handed the same address to a different machine; both records were still in the
+    /// registry. Every reconcile pass dialled that address on behalf of the device that had moved
+    /// away, the device that now held it answered, and the route was adopted under whoever
+    /// answered - which made it a second link of the same kind and dropped the healthy one. The
+    /// peer the dial was for still had no route, so the next pass dialled again. A working link
+    /// was torn down and rebuilt every fifteen seconds for as long as both records existed.</para>
+    ///
+    /// <para>The intended peer is remembered across the handshake now, so the mismatch is noticed
+    /// and its address forgotten rather than dialled again.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_dial_answered_by_a_different_peer_does_not_drop_the_link_to_that_peer()
+    {
+        var phone = NewDevice("phone");
+        var laptop = NewDevice("laptop");
+        await phone.StartAsync();
+        await laptop.StartAsync();
+
+        phone.Pair(laptop);
+        laptop.Pair(phone);
+
+        Assert.True(await WaitFor(() => phone.Fabric.LinkTo(laptop.Fingerprint)?.Has(RouteKind.WiFi) == true,
+                                  new[] { phone, laptop }));
+
+        var settled = phone.Fabric.LinkTo(laptop.Fingerprint)!.LiveRoutes.Single(r => r.Kind == RouteKind.WiFi);
+
+        // The device that moved away, still paired, still holding the address the laptop now has.
+        // Never started: nothing is listening as it, which is the whole point.
+        var departed = PeerSecurity.CreateEphemeral();
+        phone.Security.Peers.Trust(departed.Identity.PublicKey, "departed", $"127.0.0.1:{laptop.Port}");
+
+        // The pass that used to be fatal.
+        Assert.True(await WaitFor(() => AddressOf(phone, departed.Identity.Fingerprint) is null or "",
+                                  new[] { phone }));
+
+        var after = phone.Fabric.LinkTo(laptop.Fingerprint)!.LiveRoutes.SingleOrDefault(r => r.Kind == RouteKind.WiFi);
+
+        Assert.NotNull(after);
+        Assert.Same(settled, after);
+        Assert.Equal(RouteState.Established, after!.State);
+    }
+
+    private static string? AddressOf(Device device, string fingerprint) =>
+        device.Security.Peers.Peers.SingleOrDefault(p =>
+            string.Equals(p.Fingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))?.LastAddress;
 }

@@ -32,6 +32,17 @@ It is also consulted on every payload, not only at connection time, because a se
 own key and would otherwise keep working after a device was forgotten.
 See [[session-keys]].
 
+## Forgetting where a peer was
+
+`ForgetAddress` clears `LastAddress` and leaves the peer paired.
+It is for the one case where the stored address is not merely old but provably wrong: a dial to it
+was answered by a different paired device, which happens whenever a DHCP lease is reused.
+Clearing rather than overwriting is deliberate - the device has just learned where the peer is
+*not*, and nothing about where it is.
+The peer supplies a real address the next time it connects or announces one, so the registry heals
+without a re-pair.
+See [[wifi-tier]].
+
 ## What is designed and not surfaced
 
 `PeersToIntroduceTo` exists so a new device can learn the whole set from one scan instead of one

@@ -51,10 +51,15 @@ public class LinkSupervisorTests
             Supervisor = new LinkSupervisor(Fabric, conditions ?? (() => Conditions), Clock, used);
         }
 
+        private int _paired;
+
         public string Pair(string name)
         {
             var identity = DeviceIdentity.CreateEphemeral();
-            Security.Peers.Trust(identity.PublicKey, name, "127.0.0.1");
+
+            // A port each, because two paired devices at one address:port means one of the two
+            // records is stale - and the fabric now declines to dial the stale one.
+            Security.Peers.Trust(identity.PublicKey, name, $"127.0.0.1:{45001 + _paired++}");
             return identity.Fingerprint;
         }
 

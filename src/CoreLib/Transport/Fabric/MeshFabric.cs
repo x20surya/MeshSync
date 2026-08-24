@@ -185,6 +185,22 @@ namespace CoreLib.Transport.Fabric
             var provider = ProviderFor(kind);
             if (provider?.IsAvailable != true) return false;
 
+            // An address another peer is already established on is not this peer's address,
+            // whatever the registry still says. Dialling it reaches that peer, and the link that
+            // arrives settles at the far end as a second link of the same kind - dropping the one
+            // that works. Caught here, before a socket exists, because by the time the mistake is
+            // visible from the hello the damage is done at the other end.
+            if (kind == RouteKind.WiFi && HeldByAnotherPeer(link, out string holder))
+            {
+                Log.Write("Fabric",
+                    $"Not dialling {DeviceIdentity.Shorten(fingerprint)} at {link.Peer.LastAddress}: " +
+                    $"{DeviceIdentity.Shorten(holder)} is established there. Forgetting the address.");
+
+                _security.Peers.ForgetAddress(fingerprint);
+                link.NoteFailure(kind, screenOn: true);
+                return false;
+            }
+
             // Recorded before the attempt, not after, so a provider that blocks or throws still
             // counts against the rate limit.
             link.NoteOpening(kind);
@@ -203,6 +219,33 @@ namespace CoreLib.Transport.Fabric
             else link.Adopt(route);
 
             return true;
+        }
+
+        /// <summary>
+        /// True when some other peer already has an established socket at this peer's stored
+        /// address, which makes that address demonstrably stale.
+        ///
+        /// <para>Compared whole, port included, rather than by host: two devices sharing one
+        /// machine on different ports is a supported arrangement and the way the mesh is
+        /// exercised without a second piece of hardware.</para>
+        /// </summary>
+        private bool HeldByAnotherPeer(PeerLink link, out string holder)
+        {
+            holder = "";
+            string? address = link.Peer.LastAddress;
+            if (string.IsNullOrWhiteSpace(address)) return false;
+
+            foreach (var other in Links)
+            {
+                if (ReferenceEquals(other, link)) continue;
+                if (!other.Has(RouteKind.WiFi)) continue;
+                if (!string.Equals(other.Peer.LastAddress, address, StringComparison.OrdinalIgnoreCase)) continue;
+
+                holder = other.Fingerprint;
+                return true;
+            }
+
+            return false;
         }
 
         // ──────────────────────────────── routes that arrive unasked
@@ -273,12 +316,23 @@ namespace CoreLib.Transport.Fabric
         private void Release(IPeerRoute route, bool adopt)
         {
             bool held;
-            lock (_gate) held = _pending.Remove(route);
+            string? intended;
+            lock (_gate) held = _pending.Remove(route, out intended);
             if (!held) return;
 
             route.StateChanged -= OnPendingState;
 
             if (!adopt) { _ = DropAsync(route, route.LastFailure ?? "the link closed before identifying"); return; }
+
+            // A dial is aimed at an address, and who is actually there is only known now. When it
+            // is not the device the dial was for, the intent is not simply dropped - see
+            // NoteAnsweredByAnother for what that cost before this existed.
+            if (!string.IsNullOrWhiteSpace(intended) &&
+                !string.Equals(intended, route.PeerFingerprint, StringComparison.OrdinalIgnoreCase) &&
+                !AcceptMisdirected(intended!, route))
+            {
+                return;
+            }
 
             var link = LinkTo(route.PeerFingerprint);
             if (link == null)
@@ -290,6 +344,48 @@ namespace CoreLib.Transport.Fabric
             }
 
             link.Adopt(route);
+        }
+
+        /// <summary>
+        /// Handles a dial that reached a different paired device than the one it was for.
+        ///
+        /// <para><b>Two peers sharing one stored address used to kill the link between them.</b>
+        /// A phone acting as a hotspot handed one device an address, and days later handed the
+        /// same address to another; both records survived in the registry. Every reconcile pass
+        /// dialled that address for the peer that no longer held it, the peer that did held it
+        /// answered, and the route was adopted under whoever answered - taking the healthy link
+        /// to that device as a same-kind collision and dropping it. The intended peer still had
+        /// no route, so the next pass dialled the same address again. A working link was torn
+        /// down and rebuilt every fifteen seconds, indefinitely, and the log read as if the two
+        /// devices simply could not hold a connection.</para>
+        ///
+        /// <para>So the address is forgotten - it demonstrably belongs to the other device - and
+        /// the intended peer's route of that kind is put into backoff rather than retried at
+        /// once. The route that did arrive is still adopted: it is an authenticated link to a
+        /// device this one is paired with, and refusing it would be throwing away the one useful
+        /// thing the dial produced.</para>
+        /// </summary>
+        private bool AcceptMisdirected(string intended, IPeerRoute route)
+        {
+            var link = LinkTo(intended);
+
+            Log.Write("Fabric",
+                $"Dialled {DeviceIdentity.Shorten(intended)} at {link?.Peer.LastAddress ?? "an unknown address"} and " +
+                $"{DeviceIdentity.Shorten(route.PeerFingerprint)} answered. Forgetting that address: it is the other device's now.");
+
+            _security.Peers.ForgetAddress(intended);
+            link?.NoteFailure(route.Kind, screenOn: true);
+
+            // <b>A misdirected dial may add a route, never replace one.</b> The peer that answered
+            // is already reachable over this kind, so adopting would settle as a second link of
+            // the same kind and drop the working one in favour of a link this device only opened
+            // by mistake. Forgetting the address stops the next pass; this stops the one that has
+            // already happened. Both are needed - the first attempt is what killed the link.
+            var answering = LinkTo(route.PeerFingerprint);
+            if (answering?.Has(route.Kind) != true) return true;
+
+            _ = DropAsync(route, "a misdirected dial reached a peer that is already linked");
+            return false;
         }
 
         // ──────────────────────────────── the deadline sweep

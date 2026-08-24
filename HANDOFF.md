@@ -818,6 +818,37 @@ the moment one other device minted a key - a far worse failure than the one the 
 a ranking: verified first, silent after, and only a beacon that is present and does not verify is
 refused.
 
+**Two paired devices can hold the same address, and it cost the link between them.**
+Found the first time the mesh was run after the refactor shipped, with the phone acting as a
+hotspot.
+The phone's registry held `MSI-SURYANSHU` at `10.137.49.172` from three days earlier and
+`surya-katana` at `10.137.49.172` from that morning: the same DHCP address, handed out twice.
+Every reconcile pass dialled it on behalf of the Windows machine, the laptop answered, and the
+route was adopted under the laptop - a second link of the same kind, which dropped the healthy one.
+The Windows machine still had no route, so the next pass dialled again.
+One socket every fifteen seconds, for ever, and both logs read as though the two devices could not
+hold a connection.
+
+Three things about it are worth keeping.
+The dialling side looks innocent: it never re-dials the peer whose link is dying, so `MayOpen` and
+the rate limit are never even consulted for it.
+The kill happens at the *answering* end, in the collision rule, which cannot tell a stale socket
+from a healthy one and keeps the newcomer.
+And it needed both a guard before the dial and a correction after it - forgetting the address stops
+the next pass, but only refusing to dial an address another peer is established on stops the first,
+and it was the first that killed the link.
+
+**A dangling GATT connection makes a peer invisible.**
+While chasing the above, Bluetooth stopped forming at all: the laptop kept reporting one device
+advertising the service and none of them in this mesh.
+The beacon on the air verified against the right mesh key but for an epoch forty-five minutes
+earlier, which read as broken rotation and was not.
+BlueZ was holding a connection to the phone's previous random address that never became a route,
+the phone had stopped advertising because a central was connected, and BlueZ was serving the last
+advertisement it had received.
+`bluetoothctl disconnect`/`remove` cleared it and both tiers came up within seconds.
+Worth knowing before trusting a stale beacon: check whether something is already connected.
+
 **All three heads build on this machine, which nobody had tried.**
 `dotnet build src/WinDaemon/WinDaemon.csproj -p:EnableWindowsTargeting=true` compiles the WPF and
 WinRT code on Linux, and the Android workload is installed. That turned "CI will tell us" into
