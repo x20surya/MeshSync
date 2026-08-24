@@ -299,6 +299,37 @@ public class BleRadioSchedulerTests
         Assert.Equal(1, scheduler.LiveCentralLinks);
     }
 
+    /// <summary>
+    /// A device this radio is already linked to is skipped, not refused.
+    ///
+    /// <para>A scan cannot tell which peer a candidate is until a link exists, so the same device
+    /// is found again on every round while its link is up. Declining that inside the connect came
+    /// back as an ordinary failure and put a peer the radio is <em>successfully talking to</em>
+    /// into the five-minute refusal cooldown - so when the link did drop, it sat out five minutes
+    /// for no reason.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_device_already_linked_is_skipped_without_being_cooled_down()
+    {
+        var (scheduler, radio, _) = Rig();
+        await using var _s = scheduler;
+
+        radio.Place("mine", rssi: -40);
+        radio.Linked.Add("mine");
+        scheduler.SetWanted(new HashSet<string> { Fingerprint() });
+
+        await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Empty(radio.ConnectAttempts);
+        Assert.Equal(0, scheduler.Cooldowns.Count);
+
+        // And the moment the link goes, it is a candidate again with no waiting.
+        radio.Linked.Clear();
+        await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Single(radio.ConnectAttempts);
+    }
+
     // ── the link budget ──────────────────────────────────────────────────────
 
     [Fact]

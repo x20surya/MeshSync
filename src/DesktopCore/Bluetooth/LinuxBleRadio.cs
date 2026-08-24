@@ -257,6 +257,12 @@ public sealed class LinuxBleRadio : IBleRadio
 
     // ──────────────────────────────── connecting
 
+    /// <summary>True when a link to that BlueZ object path is already held.</summary>
+    public bool HasLinkTo(string address)
+    {
+        lock (_gate) return _byDevice.ContainsKey(address);
+    }
+
     /// <summary>
     /// Opens a link to one candidate and hands it back before it has identified itself.
     ///
@@ -269,7 +275,16 @@ public sealed class LinuxBleRadio : IBleRadio
 
         lock (_gate)
         {
-            if (_byDevice.ContainsKey(candidate.Address)) return null;   // already linked
+            // Said out loud. A silent null here is indistinguishable from a scan that found
+            // nothing, and it is a real way to get stuck: this map is keyed on the BlueZ object
+            // path and cleared only when the link reaches a terminal state, so an entry that
+            // outlives its link blocks every future attempt at that address for ever.
+            if (_byDevice.ContainsKey(candidate.Address))
+            {
+                Log.Write("BleRadio",
+                    $"Already holding a link to {candidate.Name ?? candidate.Address}; not opening a second.");
+                return null;
+            }
         }
 
         try
@@ -303,6 +318,9 @@ public sealed class LinuxBleRadio : IBleRadio
 
         if (!await link.ResolveAsync(cancellationToken).ConfigureAwait(false))
         {
+            Log.Write("BleRadio",
+                $"{candidate.Name ?? candidate.Address} never published the mesh service; forgetting it.");
+
             // It never published the service. Remove the BlueZ object outright rather than merely
             // disconnecting: left in place it keeps its cached UUIDs and is picked again on the
             // next sweep, forever.

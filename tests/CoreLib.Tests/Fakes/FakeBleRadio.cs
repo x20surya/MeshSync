@@ -107,6 +107,11 @@ public sealed class FakeBleRadio : IBleRadio
         return Task.FromResult<IReadOnlyList<BleCandidate>>(_inRange.ToList());
     }
 
+    /// <summary>Addresses this fake should claim it already holds a link to.</summary>
+    public HashSet<string> Linked { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public bool HasLinkTo(string address) => Linked.Contains(address);
+
     public Task<IPeerRoute?> ConnectAsync(BleCandidate candidate, CancellationToken cancellationToken = default)
     {
         ConnectAttempts.Add(candidate);

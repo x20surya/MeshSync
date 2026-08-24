@@ -283,6 +283,11 @@ namespace CoreLib.Transport.Ble
 
             var usable = seen
                 .Where(c => c.IsPresent)
+
+                // Filtered here rather than refused inside the connect. The same device is found
+                // on every round while its link is up, and treating that as a failed attempt put
+                // a peer this radio is successfully talking to into the refusal cooldown.
+                .Where(c => !_radio.HasLinkTo(c.Address))
                 .Where(c => !_cooldowns.ShouldSkip(c))
                 .Where(c => BeaconFilter(c))
                 .OrderBy(c => BeaconRank(c))
@@ -393,6 +398,8 @@ namespace CoreLib.Transport.Ble
 
             if (route == null)
             {
+                // The radio declined to open one. It has said why; this records the refusal so
+                // the next round spends its window on something else.
                 _cooldowns.Refuse(candidate.Address, null, candidate.Name);
                 return false;
             }

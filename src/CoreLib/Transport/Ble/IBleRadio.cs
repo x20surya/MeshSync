@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using CoreLib.Identity;
@@ -105,6 +105,17 @@ namespace CoreLib.Transport.Ble
         /// until it says who it is. Null when the connection could not be started at all.
         /// </summary>
         Task<IPeerRoute?> ConnectAsync(BleCandidate candidate, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// True when this radio is already holding a link to that address.
+        ///
+        /// <para>Asked before connecting, because a scan cannot tell which peer a candidate is
+        /// until a link to it exists - so the same device is found again on every round while its
+        /// link is up. Declining that inside the connect looked equivalent and was not: it came
+        /// back as an ordinary failure and put a device this radio is <em>successfully talking
+        /// to</em> into the five-minute refusal cooldown.</para>
+        /// </summary>
+        bool HasLinkTo(string address);
 
         /// <summary>A central subscribed to this device's GATT server.</summary>
         event Action<IPeerRoute>? InboundRoute;

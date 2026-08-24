@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -82,6 +82,20 @@ namespace AndroidClient.Platforms.Android
         }
 
         // ──────────────────────────────── advertising
+
+        /// <summary>True when a link to that Bluetooth address is already held.</summary>
+        public bool HasLinkTo(string address)
+        {
+            lock (_gate)
+            {
+                foreach (var link in _links)
+                {
+                    if (string.Equals(link.PeerFingerprint, address, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// Publishing is owned by <see cref="AndroidBlePeripheral"/>, which registers the GATT

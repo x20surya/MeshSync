@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
@@ -153,6 +153,20 @@ namespace WinDaemon
             }
 
             lock (seen) return seen.Values.ToList();
+        }
+
+        /// <summary>True when a link to that Bluetooth address is already held.</summary>
+        public bool HasLinkTo(string address)
+        {
+            lock (_gate)
+            {
+                foreach (var link in _links)
+                {
+                    if (string.Equals(link.PeerFingerprint, address, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>Pulls the mesh beacon out of an advertisement, from wherever it was carried.</summary>
