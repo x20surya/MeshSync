@@ -105,6 +105,21 @@ Get-Content "$env:LOCALAPPDATA\MeshSync\peers.json"
 same mesh name, the same peers, a new 32-byte `MeshKey`, and **`device.key` unchanged byte for
 byte**. That is exactly what happened on the phone and on Linux.
 
+**While you have it open, look for two peers holding the same `LastAddress`.** That is not a
+curiosity, it is the defect described in section 2, and a registry that has outlived a DHCP lease
+is the normal way to get one.
+
+```powershell
+(Get-Content "$env:LOCALAPPDATA\MeshSync\peers.json" | ConvertFrom-Json).Peers |
+  Group-Object LastAddress | Where-Object Count -gt 1
+```
+
+Note also that **this machine's own record on the phone currently has no address at all.** That is
+deliberate: the phone dialled `10.137.49.172` for this machine, the Linux laptop answered, and the
+address was forgotten as provably wrong. It heals the first time this daemon connects or announces
+one, and needs nothing from you - but if you were expecting the phone to dial you first, it will
+not until then.
+
 ## What to verify, in order
 
 ### 1. It starts and the migration is lossless
@@ -131,10 +146,31 @@ Count them:
 (Select-String -Path "$env:LOCALAPPDATA\MeshSync\daemon.log" -Pattern "a second link of the same kind").Count
 ```
 
-If it keeps climbing, the two ends are disagreeing about which link survives. The rule is
+If it keeps climbing, there are **two different causes and they look identical from here.** Tell
+them apart before you touch anything.
+
+**Glare**, the original defect: both ends log collisions, routes log `established` and `lost` in
+the same millisecond, and sockets open far faster than the reconcile interval. The rule is
 `PeerLink.SettleSameKind` and it must depend on **direction alone** - never on whether a route has
 finished handshaking, because that makes it non-deterministic and the two ends then kill each
 other's links.
+
+**A misdirected dial**, found on hardware after the branch was handed over: exactly **one** new
+socket per reconcile interval, no faster, for ever. The giveaway is that the end whose link keeps
+dying never dials - it only ever *receives* - so every guard on the dialling side reads as innocent
+and `MayOpen` is never even consulted for that peer. The dial is being made for a **different**
+peer whose stored address now belongs to this one, and the arriving link is adopted under whoever
+answered, which drops the healthy one as a same-kind collision.
+
+Since `664d4c2` that case announces itself, and either line means your registry held a duplicate:
+
+```
+[Fabric] Not dialling <A> at <addr>: <B> is established there. Forgetting the address.
+[Fabric] Dialled <A> at <addr> and <B> answered. Forgetting that address: it is the other device's now.
+```
+
+Seeing one of those once is the fix working and the registry healing. Seeing the second one
+repeatedly for the same pair is a bug: the address should have been forgotten the first time.
 
 ### 3. Bluetooth: does a session actually get agreed
 
@@ -217,6 +253,13 @@ connecting at all: the scan summary goes from `N seen, N ours` to `N seen, 0 our
 - **The 30-second link churn is not ours.** Windows drops an accepted BLE link at almost exactly
   30 seconds and the phone reconnects in about a second. `GattSession.MaintainConnection` does not
   stop it. See `HANDOFF.md`.
+- **A stale beacon usually means a dangling connection, not broken rotation.** On Linux the radio
+  reported one device advertising the service and none of them in this mesh, and the beacon on the
+  air verified against the right mesh key but for an epoch forty-five minutes old. Rotation was
+  fine. A previous connection to the phone's old random address was still open without ever having
+  become a route, the phone had stopped advertising because a central was connected, and the stack
+  was serving the last advertisement it had received. Check for an existing connection before
+  believing an old beacon. Hard-killing the daemon mid-session is a good way to create one.
 
 ## Rules you must not break
 
@@ -254,9 +297,16 @@ returns silently is the failure mode this project keeps rediscovering.
 
 ## State when this was handed over
 
-- Branch `v0.4-connection-refactor`, 13 commits, clean tree, pushed to `origin`.
-- **451 tests**, zero warnings across all nine projects.
+- Branch `v0.4-connection-refactor`, clean tree, pushed to `origin`.
+- **452 tests**, zero warnings across all nine projects.
 - All three heads build on Linux - Windows via `-p:EnableWindowsTargeting=true`.
 - Verified on hardware: Android and Linux together, both tiers to one peer at once, no re-pair.
 - **Not verified:** anything Windows, on a radio. Also no third device at once, so the four-link
   budget and rotation have never had a fifth peer to act on.
+
+**Read `664d4c2` before you start.** It landed after the first version of this handoff, and it is
+the only defect on this branch that was found by running the finished thing rather than by reading
+it. A stale duplicate address in the registry tore the Wi-Fi link down and rebuilt it every fifteen
+seconds, indefinitely, and both logs read as though the two devices simply could not hold a
+connection. This machine's record is the one that was stale, so you are walking into the exact
+registry that produced it.
