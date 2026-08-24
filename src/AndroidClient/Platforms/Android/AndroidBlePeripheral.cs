@@ -712,6 +712,21 @@ namespace AndroidClient.Platforms.Android
             }
         }
 
+        /// <summary>
+        /// Waits for the MTU exchange to raise the usable payload, up to a second and a half.
+        ///
+        /// <para>A peer that genuinely only does 23 costs that once per connection and then works,
+        /// fragmenting as it always did - it is only the hello, which cannot be fragmented, that
+        /// needs the room.</para>
+        /// </summary>
+        private async Task WaitForMtuAsync(int needed)
+        {
+            for (int attempt = 0; attempt < 8 && _usablePayload < needed; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(180)).ConfigureAwait(false);
+            }
+        }
+
         private async Task SendHelloAsync()
         {
             string? key = LocalPublicKey;
@@ -721,13 +736,35 @@ namespace AndroidClient.Platforms.Android
                 BleProtocol.BuildHelloPayload(key, LocalDeviceName, LocalMeshName, _ephemeral.PublicKey,
                                               LocalCapability));
 
-            // Written whole rather than fragmented - see BuildHelloPayload for why the two
-            // shapes cannot be mixed - so an oversized one is reported rather than silently lost.
+            // Waited for, not assumed. The MTU exchange lands some milliseconds after the
+            // subscription, and OnMtuChanged is what tells this server about it - so a hello sent
+            // the instant a central subscribes is sized against the 23-byte ATT default and simply
+            // refused, because it cannot be fragmented (an extended frame is marked by a leading
+            // zero and a chunk starts with its message id, so the two shapes cannot be mixed).
+            //
+            // The central then holds a link it can never agree a session on, drops it at the
+            // handshake grace and cools this device down for five minutes, while this side logs a
+            // peer identified perfectly happily. Observed on an S21 FE against a laptop: "the
+            // hello is 273 bytes and only 20 will fit", twice per connection, every time.
+            //
+            // The central half already learned this lesson - see LinuxBleLink.ReadSettledMtuAsync,
+            // which waits for the same exchange from the other side.
+            if (frame.Length > _usablePayload) await WaitForMtuAsync(frame.Length).ConfigureAwait(false);
+
+            // Attempted even when it looks too big, because this side's idea of the size can be
+            // wrong in the direction that matters. `OnMtuChanged` is the only thing that updates
+            // it on a GATT *server*, and on this hardware it does not always fire at all - the
+            // link was genuinely at 517 while this value sat at the 23-byte default, so refusing
+            // here meant the peer never learned who we are and dropped us at its handshake grace.
+            //
+            // Guessing small and sending is recoverable: the notification either fits, or it does
+            // not arrive and the link times out exactly as it did when we refused. Guessing small
+            // and *not* sending is not recoverable at all.
             if (frame.Length > _usablePayload)
             {
                 Log.Write("BlePeripheral",
-                    $"The hello is {frame.Length} bytes and only {_usablePayload} will fit - the peer will not learn this device's identity.");
-                return;
+                    $"The hello is {frame.Length} bytes and this side believes only {_usablePayload} will fit; " +
+                    "sending it anyway, because that belief is only updated by an MTU callback that does not always arrive.");
             }
 
             try

@@ -735,6 +735,24 @@ peer was cooled down for five minutes. It presented as "Bluetooth does not work"
 logging a perfectly healthy link and the phone logging `Peer identified` for a device that never
 heard it. The mapping is registered before the subscription now.
 
+**A GATT server is told its MTU by a callback that does not always arrive.**
+The last one, and the one that kept the whole Bluetooth tier down. `OnMtuChanged` is the only
+thing that updates an Android peripheral's idea of the usable payload, and on an S21 FE it simply
+does not fire for some connections - so the value sat at the 23-byte ATT default while the link
+was genuinely running at 517. The hello is 273 bytes and cannot be fragmented, so the peripheral
+refused to send it: `the hello is 273 bytes and only 20 will fit`, twice per connection, for ever.
+The central then held a link it could never agree a session on, dropped it at the grace, and cooled
+the phone down for five minutes - while the phone logged `Peer identified` and looked perfectly
+healthy.
+
+Waiting for the callback does not help, because it never comes. **Send it anyway.** Guessing small
+and sending is recoverable - the notification either fits or the link times out exactly as it did
+when we refused. Guessing small and *not* sending is not recoverable at all.
+
+That one line of diagnostic - "the senders check the size and log rather than letting an oversized
+hello vanish silently" - is the only reason this was findable. It was written for a different
+reason and paid for itself here.
+
 ### The v0.4 connection refactor
 
 **Every head held exactly one radio link, and none of them said so.**

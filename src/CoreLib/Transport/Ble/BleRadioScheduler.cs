@@ -294,10 +294,16 @@ namespace CoreLib.Transport.Ble
                 .ThenByDescending(c => c.Rssi)
                 .ToList();
 
+            // Counted before the "already linked" filter, not after. "Ours" means how many of the
+            // devices in range belong to this mesh - a peer whose link is already up is still one
+            // of ours, and reporting "1 seen, 0 ours" beside an established link to that very
+            // device is precisely the sort of misleading line this surface exists to avoid.
+            int ours = seen.Count(c => c.IsPresent && BeaconFilter(c));
+
             lock (_gate)
             {
                 _lastSeen = seen.Count;
-                _lastOurs = usable.Count;
+                _lastOurs = ours;
             }
 
             if (usable.Count == 0)
