@@ -114,6 +114,13 @@ namespace CoreLib.Transport.Ble
         /// link is up. Declining that inside the connect looked equivalent and was not: it came
         /// back as an ordinary failure and put a device this radio is <em>successfully talking
         /// to</em> into the five-minute refusal cooldown.</para>
+        ///
+        /// <para><b>Keyed on <see cref="BleCandidate.Address"/> and nothing else.</b> Not the peer
+        /// fingerprint: that is what the address is for, and the whole point of the question is
+        /// that the peer is not known yet. Two of the three implementations were first written to
+        /// compare a fingerprint against an address - values that can never be equal - so this
+        /// always answered false, the filter never fired, and a second GATT link was opened to the
+        /// same device on every scan round.</para>
         /// </summary>
         bool HasLinkTo(string address);
 

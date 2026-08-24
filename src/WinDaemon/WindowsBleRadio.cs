@@ -28,7 +28,14 @@ namespace WinDaemon
     {
         private readonly ILinkClock _clock;
         private readonly object _gate = new();
-        private readonly List<WindowsBleCentral> _links = new();
+        /// <summary>
+        /// Live links, keyed by the address they were opened to.
+        ///
+        /// <para>Keyed on the address rather than the peer, deliberately: a scan reports addresses
+        /// and cannot know which peer one belongs to until a link to it exists, so the address is
+        /// the only thing both sides of the question share.</para>
+        /// </summary>
+        private readonly Dictionary<string, WindowsBleCentral> _links = new(StringComparer.OrdinalIgnoreCase);
 
         private BluetoothLEAdvertisementWatcher? _watcher;
         private bool _disposed;
@@ -158,15 +165,7 @@ namespace WinDaemon
         /// <summary>True when a link to that Bluetooth address is already held.</summary>
         public bool HasLinkTo(string address)
         {
-            lock (_gate)
-            {
-                foreach (var link in _links)
-                {
-                    if (string.Equals(link.PeerFingerprint, address, StringComparison.OrdinalIgnoreCase)) return true;
-                }
-            }
-
-            return false;
+            lock (_gate) return _links.ContainsKey(address);
         }
 
         /// <summary>Pulls the mesh beacon out of an advertisement, from wherever it was carried.</summary>
@@ -196,10 +195,23 @@ namespace WinDaemon
         {
             if (_disposed || !IsAvailable) return null;
 
+            lock (_gate)
+            {
+                // Belt to the scheduler's braces. It filters candidates it knows are linked, but
+                // the filter and the connect are not one atomic step, and a second GATT link to a
+                // device this machine is already talking to is not a small thing to leak.
+                if (_links.ContainsKey(candidate.Address))
+                {
+                    Log.Write("BleRadio",
+                        $"Already holding a link to {candidate.Name ?? candidate.Address}; not opening a second.");
+                    return null;
+                }
+            }
+
             var link = new WindowsBleCentral(_clock);
             Prepare?.Invoke(link);
 
-            lock (_gate) _links.Add(link);
+            lock (_gate) _links[candidate.Address] = link;
             link.StateChanged += OnLinkState;
 
             try
@@ -224,7 +236,14 @@ namespace WinDaemon
             if (route is not WindowsBleCentral link) return;
 
             link.StateChanged -= OnLinkState;
-            lock (_gate) _links.Remove(link);
+
+            lock (_gate)
+            {
+                foreach (var pair in _links.Where(p => ReferenceEquals(p.Value, link)).ToList())
+                {
+                    _links.Remove(pair.Key);
+                }
+            }
         }
 
         public async ValueTask DisposeAsync()
@@ -244,7 +263,7 @@ namespace WinDaemon
             List<WindowsBleCentral> links;
             lock (_gate)
             {
-                links = _links.ToList();
+                links = _links.Values.ToList();
                 _links.Clear();
             }
 
