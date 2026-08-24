@@ -49,6 +49,32 @@ See [[ble-link-arbitration]] for the discovery half of the same story.
 `MeshFabric` applies the same deadline to routes that have not said who they are yet, because that
 is where a stranger's link actually lives: connected, answering, and belonging to no peer.
 
+## The collision rule must be deterministic
+
+**Direction decides, and nothing else may.**
+
+The settlement used to answer "keep the incoming one" whenever the existing route had not finished
+its handshake yet. That makes the rule non-deterministic, and two ends that disagree about which
+link survives each kill the one the other is holding, then both redial.
+
+Found on hardware: 136 collisions in two minutes between a phone and a laptop, with routes logging
+`established` and `lost` in the same millisecond - established locally, already killed remotely.
+`Both_ends_of_a_collision_keep_the_same_link` pins it, with the handshaking case as its own theory
+row because that is the one that used to flip the answer.
+
+## Rate, and why a backoff is not one
+
+Three separate things bound how often a route is opened, and they are not interchangeable:
+
+| | Cleared by a success | What it is for |
+|---|---|---|
+| `MinDialInterval` | **no** | A hard floor on how often this device reaches for the network at all |
+| Backoff | yes | Growing patience with a peer that keeps failing |
+| `DialGrace` | no | First refusal for the end that wins a collision |
+
+Only the second is a backoff. Relying on it as a rate limit is what allowed 285 sockets in three
+minutes: every glare cycle established something briefly, and the success cleared it.
+
 ## Two links to one peer, and two links to two peers
 
 The collision rule lives inside `PeerLink`, which makes the second case unrepresentable.

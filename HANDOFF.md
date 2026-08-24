@@ -699,6 +699,42 @@ with no listener and no links, and the only clue was the absence of `Listening o
 log.
 Worth remembering that a screenshot is evidence of what was drawn, not of what was running.
 
+### What the phone found, once it was plugged in
+
+Four defects that only two real devices could produce. Every one of them is in code the unit tests
+covered and passed; none of them is visible from reading a single side.
+
+**The two ends disagreed about which link survives a collision.**
+The worst of them. `SettleSameKind` answered "keep the incoming one" whenever the existing route
+had not finished its handshake yet - which looks like a harmless nicety and is not, because it
+makes the rule non-deterministic. The peer settles on direction alone and keeps the link it
+dialled; this end sees a half-open existing route, keeps the *other* one, and each side kills the
+link the other is holding. Both redial and it repeats: a phone and a laptop on one desk produced
+136 collisions in two minutes and were still going, with routes logging "established" and "lost"
+in the same millisecond - established locally, already killed remotely.
+The rule is the fingerprint comparison and only that, whatever state either route is in.
+
+**A backoff is not a rate limit.**
+Losing a route set one, and it was correct - but every glare cycle established something briefly,
+and the success cleared it. 285 sockets in under three minutes, each settling correctly and none
+of them lasting. `MinDialInterval` is a hard floor on how often this device reaches for the
+network at all, cleared by nothing.
+
+**A route that failed before it was ever usable stayed in the table for ever.**
+The state handler returned early unless the route had been `Established`, so a link refused at the
+hello left a dead object behind, `Has(kind)` answered true about it, and the supervisor never
+opened another. One failed handshake wedged that route kind to that peer until a restart.
+
+**The peer's hello arrived before anything could route it, and was dropped on the floor.**
+BlueZ publishes one property-change stream for the whole bus, so the radio maps a changed
+characteristic back to the link that owns it. That mapping was added *after* `ResolveAsync`
+returned - and `ResolveAsync` subscribes, then waits up to a second and a half for the MTU to
+settle. A peripheral sends its hello the instant a central subscribes, so it landed in that gap
+every time. No session was ever agreed, the link was dropped at the twelve-second grace, and the
+peer was cooled down for five minutes. It presented as "Bluetooth does not work" with both ends
+logging a perfectly healthy link and the phone logging `Peer identified` for a device that never
+heard it. The mapping is registered before the subscription now.
+
 ### The v0.4 connection refactor
 
 **Every head held exactly one radio link, and none of them said so.**

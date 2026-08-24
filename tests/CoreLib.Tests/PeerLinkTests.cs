@@ -1,4 +1,4 @@
-using CoreLib.Identity;
+﻿using CoreLib.Identity;
 using CoreLib.Tests.Fakes;
 using CoreLib.Transport;
 using CoreLib.Transport.Fabric;
@@ -201,6 +201,251 @@ public class PeerLinkTests
         Assert.True(link.HasPresence);
     }
 
+    /// <summary>
+    /// <b>A hard ceiling on how often this device reaches for the network, whatever else happens.</b>
+    ///
+    /// <para>The backoff after a failure is cleared by the next success, which is right for a
+    /// backoff and useless as a rate limit: in a glare loop every cycle establishes something
+    /// briefly, the backoff resets, and the next attempt goes straight out. Two devices on a desk
+    /// opened 285 sockets to each other in under three minutes that way.</para>
+    /// </summary>
+    [Fact]
+    public void Opening_is_rate_limited_even_across_a_success()
+    {
+        var clock = new FakeClock();
+        var peerIdentity = DeviceIdentity.CreateEphemeral();
+        var peer = new PeerRecord { PublicKey = peerIdentity.PublicKey, Name = "peer" };
+
+        // The dialling side, so the losing side's grace cannot be what is under test here.
+        var link = new PeerLink(peer, "!" + peer.Fingerprint, () => BleCapability.Both, clock, Timings);
+
+        link.NoteOpening(RouteKind.WiFi);
+        Assert.False(link.MayOpen(RouteKind.WiFi));
+
+        // A route comes up and goes away again, which clears the ordinary backoff.
+        var route = new FakeRoute(RouteKind.WiFi, clock).Identify(peer.Fingerprint).Establish();
+        link.Adopt(route);
+        link.NoteSuccess(RouteKind.WiFi);
+        route.Drop("gone");
+        link.NoteSuccess(RouteKind.WiFi);
+
+        // The rate limit still holds.
+        Assert.False(link.MayOpen(RouteKind.WiFi));
+
+        clock.Advance(Timings.MinDialInterval + TimeSpan.FromSeconds(1));
+        Assert.True(link.MayOpen(RouteKind.WiFi));
+    }
+
+    // ── the two ends must agree ──────────────────────────────────────────────
+
+    /// <summary>
+    /// <b>Both ends of a collision must keep the same physical link.</b>
+    ///
+    /// <para>This is the property the whole rule exists for, and it was quietly broken: the
+    /// settlement returned the incoming route whenever the existing one had not finished its
+    /// handshake yet. One end then keeps the link it dialled while the other keeps the opposite
+    /// one, so each kills the link the other is holding, both redial, and it repeats.</para>
+    ///
+    /// <para>Found on a phone and a laptop: a collision every fifteen seconds for as long as both
+    /// were running, and a route logging "established" and "lost" in the same millisecond -
+    /// established locally, already killed remotely.</para>
+    ///
+    /// <para>Modelled from both sides at once, with the lower end's route deliberately still
+    /// handshaking, which is exactly the state that used to flip the answer.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(true)]    // the higher end's existing route has not finished its handshake
+    [InlineData(false)]   // both are established
+    public void Both_ends_of_a_collision_keep_the_same_link(bool existingStillHandshaking)
+    {
+        var clock = new FakeClock();
+
+        var lowIdentity = DeviceIdentity.CreateEphemeral();
+        var highIdentity = DeviceIdentity.CreateEphemeral();
+
+        // Deterministic ordering, whatever the two random fingerprints happen to be.
+        var (low, high) = string.CompareOrdinal(lowIdentity.Fingerprint, highIdentity.Fingerprint) < 0
+            ? (lowIdentity, highIdentity)
+            : (highIdentity, lowIdentity);
+
+        var lowSide = new PeerLink(new PeerRecord { PublicKey = high.PublicKey, Name = "high" },
+                                   low.Fingerprint, () => BleCapability.Both, clock, Timings);
+        var highSide = new PeerLink(new PeerRecord { PublicKey = low.PublicKey, Name = "low" },
+                                    high.Fingerprint, () => BleCapability.Both, clock, Timings);
+
+        Assert.True(lowSide.ShouldDialWiFi);
+        Assert.False(highSide.ShouldDialWiFi);
+
+        // One socket each way. "lowDialled" is one physical link seen from both ends; so is
+        // "highDialled".
+        var lowSeesItsOwnDial = new FakeRoute(RouteKind.WiFi, clock).Identify(high.Fingerprint).Establish();
+        var lowSeesTheirDial = new FakeRoute(RouteKind.WiFi, clock, outbound: false).Identify(high.Fingerprint).Establish();
+
+        var highSeesItsOwnDial = new FakeRoute(RouteKind.WiFi, clock).Identify(low.Fingerprint).Establish();
+        var highSeesTheirDial = new FakeRoute(RouteKind.WiFi, clock, outbound: false).Identify(low.Fingerprint);
+
+        if (!existingStillHandshaking) highSeesTheirDial.Establish();
+
+        lowSide.Adopt(lowSeesItsOwnDial);
+        lowSide.Adopt(lowSeesTheirDial);
+
+        // The high end adopts the peer's dial first, then its own - the order that used to flip it.
+        highSide.Adopt(highSeesTheirDial);
+        highSide.Adopt(highSeesItsOwnDial);
+
+        // The low end dialled, so both must be holding that same physical link: outbound at the
+        // low end, inbound at the high end.
+        Assert.True(lowSide.RouteOf(RouteKind.WiFi)!.IsOutbound,
+            "the end that wins the race must keep the link it dialled");
+        Assert.False(highSide.RouteOf(RouteKind.WiFi)!.IsOutbound,
+            "the other end must keep the link its peer dialled - the same physical socket");
+    }
+
+    // ── what hardware found ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// <b>A route that failed before it was ever usable must leave the table.</b>
+    ///
+    /// <para>It is adopted while <c>Handshaking</c> and can drop to <c>Backoff</c> a moment later -
+    /// a refused hello, a socket closed by the peer, a failed MTU exchange. The state handler
+    /// returned early unless the route had been <c>Established</c>, so the dead object stayed in
+    /// the table, <c>Has(kind)</c> answered true about it, and the supervisor never opened
+    /// another. One failed handshake wedged that route kind to that peer until a restart.</para>
+    /// </summary>
+    [Fact]
+    public void A_route_that_fails_before_it_is_established_leaves_the_table()
+    {
+        var (link, clock, _, _) = Link();
+
+        var route = new FakeRoute(RouteKind.WiFi, clock).Connect();
+        link.Adopt(route);
+        Assert.True(link.Has(RouteKind.WiFi));
+
+        // Never established - refused at the hello.
+        route.Drop("not a paired device");
+
+        Assert.False(link.Has(RouteKind.WiFi));
+
+        // And once the backoff lapses, another may be opened.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.True(link.MayOpen(RouteKind.WiFi));
+    }
+
+    /// <summary>
+    /// <b>A link that has just died is not reopened in the same millisecond.</b>
+    ///
+    /// <para>Both devices dial, so both can win the race and one link is dropped as the loser. The
+    /// end whose link was dropped sees an ordinary loss - and with no backoff it redialled
+    /// instantly, collided again, and lost again. A phone and a laptop on one desk produced 136
+    /// collisions in two minutes and were still going.</para>
+    ///
+    /// <para>The old dial loop tolerated glare because it ran on a fifteen-second timer. A
+    /// supervisor that reconciles the moment anything changes has no such accidental rate limit,
+    /// so the backoff has to be real.</para>
+    /// </summary>
+    [Fact]
+    public void Losing_an_established_route_backs_off_before_the_next_attempt()
+    {
+        var (link, clock, _, peerFingerprint) = Link();
+
+        var route = new FakeRoute(RouteKind.WiFi, clock).Identify(peerFingerprint).Establish();
+        link.Adopt(route);
+
+        route.Drop("the peer dropped it as a collision loser");
+
+        Assert.False(link.Has(RouteKind.WiFi));
+        Assert.False(link.MayOpen(RouteKind.WiFi));   // not this instant
+
+        clock.Advance(Timings.MaxBackoff + TimeSpan.FromSeconds(1));
+        Assert.True(link.MayOpen(RouteKind.WiFi));    // but soon
+    }
+
+    /// <summary>
+    /// The loser of a collision is removed from the table before it is closed, so its own closing
+    /// must not be announced as a loss - the peer never stopped being reachable.
+    /// </summary>
+    [Fact]
+    public void Dropping_a_collision_loser_is_not_announced_as_a_lost_route()
+    {
+        var (link, clock, _, peerFingerprint) = Link();
+
+        int lost = 0;
+        link.RouteLost += (_, _, _) => lost++;
+
+        var first = new FakeRoute(RouteKind.WiFi, clock, peerFingerprint).Identify(peerFingerprint).Establish();
+        var second = new FakeRoute(RouteKind.WiFi, clock, peerFingerprint, outbound: false)
+            .Identify(peerFingerprint).Establish();
+
+        link.Adopt(first);
+        link.Adopt(second);
+
+        Assert.Equal(0, lost);
+        Assert.Single(link.LiveRoutes);
+    }
+
+    /// <summary>
+    /// <b>The end that would lose a collision gives the other one first refusal - but only on the
+    /// retry.</b>
+    ///
+    /// <para>Both ends dial, and that is the design: either may be the only one that can open the
+    /// socket. But both already agree the surviving link is the one dialled by the lower
+    /// fingerprint, so once a collision has actually happened the higher end has nothing to gain
+    /// by racing again immediately.</para>
+    ///
+    /// <para>A phone and a laptop on one desk produced a collision every two seconds indefinitely:
+    /// each one re-established the link, which cleared the very backoff meant to damp it.</para>
+    /// </summary>
+    [Fact]
+    public void The_end_that_would_lose_the_race_defers_its_retry_and_not_its_first_try()
+    {
+        var clock = new FakeClock();
+        var peerIdentity = DeviceIdentity.CreateEphemeral();
+        var peer = new PeerRecord { PublicKey = peerIdentity.PublicKey, Name = "peer" };
+
+        // Deterministically the higher of the two, so this device loses any collision.
+        // Lowercase, because a fingerprint is lowercase hex and 'Z' would sort *below* it.
+        string higher = "z" + peer.Fingerprint;
+        var loser = new PeerLink(peer, higher, () => BleCapability.Both, clock, Timings);
+
+        Assert.False(loser.ShouldDialWiFi);
+
+        // The first attempt is free: nothing has been lost, so there is no collision to avoid.
+        Assert.True(loser.MayOpen(RouteKind.WiFi));
+
+        var route = new FakeRoute(RouteKind.WiFi, clock).Identify(peer.Fingerprint).Establish();
+        loser.Adopt(route);
+        route.Drop("dropped as the collision loser");
+
+        // Now it knows the other end is there, and that it would lose again.
+        Assert.False(loser.MayOpen(RouteKind.WiFi));
+
+        clock.Advance(Timings.DialGrace + TimeSpan.FromSeconds(1));
+        Assert.True(loser.MayOpen(RouteKind.WiFi));
+    }
+
+    /// <summary>The end that wins the collision keeps dialling as soon as its backoff lapses.</summary>
+    [Fact]
+    public void The_end_that_wins_the_race_is_not_made_to_wait()
+    {
+        var clock = new FakeClock();
+        var peerIdentity = DeviceIdentity.CreateEphemeral();
+        var peer = new PeerRecord { PublicKey = peerIdentity.PublicKey, Name = "peer" };
+
+        string lower = "!" + peer.Fingerprint;   // '!' sorts below any lowercase hex digit
+        var winner = new PeerLink(peer, lower, () => BleCapability.Both, clock, Timings);
+
+        Assert.True(winner.ShouldDialWiFi);
+
+        var route = new FakeRoute(RouteKind.WiFi, clock).Identify(peer.Fingerprint).Establish();
+        winner.Adopt(route);
+        route.Drop("the peer went away");
+
+        // Its own backoff still applies - a dead link is not reopened instantly - but the extra
+        // grace for the losing side does not.
+        clock.Advance(Timings.MaxBackoff + TimeSpan.FromSeconds(1));
+        Assert.True(winner.MayOpen(RouteKind.WiFi));
+    }
+
     // ── backoff ──────────────────────────────────────────────────────────────
 
     [Fact]
@@ -219,16 +464,60 @@ public class PeerLinkTests
         Assert.True(idle > later, "a device nobody is looking at should retry more slowly");
     }
 
+    /// <summary>
+    /// A success clears the backoff.
+    ///
+    /// <para>Pinned to the dialling side deliberately. The other side carries a second, separate
+    /// wait - first refusal for the end that wins a collision - and that one is <em>not</em>
+    /// cleared by a success, because a route establishing is exactly the moment the old code
+    /// cleared the damping and dialled straight into another collision.</para>
+    /// </summary>
     [Fact]
     public void A_success_clears_the_backoff()
     {
-        var (link, _, _, _) = Link();
+        var clock = new FakeClock();
+        var peerIdentity = DeviceIdentity.CreateEphemeral();
+        var peer = new PeerRecord { PublicKey = peerIdentity.PublicKey, Name = "peer" };
+
+        var link = new PeerLink(peer, "!" + peer.Fingerprint, () => BleCapability.Both, clock, Timings);
+        Assert.True(link.ShouldDialWiFi);
 
         link.NoteFailure(RouteKind.WiFi, screenOn: true);
         Assert.False(link.MayOpen(RouteKind.WiFi));
 
         link.NoteSuccess(RouteKind.WiFi);
         Assert.True(link.MayOpen(RouteKind.WiFi));
+    }
+
+    /// <summary>
+    /// A route establishing must not clear the losing side's grace.
+    ///
+    /// <para>That is the loop this whole mechanism exists to break: the loser's link was dropped,
+    /// the winner's inbound link established a moment later, the success cleared the damping, and
+    /// the loser dialled straight into another collision. Every two seconds, indefinitely.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_success_does_not_clear_the_losing_sides_grace()
+    {
+        var clock = new FakeClock();
+        var peerIdentity = DeviceIdentity.CreateEphemeral();
+        var peer = new PeerRecord { PublicKey = peerIdentity.PublicKey, Name = "peer" };
+
+        var loser = new PeerLink(peer, "z" + peer.Fingerprint, () => BleCapability.Both, clock, Timings);
+        Assert.False(loser.ShouldDialWiFi);
+
+        var mine = new FakeRoute(RouteKind.WiFi, clock).Identify(peer.Fingerprint).Establish();
+        loser.Adopt(mine);
+        mine.Drop("dropped as the collision loser");
+
+        // The peer's own link arrives immediately afterwards and establishes.
+        var theirs = new FakeRoute(RouteKind.WiFi, clock, outbound: false).Identify(peer.Fingerprint);
+        loser.Adopt(theirs);
+        theirs.Establish();
+
+        // That success must not have re-armed the dial.
+        await loser.CloseAsync(RouteKind.WiFi, "the peer went away");
+        Assert.False(loser.MayOpen(RouteKind.WiFi));
     }
 
     [Fact]

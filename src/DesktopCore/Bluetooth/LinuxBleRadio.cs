@@ -1,4 +1,4 @@
-using CoreLib.Diagnostics;
+﻿using CoreLib.Diagnostics;
 using CoreLib.Transport;
 using CoreLib.Transport.Ble;
 using CoreLib.Transport.Fabric;
@@ -288,7 +288,13 @@ public sealed class LinuxBleRadio : IBleRadio
             return null;
         }
 
-        var link = new LinuxBleLink(_bluez, candidate.Address, candidate.Name, _clock);
+        var link = new LinuxBleLink(_bluez, candidate.Address, candidate.Name, _clock)
+        {
+            // Registered the moment the characteristics resolve, before notifications are switched
+            // on - see the hook's own note for what was lost in the gap.
+            Registered = (l, outbox) => { lock (_gate) _byOutbox[outbox] = l; },
+        };
+
         Prepare?.Invoke(link);
 
         lock (_gate) _byDevice[candidate.Address] = link;
@@ -303,9 +309,6 @@ public sealed class LinuxBleRadio : IBleRadio
             await ForgetAsync(candidate.Address).ConfigureAwait(false);
             return link;   // handed back so its Backoff state reaches the scheduler's cooldown
         }
-
-        string? outbox = link.OutboxPath;
-        if (outbox != null) lock (_gate) _byOutbox[outbox] = link;
 
         return link;
     }

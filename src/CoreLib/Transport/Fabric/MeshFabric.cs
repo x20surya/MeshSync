@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -184,6 +184,10 @@ namespace CoreLib.Transport.Fabric
 
             var provider = ProviderFor(kind);
             if (provider?.IsAvailable != true) return false;
+
+            // Recorded before the attempt, not after, so a provider that blocks or throws still
+            // counts against the rate limit.
+            link.NoteOpening(kind);
 
             IPeerRoute? route;
             try { route = provider.Open(link.Peer); }

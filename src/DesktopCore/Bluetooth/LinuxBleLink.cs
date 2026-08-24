@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using CoreLib.Diagnostics;
 using CoreLib.Identity;
 using CoreLib.Transport;
@@ -107,6 +107,23 @@ public sealed class LinuxBleLink : IPeerRoute
     /// <summary>Raised with the peer's hello, so the registry can note its name and capability.</summary>
     public event Action<LinuxBleLink, PeerIdentifiedEventArgs>? Identified;
 
+    /// <summary>
+    /// Called with this link's outbox path the moment it is known, and <b>before</b> notifications
+    /// are switched on.
+    ///
+    /// <para>BlueZ publishes one property-change stream for the whole bus, so the radio has to map
+    /// a changed characteristic back to the link that owns it. Registering that mapping after the
+    /// subscription is set up looks equivalent and is not: the peer answers a subscription
+    /// immediately, and a peripheral sends its hello the instant a central subscribes. Anything
+    /// arriving before the mapping exists is dropped on the floor.</para>
+    ///
+    /// <para>That window used to be the whole MTU-settling loop - up to a second and a half - so
+    /// the peer's hello was reliably lost, no session was ever agreed, and the link was dropped at
+    /// the handshake grace and the peer cooled down for five minutes. It presented as "Bluetooth
+    /// does not work" with both ends logging a healthy link.</para>
+    /// </summary>
+    internal Action<LinuxBleLink, string>? Registered { get; set; }
+
     // ──────────────────────────────── bringing it up
 
     /// <summary>
@@ -139,6 +156,11 @@ public sealed class LinuxBleLink : IPeerRoute
                         _inboxPath = inbox;
                         _outboxPath = outbox;
                     }
+
+                    // Before subscribing, never after: the peer sends its hello the moment the
+                    // subscription lands, and nothing can route it here until this mapping exists.
+                    try { Registered?.Invoke(this, outbox); }
+                    catch (Exception ex) { Log.Write("BleLink", "Registering the link failed", ex); }
 
                     await SubscribeAsync().ConfigureAwait(false);
 

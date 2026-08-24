@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -37,6 +37,8 @@ namespace CoreLib.Transport.Fabric
         private readonly Dictionary<RouteKind, int> _failures = new();
         private readonly Dictionary<RouteKind, DateTime> _retryAt = new();
         private readonly Dictionary<RouteKind, string> _lastFailure = new();
+        private readonly Dictionary<RouteKind, DateTime> _lastLost = new();
+        private readonly Dictionary<RouteKind, DateTime> _lastAttempt = new();
 
         private PeerRecord _peer;
         private bool _disposed;
@@ -105,14 +107,66 @@ namespace CoreLib.Transport.Fabric
             lock (_gate) return _routes.ContainsKey(kind);
         }
 
-        /// <summary>False while a failed route is serving out its backoff.</summary>
+        /// <summary>
+        /// True when this device is the one that should dial a socket to this peer.
+        ///
+        /// <para>The same comparison that settles a collision, asked before there is one. Both ends
+        /// compute complementary answers from fingerprints they already hold.</para>
+        /// </summary>
+        public bool ShouldDialWiFi => string.CompareOrdinal(_localFingerprint, Fingerprint) < 0;
+
+        /// <summary>
+        /// False while a failed route is serving out its backoff, and - for a socket this device
+        /// would lose the race for - while the other end still has first refusal.
+        ///
+        /// <para>See <see cref="RouteTimings.DialGrace"/>. Racing a collision this device is
+        /// guaranteed to lose costs a socket, a handshake and a retry, every time.</para>
+        /// </summary>
         public bool MayOpen(RouteKind kind)
         {
             lock (_gate)
             {
                 if (_routes.ContainsKey(kind)) return false;
-                return !_retryAt.TryGetValue(kind, out var until) || _clock.UtcNow >= until;
+
+                var now = _clock.UtcNow;
+
+                if (_retryAt.TryGetValue(kind, out var until) && now < until) return false;
+
+                // The hard rate limit. Deliberately not cleared by a success, unlike the backoff
+                // above - see RouteTimings.MinDialInterval for why that distinction is the whole
+                // point.
+                if (_lastAttempt.TryGetValue(kind, out var attempted) &&
+                    now - attempted < _timings.MinDialInterval)
+                {
+                    return false;
+                }
+
+                // Only after something has actually been lost. The first attempt is always free:
+                // both ends dial, which is the design, and at that point there is no established
+                // link for either to lose. Delaying it would cost every fresh start a beat for a
+                // collision that may not happen.
+                //
+                // It is the *retry* that has to be deferred, because by then this end knows the
+                // other one is there and knows it will lose the race.
+                if (kind == RouteKind.WiFi && !ShouldDialWiFi &&
+                    _lastLost.TryGetValue(kind, out var lost) && now - lost < _timings.DialGrace)
+                {
+                    return false;
+                }
+
+                return true;
             }
+        }
+
+        /// <summary>
+        /// Records that a route of this kind is being opened now.
+        ///
+        /// Called whatever the attempt goes on to do, because the point is to bound how often this
+        /// device reaches for the radio or the network - not how often it succeeds.
+        /// </summary>
+        public void NoteOpening(RouteKind kind)
+        {
+            lock (_gate) _lastAttempt[kind] = _clock.UtcNow;
         }
 
         public DateTime RetryAt(RouteKind kind)
@@ -215,13 +269,26 @@ namespace CoreLib.Transport.Fabric
         /// </summary>
         private IPeerRoute SettleSameKind(IPeerRoute existing, IPeerRoute incoming)
         {
-            if (existing.State != RouteState.Established) return incoming;
-
-            bool weShouldDial = string.CompareOrdinal(_localFingerprint, Fingerprint) < 0;
-            bool keepOutbound = weShouldDial;
-
-            if (existing.IsOutbound == keepOutbound && incoming.IsOutbound != keepOutbound) return existing;
-            if (incoming.IsOutbound == keepOutbound && existing.IsOutbound != keepOutbound) return incoming;
+            // <b>Direction decides, and nothing else may.</b>
+            //
+            // This used to answer "keep the incoming one" whenever the existing route had not
+            // finished its handshake yet - which looks harmless and is not, because the two ends
+            // then stop agreeing. The peer settles on direction alone and keeps the link it
+            // dialled; this end sees a half-open existing route, keeps the *other* one, and each
+            // side kills the link the other is holding. Both redial, and it repeats.
+            //
+            // On a phone and a laptop that produced a collision every fifteen seconds for as long
+            // as they were both running, with a route logging "established" and "lost" in the same
+            // millisecond - established locally, already killed remotely.
+            //
+            // So the rule is the fingerprint comparison and only that. It is deterministic, both
+            // ends compute complementary answers from values they already hold, and neither needs
+            // to know what state the other's route is in.
+            if (existing.IsOutbound != incoming.IsOutbound)
+            {
+                bool keepOutbound = ShouldDialWiFi;
+                return existing.IsOutbound == keepOutbound ? existing : incoming;
+            }
 
             // Both the same direction, so one is a link the peer has already abandoned. Believe
             // the newer one.
@@ -366,6 +433,7 @@ namespace CoreLib.Transport.Fabric
             _retryAt[kind] = _clock.UtcNow + BackoffFor(failures, screenOn);
 
             if (!string.IsNullOrWhiteSpace(reason)) _lastFailure[kind] = reason!;
+            _lastLost[kind] = _clock.UtcNow;
         }
 
         /// <summary>
@@ -443,7 +511,14 @@ namespace CoreLib.Transport.Fabric
                 return;
             }
 
-            if (from != RouteState.Established) return;
+            // Any terminal state, from any state before it - not only from Established.
+            //
+            // <para><b>A route that failed before it was ever usable used to stay in the table for
+            // ever.</b> It was adopted while Handshaking, dropped to Backoff a moment later, and
+            // this method returned early without removing it - so <c>Has(kind)</c> answered true
+            // about a dead object and the supervisor never opened another. One failed handshake
+            // wedged that route kind to that peer until the process restarted.</para>
+            if (to is not (RouteState.Backoff or RouteState.Idle)) return;
 
             bool removed;
             lock (_gate)
@@ -452,10 +527,29 @@ namespace CoreLib.Transport.Fabric
                 if (removed) _routes.Remove(route.Kind);
             }
 
+            // Already gone: this is the loser of a collision, which was removed from the table
+            // deliberately before being closed. Nothing was lost, so nothing is announced.
             if (!removed) return;
 
             string reason = route.LastFailure ?? "the link closed";
-            lock (_gate) _lastFailure[route.Kind] = reason;
+
+            lock (_gate)
+            {
+                _lastFailure[route.Kind] = reason;
+
+                // <b>A link that has just died must not be reopened in the same millisecond.</b>
+                //
+                // Both devices dial, so both can win the race to connect and one link is dropped
+                // as the loser. The end whose link was dropped sees an ordinary loss - and with
+                // no backoff it redialled instantly, collided again, and lost again. Two devices
+                // on a desk produced 136 collisions in two minutes and were still going.
+                //
+                // The old dial loop tolerated glare because it ran on a 15-second timer. A
+                // supervisor that reconciles the moment anything changes does not have that
+                // accidental rate limit, so the backoff has to be real. One second with jitter is
+                // enough to break the loop and short enough that a genuine drop reconnects at once.
+                NoteFailureLocked(route.Kind, screenOn: true, reason);
+            }
 
             Log.Write("Fabric", $"{Describe(route)} lost: {reason}");
             Detach(route);

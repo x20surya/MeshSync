@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace CoreLib.Transport.Fabric
 {
@@ -74,6 +74,41 @@ namespace CoreLib.Transport.Fabric
 
         /// <summary>How often the supervisor reconciles when nothing has signalled it.</summary>
         public TimeSpan ReconcileInterval { get; init; } = TimeSpan.FromSeconds(15);
+
+        /// <summary>
+        /// The shortest gap between two attempts to open the same kind of route to one peer.
+        ///
+        /// <para><b>A hard ceiling on dial rate, and the only one that cannot be argued away.</b>
+        /// The backoff after a failure is cleared by the next success, which is correct for a
+        /// backoff and useless as a rate limit: in a glare loop every cycle establishes something
+        /// briefly, so the backoff resets and the next attempt goes out immediately.</para>
+        ///
+        /// <para>Two devices on a desk opened 285 sockets to each other in under three minutes,
+        /// each one settling correctly and none of them lasting. The settlement was not the
+        /// problem - the rate was. This is not cleared by anything.</para>
+        /// </summary>
+        public TimeSpan MinDialInterval { get; init; } = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// How long the end that would lose a socket collision waits before dialling anyway.
+        ///
+        /// <para><b>Both devices dial, and that is deliberate</b> - either end may be the only one
+        /// that can open the socket. But both ends already agree which link survives a collision:
+        /// the one dialled by the lower fingerprint. So the higher one has nothing to gain by
+        /// racing, and everything to lose - its link is dropped, which it sees as an ordinary loss
+        /// and retries.</para>
+        ///
+        /// <para>The old dial loop ran on a fifteen-second timer and glare cost one wasted socket
+        /// per round. A supervisor that reconciles the moment anything changes has no such
+        /// accidental rate limit: a phone and a laptop on one desk produced a collision every two
+        /// seconds indefinitely, each one re-establishing the link and clearing the very backoff
+        /// meant to damp it.</para>
+        ///
+        /// <para>So the higher fingerprint gives the lower one first refusal, and dials only if
+        /// nothing has arrived by the time this elapses. A peer that is asleep or unreachable
+        /// still gets dialled, just a beat later.</para>
+        /// </summary>
+        public TimeSpan DialGrace { get; init; } = TimeSpan.FromSeconds(6);
 
         /// <summary>A reconcile pass that has not finished in this long means the loop is wedged.</summary>
         public TimeSpan SupervisorWatchdog { get; init; } = TimeSpan.FromSeconds(60);
