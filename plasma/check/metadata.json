@@ -1,0 +1,15 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Category": "System Information",
+        "Description": "Drives every MeshBus call against a scratch daemon so check.sh can read the wire",
+        "EnabledByDefault": true,
+        "Icon": "meshsync",
+        "Id": "dev.meshsync.check",
+        "Name": "Mesh Sync bus check",
+        "Version": "1.0.0"
+    },
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-MainScript": "ui/main.qml"
+}

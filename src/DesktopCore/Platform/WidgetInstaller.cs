@@ -49,15 +49,31 @@ public static class WidgetInstaller
             string bundled = VersionOf(Path.Combine(source, "metadata.json"));
             string installed = VersionOf(Path.Combine(target, "metadata.json"));
 
-            // Equal is not newer. Rewriting an identical directory on every launch would churn
-            // the file times and make Plasma reload the widget for no reason.
-            if (installed.Length > 0 && Compare(bundled, installed) <= 0) return;
+            bool first = installed.Length == 0;
+            bool newer = first || Compare(bundled, installed) > 0;
+
+            // Equal is not newer - a released version is not rewritten on every launch, because
+            // that would churn the file times and make Plasma reload the widget for no reason.
+            //
+            // But equal is also what a working tree looks like. Every edit between two version
+            // bumps is invisible to a version comparison, so a widget edited in place stayed
+            // stale and the only symptom was that nothing changed - which is a bad hour to
+            // spend. When the versions match, the newest write time decides instead.
+            bool edited = !newer && NewestWrite(source) > NewestWrite(target);
+
+            if (!newer && !edited) return;
 
             CopyTree(source, target);
 
-            Log.Write("Widget", installed.Length == 0
+            // A newly installed widget does not appear in Add Widgets until KDE's own cache
+            // knows about it, which otherwise means waiting for the next login.
+            if (first) Rebuild();
+
+            Log.Write("Widget", first
                 ? $"Installed the Plasma widget ({bundled}). Add it from Add Widgets."
-                : $"Upgraded the Plasma widget from {installed} to {bundled}.");
+                : edited
+                    ? $"Refreshed the Plasma widget ({bundled}); the bundled copy had changed."
+                    : $"Upgraded the Plasma widget from {installed} to {bundled}.");
         }
         catch (Exception ex)
         {
@@ -139,14 +155,82 @@ public static class WidgetInstaller
         return 0;
     }
 
+    /// <summary>The most recent write anywhere in a package, or default when it is not there.</summary>
+    private static DateTime NewestWrite(string directory)
+    {
+        try
+        {
+            if (!Directory.Exists(directory)) return default;
+
+            var newest = default(DateTime);
+
+            foreach (string file in Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
+            {
+                var written = File.GetLastWriteTimeUtc(file);
+                if (written > newest) newest = written;
+            }
+
+            return newest;
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    /// <summary>
+    /// Copies the package over, and takes away what is no longer in it.
+    ///
+    /// <para>Copying over the top alone leaves a file that was deleted upstream sitting in the
+    /// installed copy for ever - and a stale QML file beside a live one is not inert, because a
+    /// component is resolved by name from the directory it is in.</para>
+    /// </summary>
     private static void CopyTree(string source, string target)
     {
         Directory.CreateDirectory(target);
 
         foreach (string directory in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
-            Directory.CreateDirectory(directory.Replace(source, target, StringComparison.Ordinal));
+            Directory.CreateDirectory(Rebase(directory, source, target));
 
         foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
-            File.Copy(file, file.Replace(source, target, StringComparison.Ordinal), overwrite: true);
+            File.Copy(file, Rebase(file, source, target), overwrite: true);
+
+        foreach (string file in Directory.GetFiles(target, "*", SearchOption.AllDirectories))
+        {
+            if (!File.Exists(Rebase(file, target, source))) File.Delete(file);
+        }
+
+        // Deepest first, so a directory is empty by the time it is looked at.
+        foreach (string directory in Directory.GetDirectories(target, "*", SearchOption.AllDirectories)
+                     .OrderByDescending(d => d.Length))
+        {
+            if (!Directory.Exists(Rebase(directory, target, source))) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>The same relative path under a different root. Not a string replace: a root that
+    /// appears again further down the path would be rewritten twice.</summary>
+    private static string Rebase(string path, string from, string to) =>
+        Path.Combine(to, Path.GetRelativePath(from, path));
+
+    /// <summary>Tells KDE a package appeared. Best effort - the widget works without it.</summary>
+    private static void Rebuild()
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "kbuildsycoca6",
+                Arguments = "--noincremental",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+
+            process?.WaitForExit(10_000);
+        }
+        catch
+        {
+            // Not installed, or not a KDE session after all. Nothing to do about it.
+        }
     }
 }
