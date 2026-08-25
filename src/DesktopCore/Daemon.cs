@@ -1090,16 +1090,50 @@ public sealed class Daemon : IDisposable
             $"{file.Name} from {file.PeerFingerprint[..Math.Min(9, file.PeerFingerprint.Length)]}");
     }
 
-    /// <summary>Asks one device to make a noise, or to stop.</summary>
+    private readonly Lock _ringRequests = new();
+    private readonly HashSet<string> _ringing = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Raised when this device has asked a peer to start or stop ringing.</summary>
+    public event Action<string>? RingRequestChanged;
+
+    /// <summary>Whether this device has asked that one to ring and not yet asked it to stop.</summary>
+    public bool HasAskedToRing(string fingerprint)
+    {
+        lock (_ringRequests) return _ringing.Contains(fingerprint);
+    }
+
     /// <summary>
     /// Asks one device to make a noise, or to stop.
     ///
     /// <para>Through the fabric rather than the socket table, which is the whole point of the
     /// feature: the moment you most want to find a device is the moment it is not on any network,
     /// and this used to reach only peers that had one.</para>
+    ///
+    /// <para><b>Why the request is remembered.</b> Whether a phone is actually making a noise is
+    /// the phone's business and it does not report back, so the honest answer any UI can give is
+    /// whether it was <em>asked</em>. Kept here rather than in whatever drew the button, because
+    /// the Plasma widget held it in a list delegate - which is reused as the list re-sorts, and
+    /// is rebuilt when the popup is - so a row offered to stop a ring it never started, and lost
+    /// the offer for one it did.</para>
     /// </summary>
-    public Task<bool> RingAsync(string fingerprint, bool on, CancellationToken cancellationToken = default) =>
-        Fabric.SendToAsync(fingerprint, SyncContent.Ring, [on ? (byte)1 : (byte)0], cancellationToken);
+    public async Task<bool> RingAsync(string fingerprint, bool on, CancellationToken cancellationToken = default)
+    {
+        bool sent = await Fabric.SendToAsync(fingerprint, SyncContent.Ring,
+            [on ? (byte)1 : (byte)0], cancellationToken).ConfigureAwait(false);
+
+        // Only a request that arrived is remembered. One that did not leaves the button saying
+        // "ring", which is the truth.
+        if (!sent) return false;
+
+        lock (_ringRequests)
+        {
+            if (on) _ringing.Add(fingerprint);
+            else _ringing.Remove(fingerprint);
+        }
+
+        RingRequestChanged?.Invoke(fingerprint);
+        return true;
+    }
 
     private async Task OnLocalClipboardChangedAsync(string text)
     {

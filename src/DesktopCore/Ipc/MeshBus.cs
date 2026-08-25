@@ -175,6 +175,7 @@ public sealed class MeshBus : IDisposable
         _daemon.Security.Peers.Changed += Nudge;
         _daemon.Transports.Changed += _ => Nudge();
         _daemon.Ringer.StateChanged += _ => Nudge();
+        _daemon.RingRequestChanged += _ => Nudge();
         _daemon.Security.PairingRequested += _ => Nudge();
         _daemon.TrayIconVisibleChanged += _ => Nudge();
         _daemon.NotificationContentChanged += _ => { Nudge(); Signal("NotificationsChanged"); };
@@ -209,6 +210,36 @@ public sealed class MeshBus : IDisposable
 
         try
         {
+            // The children are diffed first so TreeRevision is already right when the root's own
+            // properties are read below. The other way round, a client that refetches the tree
+            // when the revision moves is told one publish late - which is a device list that is
+            // correct only after the next unrelated change.
+            var children = SnapshotChildren();
+
+            var arrived = new List<(string Path, Dictionary<string, object> Values)>();
+            var moved = new List<(string Path, List<KeyValuePair<string, object>> Changed)>();
+
+            foreach (var (path, values) in children)
+            {
+                if (!_lastChildren.TryGetValue(path, out var was))
+                {
+                    arrived.Add((path, values));
+                    continue;
+                }
+
+                var changes = values.Where(pair =>
+                    !was.TryGetValue(pair.Key, out object? old) || !Equals(old, pair.Value)).ToList();
+
+                if (changes.Count > 0) moved.Add((path, changes));
+            }
+
+            var left = _lastChildren.Keys.Where(p => !children.ContainsKey(p)).ToList();
+
+            if (arrived.Count > 0 || left.Count > 0 || moved.Any(m => m.Changed.Any(Redraws)))
+                _objects.BumpTreeRevision();
+
+            _lastChildren = children;
+
             var daemon = _objects.DaemonProperties();
             var changed = daemon.Where(pair =>
                 !_lastDaemon.TryGetValue(pair.Key, out object? was) || !Equals(was, pair.Value)).ToList();
@@ -219,32 +250,30 @@ public sealed class MeshBus : IDisposable
                 _lastDaemon = daemon;
             }
 
-            var children = SnapshotChildren();
-
-            foreach (var (path, values) in children)
-            {
-                if (!_lastChildren.TryGetValue(path, out var was))
-                {
-                    EmitInterfacesAdded(path, InterfaceFor(path), values);
-                    continue;
-                }
-
-                var moved = values.Where(pair =>
-                    !was.TryGetValue(pair.Key, out object? old) || !Equals(old, pair.Value)).ToList();
-
-                if (moved.Count > 0) EmitPropertiesChanged(path, InterfaceFor(path), moved);
-            }
-
-            foreach (string path in _lastChildren.Keys.Where(p => !children.ContainsKey(p)))
-                EmitInterfacesRemoved(path, InterfaceFor(path));
-
-            _lastChildren = children;
+            foreach (var (path, values) in arrived) EmitInterfacesAdded(path, InterfaceFor(path), values);
+            foreach (var (path, changes) in moved) EmitPropertiesChanged(path, InterfaceFor(path), changes);
+            foreach (string path in left) EmitInterfacesRemoved(path, InterfaceFor(path));
         }
         catch (Exception ex)
         {
             Log.Write("Bus", "Could not publish a change", ex);
         }
     }
+
+    /// <summary>
+    /// Whether a change to a device is one a list has to be redrawn for.
+    ///
+    /// <para><c>LastSeen</c> moves on every dial round. Counting it would make
+    /// <c>TreeRevision</c> a poll wearing a property's clothes: a client that refetches the whole
+    /// tree whenever the revision moves would then do so every fifteen seconds for the life of the
+    /// session. It is a timestamp a client renders relatively and can tick on its own, which the
+    /// Plasma widget does.</para>
+    ///
+    /// <para>Everything else - a name, whether it is connected, which link, which address -
+    /// changes what a row says, so all of it counts.</para>
+    /// </summary>
+    private static bool Redraws(KeyValuePair<string, object> change) =>
+        !string.Equals(change.Key, "LastSeen", StringComparison.Ordinal);
 
     private Dictionary<string, Dictionary<string, object>> SnapshotChildren()
     {

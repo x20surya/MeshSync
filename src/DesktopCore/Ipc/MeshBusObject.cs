@@ -38,6 +38,23 @@ internal sealed class MeshBusObject : IPathMethodHandler
 
     public bool HandlesChildPaths => true;
 
+    private uint _treeRevision;
+
+    /// <summary>
+    /// Bumped whenever a device or a pairing request arrives, leaves, or changes in a way a list
+    /// has to be redrawn for.
+    ///
+    /// <para><b>What it is for.</b> A client watching the root's properties hears about a peer
+    /// count moving, and hears nothing at all when a device is renamed, changes link, or gets a
+    /// new address - none of those move a count. Deriving a revision from the counts, which is
+    /// what the Plasma widget used to do, therefore misses every change that keeps the set the
+    /// same. One number the daemon owns says "the tree moved, read it again" for all of them.</para>
+    ///
+    /// <para><c>MeshBus.Publish</c> decides what counts, and deliberately leaves out
+    /// <c>LastSeen</c>.</para>
+    /// </summary>
+    public void BumpTreeRevision() => _treeRevision++;
+
     // ──────────────────────────────── property snapshots
 
     /// <summary>
@@ -68,6 +85,7 @@ internal sealed class MeshBusObject : IPathMethodHandler
             ["NotificationCount"] = (uint)_daemon.Notifications.Count,
             ["SentCount"] = (uint)_daemon.Activity.SentCount,
             ["ReceivedCount"] = (uint)_daemon.Activity.ReceivedCount,
+            ["TreeRevision"] = _treeRevision,
             ["PairingUri"] = _daemon.PairingUri,
             ["TrayIconVisible"] = _daemon.TrayIconVisible,
             ["ShowNotificationContent"] = _daemon.ShowNotificationContent,
@@ -97,6 +115,10 @@ internal sealed class MeshBusObject : IPathMethodHandler
             ["IsConnected"] = connected,
             ["ActiveLink"] = !connected ? "none"
                 : _daemon.IsWiFiConnectedTo(peer.Fingerprint) ? "wifi" : "ble",
+            // Whether this device asked that one to ring, not whether it is making a noise -
+            // which nothing here can know. Cleared by a peer going away, because an offer to
+            // stop a ring on something unreachable is not an offer.
+            ["IsRinging"] = connected && _daemon.HasAskedToRing(peer.Fingerprint),
             ["LastSeen"] = peer.LastSeenUtc.ToUnixTimeSeconds(),
             ["LastAddress"] = peer.LastAddress ?? "",
         };
@@ -686,7 +708,8 @@ internal sealed class MeshBusObject : IPathMethodHandler
     {
         if (path == BusNames.Root)
         {
-            ReadOnlyMemory<byte>[] interfaces = [Utf8(DaemonXml), Utf8(ObjectManagerXml)];
+            ReadOnlyMemory<byte>[] interfaces =
+                [Utf8(DaemonXml), Utf8(PropertiesXml), Utf8(ObjectManagerXml)];
             context.ReplyIntrospectXml(interfaces, ["devices", "pending"]);
             return;
         }
@@ -707,13 +730,13 @@ internal sealed class MeshBusObject : IPathMethodHandler
 
         if (BusNames.FingerprintIn(path, BusNames.DevicesPrefix) != null)
         {
-            context.ReplyIntrospectXml([Utf8(DeviceXml)], Array.Empty<string>());
+            context.ReplyIntrospectXml([Utf8(DeviceXml), Utf8(PropertiesXml)], Array.Empty<string>());
             return;
         }
 
         if (BusNames.FingerprintIn(path, BusNames.PendingPrefix) != null)
         {
-            context.ReplyIntrospectXml([Utf8(PairingXml)], Array.Empty<string>());
+            context.ReplyIntrospectXml([Utf8(PairingXml), Utf8(PropertiesXml)], Array.Empty<string>());
             return;
         }
 
@@ -721,6 +744,49 @@ internal sealed class MeshBusObject : IPathMethodHandler
     }
 
     private static ReadOnlyMemory<byte> Utf8(string xml) => Encoding.UTF8.GetBytes(xml);
+
+    /// <summary>
+    /// The standard properties interface, declared rather than assumed.
+    ///
+    /// <para><b>Why leaving it out is not harmless.</b> Qt introspects an object before it
+    /// marshals a call to it. With no declaration for <c>Get</c>, <c>Set</c> or <c>GetAll</c> it
+    /// sends them with an <b>empty body</b> and the arguments are dropped in silence - so a Plasma
+    /// widget's <c>Properties.Set</c> arrives here carrying nothing and is answered "Unexpected
+    /// end of data", which reads as a marshalling fault on our side and is not one.</para>
+    ///
+    /// <para>Reproduced rather than assumed: two <c>Get</c> calls issued microseconds apart from
+    /// one QML process, one to this daemon and one to <c>org.kde.StatusNotifierWatcher</c>, differ
+    /// on the wire only in whether the body is there - and the only relevant difference between
+    /// the two targets is this block. Every other service on a session bus declares it.</para>
+    ///
+    /// <para><c>gdbus</c> and <c>busctl</c> always send the arguments, which is why
+    /// <c>meshsyncctl</c> passes happily against a surface no Qt client can use, and why this cost
+    /// a widget with twelve dead controls to find. <c>plasma/check.sh</c> now asks the only
+    /// question that catches it, which is how many bytes were on the wire.</para>
+    /// </summary>
+    private const string PropertiesXml = """
+        <interface name="org.freedesktop.DBus.Properties">
+          <method name="Get">
+            <arg name="interface_name" type="s" direction="in"/>
+            <arg name="property_name" type="s" direction="in"/>
+            <arg name="value" type="v" direction="out"/>
+          </method>
+          <method name="GetAll">
+            <arg name="interface_name" type="s" direction="in"/>
+            <arg name="properties" type="a{sv}" direction="out"/>
+          </method>
+          <method name="Set">
+            <arg name="interface_name" type="s" direction="in"/>
+            <arg name="property_name" type="s" direction="in"/>
+            <arg name="value" type="v" direction="in"/>
+          </method>
+          <signal name="PropertiesChanged">
+            <arg name="interface_name" type="s"/>
+            <arg name="changed_properties" type="a{sv}"/>
+            <arg name="invalidated_properties" type="as"/>
+          </signal>
+        </interface>
+        """;
 
     private const string ObjectManagerXml = """
         <interface name="org.freedesktop.DBus.ObjectManager">
@@ -753,6 +819,7 @@ internal sealed class MeshBusObject : IPathMethodHandler
           <property name="NotificationCount" type="u" access="read"/>
           <property name="SentCount" type="u" access="read"/>
           <property name="ReceivedCount" type="u" access="read"/>
+          <property name="TreeRevision" type="u" access="read"/>
           <property name="PairingUri" type="s" access="read"/>
           <property name="TrayIconVisible" type="b" access="readwrite"/>
           <property name="ShowNotificationContent" type="b" access="readwrite"/>
@@ -794,6 +861,7 @@ internal sealed class MeshBusObject : IPathMethodHandler
           <property name="ShortFingerprint" type="s" access="read"/>
           <property name="IsConnected" type="b" access="read"/>
           <property name="ActiveLink" type="s" access="read"/>
+          <property name="IsRinging" type="b" access="read"/>
           <property name="LastSeen" type="x" access="read"/>
           <property name="LastAddress" type="s" access="read"/>
           <method name="Ring">
