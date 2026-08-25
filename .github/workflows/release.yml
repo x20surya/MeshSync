@@ -113,3 +113,15 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Mesh Sync $TAG" --generate-notes
           gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber
+
+  # Republish the apt repository from the release that was just made, so `apt upgrade` offers the
+  # new version rather than the repository quietly staying a release behind.
+  apt:
+    name: APT repository
+    needs: [publish]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/apt.yml
+    secrets: inherit

@@ -11,8 +11,13 @@ name: APT repository
 # per release committed to a branch is 33 MB in the repository's history for ever.
 
 on:
-  release:
-    types: [published]
+  # Called by release.yml once the release exists and its assets are attached.
+  #
+  # NOT `release: [published]`. That event never arrived: the release is created by release.yml
+  # using GITHUB_TOKEN, and GitHub deliberately does not let a token-raised event start another
+  # workflow - it is their loop guard. The repository silently kept serving the previous version
+  # while the release page showed the new one, which is the worst shape this failure could take.
+  workflow_call:
   workflow_dispatch:
 
 # Only one publish at a time, and never cancel one half-done: an interrupted deploy leaves the

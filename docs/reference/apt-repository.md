@@ -66,6 +66,18 @@ Handing people an armored `.asc` and telling them to put it in `/usr/share/keyri
 common way this is got wrong, and it fails with a message about a missing key rather than about a
 wrong format.
 
+## It is called by the release, not triggered by it
+
+`release.yml` calls `apt.yml` as a reusable workflow once the release exists and its assets are
+attached.
+
+**`release: [published]` does not work here**, and fails in the worst possible shape. The release
+is created by `release.yml` using `GITHUB_TOKEN`, and GitHub deliberately does not let a
+token-raised event start another workflow - it is their loop guard. So the apt job simply never
+ran: the release page showed the new version while the repository quietly kept serving the
+previous one, with nothing failing anywhere. Caught on v0.5.1 by checking the run list rather than
+by anything going red.
+
 ## Rebuilt, never appended to
 
 `.github/workflows/apt.yml` derives the whole repository from GitHub Releases on every run: it
