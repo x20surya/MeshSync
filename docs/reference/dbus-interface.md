@@ -1,21 +1,21 @@
 ---
 type: reference
-status: in-flight
+status: shipped
 platforms: [linux]
 tier: n/a
 code:
   - src/DesktopCore/Ipc/BusNames.cs
   - src/DesktopCore/Ipc/MeshBusObject.cs
   - packaging/meshsyncctl
-updated: 2026-08-23
+updated: 2026-08-25
 ---
 
 # D-Bus interface
 
-> **In flight.** `src/DesktopCore/Ipc/` and `packaging/meshsyncctl` are uncommitted as of
-> 2026-08-23. This describes what is on disk - and what is on disk has been exercised end to end:
-> two daemons paired entirely over this interface, `Confirm` on a `Pairing1`, then `IsConnected`,
-> `ActiveLink wifi` and `SendText -> 1` across a real socket.
+> Exercised end to end: two daemons paired entirely over this interface, `Confirm` on a
+> `Pairing1`, then `IsConnected`, `ActiveLink wifi` and `SendText -> 1` across a real socket -
+> and, since 2026-08-25, every member driven from QML by `plasma/check.sh` with the wire read
+> back.
 
 The running device publishes itself on the **session** bus as `dev.meshsync.Daemon`, so a panel
 widget, a tray applet or a script can drive it.
@@ -55,7 +55,15 @@ than one place is how a device ends up unreachable at a path that looks right.
 | `Activity` | The in-memory [[activity-log]] |
 | `Show`, `Quit` | Raise the window on a named page, and exit |
 
-Writable properties: `MeshName`, `Transport`, `TrayIconVisible`.
+Writable properties: `MeshName`, `Transport`, `TrayIconVisible`, `ShowNotificationContent`.
+
+**`TreeRevision`** is a counter that moves whenever a device or a pairing request arrives, leaves,
+or changes in a way a list has to be redrawn for. It exists because **no count can see a rename, a
+link changing or a new address** - the set stays the same size and every client watching
+`PeerCount` hears nothing. One number the daemon owns says "the tree moved, read it again" for all
+of them, which is what let [[plasma-widget]] delete a ten second poll. `LastSeen` deliberately does
+not move it: it changes on every dial round, and a client refetching the whole tree for that would
+be polling under another name.
 
 **What is deliberately not on the bus.** Clipboard text, image bytes, notification titles and
 bodies, and activity previews. Everything on the session bus is readable by every program running
@@ -65,10 +73,31 @@ and draw a reply box, and nothing to read. `SendText` takes text from a caller; 
 back.
 
 **`dev.meshsync.Device1`**: `Ring`, `SendFile`, `EnsureWiFi`, `Forget`.
+`IsRinging` says whether this device has **asked** that one to ring and not yet asked it to stop -
+which is the only honest answer, because a phone does not report back that it is making a noise.
+It is here rather than in whatever drew the button because a list delegate is reused as the list
+re-sorts and rebuilt when a popup is, so a row offered to stop a ring it never started.
 `IsConnected` is answered **per peer** here, which is more than [[link-state]] can say - a device
 list on a panel would otherwise show the same dot on every row.
 
 **`dev.meshsync.Pairing1`**: `Confirm`, `Reject`.
+
+## Declare the standard interfaces, or Qt clients send no arguments
+
+`Introspect` must emit `org.freedesktop.DBus.Properties` - **Qt introspects an object before it
+marshals a call to it**, and against a peer that does not declare `Get`, `Set` and `GetAll` it
+sends them with an **empty body**. The arguments are dropped in silence and the daemon answers
+`Unexpected end of data`, which reads as a fault on this side and is not one.
+
+Reproduced rather than assumed: two `Get` calls issued microseconds apart from one QML process,
+one to this daemon and one to `org.kde.StatusNotifierWatcher`, differ on the wire only in whether
+the body is there - and the only relevant difference between the two targets is that block. Every
+other service on a session bus declares it.
+
+**`meshsyncctl` cannot catch this**, and that is the important part. `gdbus` and `busctl` always
+send the arguments, so the shell tool passed happily against a surface no Qt client could use.
+It cost [[plasma-widget]] three settings that silently did nothing. `plasma/check.sh` now asks the
+question that catches it, which is how many bytes were on the wire.
 
 ## Three decisions
 
@@ -101,8 +130,11 @@ Written in shell rather than as a fourth .NET head because glib is already a dep
 **It is the regression test for the bus surface as well as a tool.**
 Nothing in it knows anything the interface does not expose, so if a command cannot be written
 against `dev.meshsync.Daemon1`, the interface is missing something.
-Given that no head has an automated test at all ([[testing]]), this is the only executable check
-the Linux head has.
+
+**It is not a test of this interface's clients**, which is a different thing and cost a widget.
+`gdbus` encodes arguments correctly whatever the introspection says, so this passed against a
+surface no Qt client could use. `plasma/check.sh` reads the wire and covers that half -
+see [[testing]].
 
 ## The marshalling rules this cost
 

@@ -83,13 +83,33 @@ Cross-published from Linux. The binary is real; signing and notarising still nee
 dotnet publish src/DesktopShell/DesktopShell.csproj -c Release -r osx-arm64 --self-contained true
 ```
 
+### Run And Check The Plasma Widget
+
+The widget is QML with no build step, so it is run out of the working tree and checked against a
+live bus rather than compiled.
+
+```bash
+plasma/preview.sh    # the working tree in one window, against whichever daemon is running
+plasma/check.sh      # a scratch daemon, every MeshBus call, and dbus-monitor reading the wire
+```
+
+`check.sh` asserts **how many bytes were on the wire**, not that no exception was thrown - every
+defect it exists for produces a call that is dispatched and answered. See
+[docs/reference/testing.md](docs/reference/testing.md).
+
+Installing the widget is not enough to see a change: plasmashell holds the QML it has loaded.
+
+```bash
+systemctl --user restart plasma-plasmashell.service
+```
+
 ### Run Tests
 
 ```powershell
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-440 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
+452 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
 warnings, so use `-t:Rebuild` when you need to be sure.
 
 **All three heads build on Linux**, which is worth knowing before assuming CI is the only check.
@@ -178,6 +198,6 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
   and dialler, Bluetooth GATT client and server, the ringer, and the Quick Settings tile,
   `PROCESS_TEXT` and share targets.
 - `src/assets`: brand handoff, the source of truth for the mark, palette and illustrations.
-- `tests/CoreLib.Tests`: 440 tests, including a three-device mesh over real loopback sockets, the
+- `tests/CoreLib.Tests`: 452 tests, including a three-device mesh over real loopback sockets, the
   per-peer route state machine, the mesh beacon and its 31-byte advertisement budget, and a fake
   radio that replays every Bluetooth finding in `HANDOFF.md` as a scripted scenario.

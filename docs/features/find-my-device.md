@@ -7,7 +7,8 @@ code:
   - src/CoreLib/Transport/SyncContent.cs
   - src/WinDaemon/Ringer.cs
   - src/DesktopCore/Platform/Ringer.cs
-updated: 2026-08-23
+  - src/DesktopCore/Daemon.cs
+updated: 2026-08-25
 ---
 
 # Find my device
@@ -46,6 +47,19 @@ ring was tried.
 
 **Ringing a phone that is face-down on silent is unverified**, which is the exact case the alarm
 stream exists for.
+
+
+## Asked, not ringing
+
+`Daemon.HasAskedToRing` remembers which devices this one has asked to ring and not yet asked to
+stop, and `Device1.IsRinging` publishes it - see [[dbus-interface]].
+
+**It cannot mean "that phone is making a noise",** because the phone does not report back. What
+can be known is whether it was asked, and that is what a "stop ringing" button needs. It is held
+in the daemon rather than in whatever drew the button: [[plasma-widget]] kept it in a list
+delegate, which is reused as the list re-sorts and rebuilt when the popup is, so a row offered to
+stop a ring it never started and lost the offer for one it did. A request that did not arrive is
+not remembered, so the button says "ring", which is the truth.
 
 ## See also
 

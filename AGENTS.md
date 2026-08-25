@@ -225,7 +225,7 @@ made a phone shriek from across the street.
 Every head runs on `CoreLib.Transport.Fabric`: one `PeerLink` per peer, one supervisor with a
 watchdog over it, one radio scheduler holding several links at once, and a mesh beacon that tells
 this mesh from anyone else's before a connection is opened.
-Wire version 4, no re-pair. 440 tests.
+Wire version 4, no re-pair. 452 tests.
 See `docs/mechanisms/peer-link.md` and `docs/mechanisms/mesh-beacon.md`.
 
 - **Phase 1 (Foundation)**: COMPLETED.

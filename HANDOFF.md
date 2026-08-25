@@ -8,7 +8,7 @@ Read this alongside [AGENTS.md](AGENTS.md), which describes the architecture and
 ## The most recent session, in short
 
 **v0.4: the connection layer is one shape on every head.**
-440 tests, up from 300; all seven projects build with no warnings.
+452 tests, up from 300; all seven projects build with no warnings.
 
 The Wi-Fi tier was rebuilt into a mesh in v0.2 and the Bluetooth tier never was. Every radio link
 in the project was a nullable field - `_bleLink` and `_blePeripheralLink`, `_bleCentral` and
@@ -106,7 +106,7 @@ What is still open is Doze survival overnight, which only time can answer.
 ## Where things stand
 
 The plan in `.lavish/v04_connection_refactor.html` is implemented through phase seven.
-All seven projects build with **0 warnings** and the suite passes **440 tests**, up from 57 when
+All seven projects build with **0 warnings** and the suite passes **452 tests**, up from 57 when
 this began.
 
 The shape of the project changed completely.
@@ -978,7 +978,7 @@ src/AndroidClient/    MAUI app with a navigation drawer: Home, Activity, Devices
                       network and screen watchers; boot receiver; notification listener; ringer;
                       GATT client and server; Quick Settings tile, PROCESS_TEXT and share targets
 src/assets/           brand handoff: SVG, PNG, style sheet
-tests/CoreLib.Tests/  440 tests: crypto, key agreement, identity, key storage, the registry,
+tests/CoreLib.Tests/  452 tests: crypto, key agreement, identity, key storage, the registry,
                       the per-peer route state machine, the mesh beacon, and a three-device
                       mesh over real loopback sockets
                       Fakes/  FakeRoute, FakeBleRadio, FakeClock - nothing in the suite sleeps

@@ -1,6 +1,6 @@
 ---
 type: feature
-status: in-flight
+status: shipped
 platforms: [linux]
 tier: n/a
 code:
@@ -12,9 +12,11 @@ updated: 2026-08-23
 
 # Tray applet
 
-> **In flight.** `src/DesktopCore/Tray/` is untracked as of 2026-08-23. Verified against
-> plasmashell: registered with the watcher, `GetLayout` read back correctly, menu events act, and
-> the icon hides and returns.
+> Verified against plasmashell: registered with the watcher, `GetLayout` read back correctly, menu
+> events act, and the icon hides and returns. Turning it off from the widget's settings works as
+> of 2026-08-25 - before that the settings page could not be opened and the checkbox wrote to the
+> bus through a call that carried no arguments, so the answer to two icons was unreachable twice
+> over. See [[plasma-widget]].
 
 Mesh Sync's own StatusNotifierItem, replacing the one Avalonia produced. Works on any desktop with
 a status area, which is the half of this the [[plasma-widget]] cannot reach.

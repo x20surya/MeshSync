@@ -1,6 +1,6 @@
 ---
 type: mechanism
-status: in-flight
+status: shipped
 platforms: [linux]
 tier: n/a
 code:
@@ -8,17 +8,13 @@ code:
   - src/DesktopCore/Ipc/MeshBusObject.cs
   - src/DesktopCore/Ipc/BusNames.cs
   - src/DesktopCore/Ipc/BusWrite.cs
-updated: 2026-08-23
+updated: 2026-08-25
 ---
 
 # D-Bus IPC
 
-> **In flight.** `src/DesktopCore/Ipc/` is untracked as of 2026-08-23, and `App.axaml.cs`,
-> `Program.cs` and `PeerRegistry.cs` have uncommitted changes wiring it up.
-> This note describes what is on disk, not what is committed.
-> What is on disk has been exercised: two daemons paired entirely over this interface and text
-> crossed a real socket between them. Its consumers are [[plasma-widget]], [[tray-applet]] and
-> `meshsyncctl`.
+> Exercised: two daemons paired entirely over this interface and text crossed a real socket
+> between them. Its consumers are [[plasma-widget]], [[tray-applet]] and `meshsyncctl`.
 
 Publishes the running device on the session bus as `dev.meshsync.Daemon`, so something outside the
 app - a panel widget, a tray applet, a script - can drive it.
@@ -33,11 +29,12 @@ app - a panel widget, a tray applet, a script - can drive it.
 
 Plus `org.freedesktop.DBus.Properties` and `ObjectManager`.
 
-**Daemon**: `SendText`, `SendFile`, `Dial`, `Join`, `StopRinging`, `Notifications`,
-`DismissNotification`, `ReplyToNotification`, `DismissAllNotifications`, `Activity`, `Show`,
-`Quit`, and `MeshName` / `Transport` as properties.
+**Daemon**: `SendText`, `SendFile`, `SendClipboard`, `Dial`, `Join`, `StopRinging`,
+`Notifications`, `DismissNotification`, `ReplyToNotification`, `DismissAllNotifications`,
+`Activity`, `Show`, `Quit`, and `MeshName` / `Transport` / `TrayIconVisible` /
+`ShowNotificationContent` as writable properties.
 
-**Device**: `Ring`, `SendFile`, `EnsureWiFi`, `Forget`.
+**Device**: `Ring`, `SendFile`, `EnsureWiFi`, `Forget`, and `IsRinging`.
 
 **Pairing**: `Confirm`, `Reject`.
 
@@ -53,14 +50,34 @@ Nothing in it touches Avalonia and nothing is platform-specific beyond the sessi
 
 ## `meshsyncctl`
 
-`packaging/meshsyncctl`, also in flight.
-A POSIX shell script over `gdbus` that drives the running device from a terminal.
+`packaging/meshsyncctl`, a POSIX shell script over `gdbus` that drives the running device from a terminal.
 
 It is written in shell rather than as a fourth .NET head because glib is already a dependency -
 `DesktopNotifier` shells `gdbus` today - so it adds nothing to install.
 **It is the regression test for the bus surface as well as a tool**: nothing in it knows anything
 the interface does not expose, so if a command cannot be written against `dev.meshsync.Daemon1`,
 the interface is missing something.
+
+It is not a regression test for *clients*, and that distinction cost a widget. `gdbus` encodes
+arguments correctly whatever the introspection says, so `meshsyncctl` passes against a surface a
+Qt client cannot use. `plasma/check.sh` covers the other half by reading the wire.
+
+## Say what changed, not that something did
+
+`Publish` diffs the children before it reads the root's own properties, and bumps `TreeRevision`
+when any of them arrived, left, or moved in a way a list has to be redrawn for. Order matters: the
+other way round, a client that refetches when the revision moves is told one publish late, which
+is a device list correct only after the next unrelated change.
+
+`LastSeen` is excluded on purpose. It changes on every dial round, so counting it would turn one
+property into a fifteen second poll for every client watching it.
+
+## Declare the standard interfaces
+
+`Introspect` emits `org.freedesktop.DBus.Properties` because **Qt introspects before it marshals**,
+and against a peer that does not declare `Get` and `Set` it sends them with an empty body. See
+[[dbus-interface]] - it cost [[plasma-widget]] three settings, and `meshsyncctl` could not catch it
+because `gdbus` always sends the arguments.
 
 ## Three decisions worth knowing
 

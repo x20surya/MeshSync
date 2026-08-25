@@ -5,23 +5,45 @@ platforms: [windows, android, linux, macos]
 tier: n/a
 code:
   - tests/CoreLib.Tests
-updated: 2026-08-24
+  - plasma/check.sh
+updated: 2026-08-25
 ---
 
 # What the tests cover
 
-**33 files, 375 `[Fact]`/`[Theory]` attributes, 440 cases** once the theories expand.
-Verified by running it on 2026-08-24: `Failed: 0, Passed: 440`, 2 s.
+**33 files, 386 `[Fact]`/`[Theory]` attributes, 452 cases** once the theories expand.
+Verified by running it on 2026-08-25: `Failed: 0, Passed: 452`, 4 s.
 
-> **The root documents say 286.** They are right about the last commit and wrong about the working
-> tree: the uncommitted notification-reply work adds ten cases across `NotificationProtocolTests`,
-> `SyncContentTests` and `PeerRegistryTests`. Update `README.md`, `AGENTS.md`, `CLAUDE.md` and
-> `HANDOFF.md` in the commit that lands it.
+Everything in that suite is `CoreLib`. **One head now has a check**, and it is not an xUnit one.
 
-Everything tested is in `CoreLib`.
-**No head has a test.** That is the shape of the risk: the shared core is well covered and every
-platform edge is not, which is exactly why `HANDOFF.md` records four defects that only hardware
-found and no test could have.
+## `plasma/check.sh` - the Linux head's only executable check
+
+Starts a scratch daemon on its own `--data` and `--port`, loads **the real `MeshBus.qml`** under
+`plasmawindowed`, calls every function on it once, and reads `dbus-monitor`.
+
+**It asserts bytes on the wire, not the absence of an exception**, and that is the whole point.
+Every defect it was written for produces a call that is dispatched, answered, and logged as an
+ordinary failure:
+
+- a `signature` set on a QML `DBusMessage` makes the binding send an **empty body**;
+- `DBus.string(x)` without `new` throws inside the *caller*, so nothing is sent at all;
+- a daemon that does not declare `org.freedesktop.DBus.Properties` makes Qt drop the arguments to
+  `Get` and `Set`, because Qt introspects before it marshals.
+
+None of the three is visible to a test that asks "did it throw", and none can be caught by
+`meshsyncctl`: `gdbus` encodes arguments correctly regardless, so the shell tool passes against a
+surface no Qt client can use. Counting the body catches all three. It went **1/18 before the fixes
+on 2026-08-25 and 20/20 after**, the last two being liveness checks.
+
+`plasma/preview.sh` is the other half - the working tree in one window, against whichever daemon
+is running.
+
+## What is still uncovered
+
+**No head has an xUnit test**, and three of the four have no automated check at all. That is the
+shape of the risk: the shared core is well covered and every platform edge is not, which is
+exactly why `HANDOFF.md` records four defects that only hardware found and no test could have -
+and why the Plasma widget shipped with twelve controls that did nothing.
 
 ## By file
 
