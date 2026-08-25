@@ -166,8 +166,12 @@ PACKAGE_COUNT="$(grep -c '^Package: ' "$DIST/Packages" || true)"
 # Release.gpg is the detached signature older clients look for. Writing only one of them works
 # until it does not.
 
-SIGN=(gpg --batch --yes --armor)
+# --pinentry-mode loopback is not optional on a machine with no terminal, and it is needed even
+# for a key with NO passphrase: without it gpg still tries to reach a pinentry and fails with
+# "Inappropriate ioctl for device", which reads like a permissions problem and is not one.
+SIGN=(gpg --batch --yes --no-tty --armor --pinentry-mode loopback)
 [ -n "$KEY" ] && SIGN+=(--local-user "$KEY")
+[ -n "${APT_GPG_PASSPHRASE_FILE:-}" ] && SIGN+=(--passphrase-file "$APT_GPG_PASSPHRASE_FILE")
 
 "${SIGN[@]}" --clearsign  --output "$OUT/dists/$SUITE/InRelease"    "$OUT/dists/$SUITE/Release"
 "${SIGN[@]}" --detach-sign --output "$OUT/dists/$SUITE/Release.gpg" "$OUT/dists/$SUITE/Release"

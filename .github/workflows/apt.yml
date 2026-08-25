@@ -86,13 +86,16 @@ jobs:
           echo "APT_SIGNING_KEY=$FPR" >> "$GITHUB_ENV"
           echo "signing as $FPR"
 
-          # A passphrase-protected key cannot be used unattended without this, and the failure is
-          # gpg asking for input on a runner where nothing can answer.
+          # Loopback pinentry, always - not only when there is a passphrase. Without it gpg tries
+          # to reach a pinentry even for an unprotected key and fails with "Inappropriate ioctl
+          # for device", which reads like a permissions problem and is not one.
+          mkdir -p ~/.gnupg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --reload gpg-agent || true
+
           if [ -n "$PASSPHRASE" ]; then
-            echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-            gpgconf --reload gpg-agent
-            echo "GPG_TTY=" >> "$GITHUB_ENV"
             printf '%s' "$PASSPHRASE" > "$RUNNER_TEMP/pass"
+            chmod 600 "$RUNNER_TEMP/pass"
             echo "APT_GPG_PASSPHRASE_FILE=$RUNNER_TEMP/pass" >> "$GITHUB_ENV"
           fi
 
