@@ -23,7 +23,11 @@ Item {
     required property string lastAddress
     required property double lastSeen
 
-    property bool ringing: false
+    /* Whether this device has asked that one to ring - answered by the daemon, not guessed here.
+       It used to be a delegate-local bool, which survives a row being reused for a different
+       device and is lost when the popup is rebuilt, so the button could offer to stop a ring it
+       never started and forget one it did. */
+    required property bool ringing
 
     implicitHeight: layout.implicitHeight + Kirigami.Units.smallSpacing * 2
 
@@ -86,14 +90,16 @@ Item {
         }
 
         PlasmaComponents.ToolButton {
-            icon.name: root.ringing ? "audio-volume-muted-symbolic" : "audio-volume-high-symbolic"
+            /* A bell, not a loudspeaker. The volume icons say "this device is making a noise",
+               which is the opposite of what this button is for. */
+            icon.name: root.ringing ? "audio-volume-muted-symbolic" : "notifications-symbolic"
             display: PlasmaComponents.AbstractButton.IconOnly
             text: root.ringing ? i18n("Stop ringing %1", root.deviceName) : i18n("Ring %1", root.deviceName)
             enabled: root.connected
-            onClicked: {
-                root.ringing = !root.ringing;
-                root.bus.ring(root.objectPath, root.ringing);
-            }
+            /* Nothing is flipped here. The daemon answers whether it was asked, and the row
+               redraws when that answer changes - so a request that did not arrive leaves the
+               button saying "ring", which is the truth. */
+            onClicked: root.bus.ring(root.objectPath, !root.ringing)
 
             PlasmaComponents.ToolTip.text: text
             PlasmaComponents.ToolTip.visible: hovered
@@ -101,9 +107,13 @@ Item {
     }
 
     /* Compact enough for a panel row. The daemon sends a unix timestamp rather than a phrase,
-       because the phrase has to be in the reader's language and the daemon does not know it. */
+       because the phrase has to be in the reader's language and the daemon does not know it.
+
+       Reads bus.now rather than Date.now() so the binding has something that changes to depend
+       on. With Date.now() it is evaluated once and never again, so a row said "3 minutes ago"
+       an hour later. */
     function relativeAge(at: double): string {
-        const seconds = Math.max(0, Math.floor(Date.now() / 1000 - at));
+        const seconds = Math.max(0, Math.floor(root.bus.now - at));
 
         if (seconds < 60) return i18n("just now");
         if (seconds < 3600) return i18np("%1 minute ago", "%1 minutes ago", Math.floor(seconds / 60));
@@ -120,8 +130,9 @@ Item {
                 return;
 
             for (const url of drop.urls) {
-                const path = String(url).replace(/^file:\/\//, "");
-                root.bus.sendFile(root.objectPath, decodeURIComponent(path));
+                const file = root.bus.localPath(url);
+                if (file.length > 0)
+                    root.bus.sendFile(root.objectPath, file);
             }
         }
     }

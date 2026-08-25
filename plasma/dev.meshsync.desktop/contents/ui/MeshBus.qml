@@ -21,7 +21,9 @@ import org.kde.plasma.workspace.dbus as DBus
 QtObject {
     id: bus
 
-    readonly property string service: "dev.meshsync.Daemon"
+    /* A default rather than a constant, so plasma/check.sh can aim this same file at a scratch
+       daemon on its unique name. Nothing in the widget ever sets it. */
+    property string service: "dev.meshsync.Daemon"
     readonly property string root: "/dev/meshsync/Daemon"
     readonly property string iface: "dev.meshsync.Daemon1"
     readonly property string deviceIface: "dev.meshsync.Device1"
@@ -58,6 +60,7 @@ QtObject {
     property bool showNotificationContent: false
     property bool dialling: false
     property bool ringing: false
+    property int treeRevision: 0
     property int peerCount: 0
     property int connectedCount: 0
     property int pendingCount: 0
@@ -89,6 +92,7 @@ QtObject {
         bus.showNotificationContent = unwrap(map.ShowNotificationContent, false) === true;
         bus.dialling = unwrap(map.IsDialling, false) === true;
         bus.ringing = unwrap(map.IsRinging, false) === true;
+        bus.treeRevision = Number(unwrap(map.TreeRevision, 0));
         bus.peerCount = Number(unwrap(map.PeerCount, 0));
         bus.connectedCount = Number(unwrap(map.ConnectedCount, 0));
         bus.pendingCount = Number(unwrap(map.PendingCount, 0));
@@ -99,8 +103,37 @@ QtObject {
     readonly property ListModel pending: ListModel { }
     readonly property ListModel notifications: ListModel { }
 
-    /* The last thing a call said, for the footer to show. Cleared on the next successful one. */
+    /* The last thing a call said, for the footer to show. */
     property string lastMessage: ""
+
+    /* ...and it goes away on its own. "Sent to 2 devices" is worth reading once; a widget still
+       saying it twenty minutes later is presenting a fact about the past as the state of the
+       mesh, which is the one thing this widget exists not to do. */
+    onLastMessageChanged: if (bus.lastMessage.length > 0) fade.restart()
+
+    readonly property Timer __fade: Timer {
+        id: fade
+        interval: 8000
+        onTriggered: bus.lastMessage = ""
+    }
+
+    /*
+     * A clock, for "last seen three minutes ago".
+     *
+     * The daemon sends a unix timestamp rather than a phrase, because the phrase has to be in the
+     * reader's language. A binding that reads Date.now() re-evaluates only when its own
+     * dependencies move, so with nothing ticking the phrase is written once and then frozen -
+     * "3 minutes ago", an hour later. A minute is the finest granularity the phrase has, and it
+     * only runs while somebody is looking at it.
+     */
+    property double now: Math.floor(Date.now() / 1000)
+
+    readonly property Timer __clock: Timer {
+        interval: 60000
+        repeat: true
+        running: bus.watching
+        onTriggered: bus.now = Math.floor(Date.now() / 1000)
+    }
 
     signal replied(string key, bool ok, string message)
 
@@ -129,71 +162,129 @@ QtObject {
         path: bus.root
         iface: bus.iface
 
-        /* refreshed is the full read; propertyMapChanged is a PropertiesChanged landing. Both
-           have to be taken, or the widget is correct at startup and then frozen. */
-        onRefreshed: bus.readProperties()
-        onPropertyMapChanged: bus.readProperties()
+        /*
+         * The first full read, and the point at which the lists are worth fetching.
+         *
+         * Deferred by a turn. Filling the models from inside this handler puts rows into the
+         * popup during its first layout pass, and Plasma's own ScrollView answers that with two
+         * binding-loop warnings on the scrollbar's visibility as it settles. Letting the layout
+         * finish first costs nothing anybody can perceive and keeps the log clean.
+         */
+        onRefreshed: {
+            bus.readProperties();
+            Qt.callLater(bus.refreshObjects);
+            Qt.callLater(bus.refreshNotifications);
+        }
+
+        /*
+         * A PropertiesChanged landing, carrying exactly the keys that moved.
+         *
+         * This is a real QML signal on DBus.Properties and it is what makes a targeted refresh
+         * possible. onPropertyMapChanged fires for the same events without saying what changed,
+         * so everything below would have to be guessed - which is how the widget came to derive
+         * a revision from four counts and poll for the rest.
+         */
+        onPropertiesChanged: (name, changed) => {
+            bus.readProperties();
+
+            /* The device tree. The daemon bumps TreeRevision for anything a list has to be
+               redrawn for - a device arriving or leaving, a rename, a link changing, a new
+               address - and deliberately not for LastSeen, which moves on every dial round and
+               would turn this into a poll. */
+            if (changed.TreeRevision !== undefined)
+                bus.refreshObjects();
+
+            /* Notifications. The count moves when one arrives or is dismissed. The setting moves
+               when grouping changes from by-app to by-conversation, which changes every row
+               without changing the count at all. */
+            if (changed.NotificationCount !== undefined ||
+                changed.ShowNotificationContent !== undefined)
+                bus.refreshNotifications();
+        }
     }
 
     /*
-     * What makes the lists update.
+     * What used to make the lists update, and why nothing does now.
      *
-     * The obvious route - a SignalWatcher on ObjectManager - is not available here: this Plasma
-     * exports SignalWatcher.onReceivedSignal as a *slot* rather than a signal, so QML cannot
-     * attach a handler to it and the applet refuses to load outright if you try.
+     * A SignalWatcher on ObjectManager is not available here: this Plasma exports
+     * SignalWatcher.onReceivedSignal as a *slot* rather than a signal, so QML cannot attach a
+     * handler and the applet refuses to load outright if you try. That much is still true.
      *
-     * The counts do the work instead. The daemon publishes PeerCount, ConnectedCount,
-     * PendingCount and NotificationCount as ordinary properties, and Properties above delivers
-     * PropertiesChanged for them. Every arrival, departure, connect and disconnect moves one of
-     * those numbers, so this is event-driven rather than polled, and it uses only the part of
-     * the binding that is verified to work.
+     * The conclusion drawn from it was too broad. DBus.Properties.propertiesChanged IS a real
+     * signal, and it carries the changed keys - so the refresh above is driven by what actually
+     * moved. What stood here instead was a revision derived from four counts,
+     * peers*1000 + connected*100 + pending*10, plus a ten second timer as a backstop. It missed
+     * every change that keeps the set the same: a rename, a link going from Bluetooth to Wi-Fi,
+     * a new address. The daemon now publishes TreeRevision for exactly those, so both are gone.
      *
-     * The timer is the backstop for the one thing a count cannot see: a device whose address
-     * changed while the set stayed the same. It runs only while the widget is open.
+     * Nothing here polls any more.
      */
-    readonly property int treeRevision: bus.available
-        ? bus.peerCount * 1000 + bus.connectedCount * 100 + bus.pendingCount * 10 + (bus.dialling ? 1 : 0)
-        : -1
 
-    onTreeRevisionChanged: bus.refreshObjects()
-
-    onNotificationCountChanged: bus.refreshNotifications()
-
-    /* Set by the full representation while it is on screen. A widget nobody is looking at has no
-       business waking up. */
+    /* True while a person can see the list: the popup is open, or the widget is on a desktop
+       where it always is. Set from main.qml. */
     property bool watching: false
-
-    readonly property Timer __backstop: Timer {
-        interval: 10000
-        repeat: true
-        running: bus.available && bus.watching
-        onTriggered: bus.refreshObjects()
-    }
 
     // ──────────────────────────────── calling
 
-    function call(path: string, member: string, signature: string, args: var,
-                  onOk: var, target: string): void {
+    /*
+     * Three rules, each of them reproduced on the wire rather than reasoned about.
+     *
+     * NO `signature` ON THE MESSAGE. Setting it makes this binding send an empty body, so every
+     * argument is dropped in silence and the daemon answers "Unexpected end of data" - which
+     * reads as a daemon fault and is not one. Two otherwise identical Join calls captured under
+     * dbus-monitor differ only in whether the string is there at all. The types come from the
+     * DBus.* wrappers instead, which is what the binding actually reads.
+     *
+     * `new` ON EVERY WRAPPER. DBus.string(x) raises "TypeError: Function can only be called with
+     * |new|", and that throw aborts the *calling* function before asyncCall is ever reached - so
+     * nothing is sent, nothing is logged, and the control simply does nothing when clicked.
+     * bus.text() is the only place a string is wrapped, for the same reason BusNames.cs is the
+     * only place a path is spelled.
+     *
+     * THE REJECT CALLBACK IS HANDED THE PENDING REPLY, not a message. String(it) is
+     * "Plasma::DBusPendingReply(0x55...)", which is what the footer used to show a person. The
+     * text is on reply.error.
+     */
+    function call(path: string, member: string, args: var, onOk: var, target: string): void {
         DBus.SessionBus.asyncCall({
             service: bus.service,
             path: path,
             iface: target,
             member: member,
-            signature: signature,
             arguments: args
         },
         /* The resolve callback is handed the DBusPendingReply, not the value inside it. Reading
            `reply` directly gives you the wrapper - which iterates as an object with no error and
            quietly produces nothing, so it is worth being explicit about. */
         reply => { if (onOk) onOk(reply.value); },
-        error => {
-            bus.lastMessage = String(error);
-            console.warn("meshsync:", member, "failed:", error);
+        reply => {
+            const failure = reply ? reply.error : null;
+            bus.lastMessage = failure && failure.message
+                ? failure.message
+                : i18n("Mesh Sync did not answer.");
+            console.warn("meshsync:", member, "failed:", failure ? failure.name : reply);
         });
     }
 
-    function daemonCall(member: string, signature: string, args: var, onOk: var): void {
-        call(bus.root, member, signature, args, onOk, bus.iface);
+    function daemonCall(member: string, args: var, onOk: var): void {
+        call(bus.root, member, args, onOk, bus.iface);
+    }
+
+    /// The one place a string becomes a D-Bus argument. `new` is not optional - see call().
+    function text(value: string): var { return new DBus.string(String(value)); }
+
+    /*
+     * A (bs) answer as plain values.
+     *
+     * The bool arrives bare and the string arrives wrapped as { value: "..." }, so reading
+     * reply[1] straight renders "[object Object]" wherever the answer is shown. It is the same
+     * trap as the property map, one layer further in, and unwrap() already knows how to open it.
+     */
+    function outcome(reply: var): var {
+        return {
+            ok: bus.unwrap(reply ? reply[0] : false, false) === true,
+            message: String(bus.unwrap(reply ? reply[1] : "", ""))
+        };
     }
 
     // ──────────────────────────────── the object tree
@@ -209,7 +300,8 @@ QtObject {
             iface: bus.objectManager, member: "GetManagedObjects"
         },
         reply => bus.applyObjects(reply.value),
-        error => console.warn("meshsync: GetManagedObjects failed:", error));
+        reply => console.warn("meshsync: GetManagedObjects failed:",
+                              reply && reply.error ? reply.error.name : reply));
     }
 
     function applyObjects(reply: var): void {
@@ -254,20 +346,39 @@ QtObject {
         return out;
     }
 
-    /* Replaces a model's contents in place rather than clear-and-refill, so a row the pointer is
-       over does not vanish and reappear under it every time anything changes. */
+    /*
+     * Replaces a model's contents in place rather than clear-and-refill, so a row the pointer is
+     * over does not vanish and reappear under it every time anything changes.
+     *
+     * A row that has not changed is left alone entirely. ListModel.set marks the item changed
+     * whatever it was handed, and every delegate binding then re-evaluates - which for a list
+     * that refetches on any tree change is most of the work for none of the result.
+     */
     function fill(model: ListModel, rows: var): void {
         for (let i = 0; i < rows.length; i++) {
             const row = Object.assign({ path: rows[i].path }, rows[i].values);
 
-            if (i < model.count)
-                model.set(i, row);
-            else
+            if (i >= model.count) {
                 model.append(row);
+                continue;
+            }
+
+            if (!bus.same(model.get(i), row))
+                model.set(i, row);
         }
 
         while (model.count > rows.length)
             model.remove(model.count - 1);
+    }
+
+    /// Whether a model row already says what a fresh one says. Shallow on purpose: every value
+    /// in these rows is a string, a number or a bool by the time plain() is done with it.
+    function same(current: var, fresh: var): bool {
+        for (const key in fresh) {
+            if (current[key] !== fresh[key])
+                return false;
+        }
+        return true;
     }
 
     // ──────────────────────────────── notifications
@@ -276,7 +387,7 @@ QtObject {
         if (!bus.available)
             return;
 
-        daemonCall("Notifications", "", [], reply => {
+        daemonCall("Notifications", [], reply => {
             const rows = [];
 
             for (const entry of (reply || [])) {
@@ -308,6 +419,15 @@ QtObject {
      *
      * Newest first, and the group carries the newest message's key, because that is the one a
      * reply should thread onto.
+     *
+     * WHY A MERGED GROUP CANNOT BE REPLIED TO. With the setting off, every WhatsApp conversation
+     * lands under one "WhatsApp" head - and one reply box on that head has to thread onto ONE
+     * key, whichever happened to win. A reply typed there went to an arbitrary conversation, and
+     * the box could not say which because the whole point of the setting is that it does not
+     * know. So reply is offered when the group IS a conversation, or when it holds exactly one
+     * notification and there is therefore nothing to confuse it with. Android keeps one
+     * notification per conversation and updates it in place - see MirroredNotifications, which
+     * stores by key - so with the setting on that is nearly always the case anyway.
      */
     function regroup(rows: var): void {
         rows.sort((a, b) => b.at - a.at);
@@ -330,6 +450,9 @@ QtObject {
                     at: row.at,
                     canReply: row.canReply,
                     replyLabel: row.replyLabel,
+                    // Whether this group is one conversation rather than one application's worth
+                    // of them. Decides, below, whether a reply has somewhere unambiguous to go.
+                    conversation: row.title.length > 0,
                     count: 1,
                     keys: row.key
                 };
@@ -350,6 +473,11 @@ QtObject {
             }
         }
 
+        for (const groupKey of order) {
+            const group = byKey[groupKey];
+            group.canReply = group.canReply && (group.conversation || group.count === 1);
+        }
+
         bus.fill(bus.notifications, order.map(k => ({ path: k, values: byKey[k] })));
     }
 
@@ -366,8 +494,8 @@ QtObject {
         if (!text)
             return;
 
-        daemonCall("SendText", "s", [DBus.string(text)], reply => {
-            const sent = Number(reply);
+        daemonCall("SendText", [bus.text(text)], reply => {
+            const sent = Number(bus.unwrap(reply, 0));
             bus.lastMessage = sent > 0
                 ? i18np("Sent to %1 device", "Sent to %1 devices", sent)
                 : i18n("Nothing is reachable, so nothing was sent");
@@ -378,77 +506,109 @@ QtObject {
        itself: on Wayland a plasmoid cannot, and the daemon holds its own connection for exactly
        that reason. */
     function sendClipboard(): void {
-        daemonCall("SendClipboard", "", [], result => {
-            bus.lastMessage = String(result[1]);
+        daemonCall("SendClipboard", [], result => {
+            bus.lastMessage = bus.outcome(result).message;
         });
     }
 
-    function dial(): void { daemonCall("Dial", "", []); }
+    function dial(): void { daemonCall("Dial", []); }
 
-    function stopRinging(): void { daemonCall("StopRinging", "", []); }
+    function stopRinging(): void { daemonCall("StopRinging", []); }
 
     function show(page: string): void {
-        daemonCall("Show", "s", [DBus.string(page)]);
+        daemonCall("Show", [bus.text(page)]);
     }
 
-    /* Whether Mesh Sync draws its own tray icon. The setting belongs to the app, not to the
-       widget, so it is written over the bus rather than kept here - two copies of one answer is
-       how a checkbox ends up disagreeing with what it controls. */
+    /*
+     * One of the daemon's own settings, written over the bus.
+     *
+     * These belong to Mesh Sync rather than to the widget, so they go to the app rather than into
+     * Plasma's config - two copies of one answer is how a checkbox ends up disagreeing with what
+     * it controls. They travel over org.freedesktop.DBus.Properties because the interface already
+     * declares them writable, and a second way to set one value would be the same mistake again.
+     *
+     * This only reaches the daemon because the daemon DECLARES the Properties interface in its
+     * introspection. Qt introspects an object before it marshals a call to it, and against a peer
+     * that does not declare Get and Set it sends them with an empty body - see
+     * MeshBusObject.PropertiesXml, which exists for this.
+     */
+    function setProperty(name: string, value: var): void {
+        call(bus.root, "Set", [bus.text(bus.iface), bus.text(name), new DBus.variant(value)],
+             null, bus.propertiesIface);
+    }
+
     function setTrayIconVisible(visible: bool): void {
-        DBus.SessionBus.asyncCall({
-            service: bus.service, path: bus.root, iface: bus.propertiesIface,
-            member: "Set", signature: "ssv",
-            arguments: [DBus.string(bus.iface), DBus.string("TrayIconVisible"),
-                        DBus.variant(visible)]
-        }, () => {}, error => console.warn("meshsync: could not change the tray icon:", error));
+        bus.setProperty("TrayIconVisible", visible);
     }
 
     function setNotificationContent(show: bool): void {
-        DBus.SessionBus.asyncCall({
-            service: bus.service, path: bus.root, iface: bus.propertiesIface,
-            member: "Set", signature: "ssv",
-            arguments: [DBus.string(bus.iface), DBus.string("ShowNotificationContent"),
-                        DBus.variant(show)]
-        }, () => {}, error => console.warn("meshsync: could not change notification detail:", error));
+        bus.setProperty("ShowNotificationContent", show);
     }
 
     function setTransport(mode: string): void {
-        DBus.SessionBus.asyncCall({
-            service: bus.service, path: bus.root, iface: bus.propertiesIface,
-            member: "Set", signature: "ssv",
-            arguments: [DBus.string(bus.iface), DBus.string("Transport"),
-                        DBus.variant(DBus.string(mode))]
-        }, () => {}, error => console.warn("meshsync: could not set the transport:", error));
+        bus.setProperty("Transport", bus.text(mode));
     }
 
     function ring(path: string, on: bool): void {
-        call(path, "Ring", "b", [on], null, bus.deviceIface);
+        call(path, "Ring", [on], null, bus.deviceIface);
     }
 
     function forget(path: string): void {
-        call(path, "Forget", "", [], null, bus.deviceIface);
+        call(path, "Forget", [], null, bus.deviceIface);
+    }
+
+    /*
+     * A dropped URL as a path the daemon can open.
+     *
+     * QML's url type has no toLocalFile, so the conversion is written by hand - and therefore
+     * written once. Anything that is not a local file is refused rather than handed to SendFile
+     * as a string beginning "http", which the daemon would then fail to open with a message about
+     * a file that was never there.
+     */
+    function localPath(url: var): string {
+        const text = String(url);
+        return text.startsWith("file://") ? decodeURIComponent(text.substring(7)) : "";
+    }
+
+    /// The one reachable device, or "" when there is none or more than one. What lets a file
+    /// dropped on the panel icon go somewhere without asking.
+    function onlyReachableDevice(): string {
+        let found = "";
+
+        for (let i = 0; i < bus.devices.count; i++) {
+            const row = bus.devices.get(i);
+            if (row.IsConnected !== true)
+                continue;
+            if (found.length > 0)
+                return "";
+            found = row.path;
+        }
+
+        return found;
     }
 
     function sendFile(path: string, file: string): void {
-        call(path, "SendFile", "s", [DBus.string(file)], reply => {
-            bus.lastMessage = String(reply[1]);
+        call(path, "SendFile", [bus.text(file)], reply => {
+            bus.lastMessage = bus.outcome(reply).message;
         }, bus.deviceIface);
     }
 
     function confirm(path: string): void {
-        call(path, "Confirm", "", [], reply => { bus.lastMessage = String(reply[1]); }, bus.pairingIface);
+        call(path, "Confirm", [], reply => { bus.lastMessage = bus.outcome(reply).message; },
+             bus.pairingIface);
     }
 
     function reject(path: string): void {
-        call(path, "Reject", "", [], reply => { bus.lastMessage = String(reply[1]); }, bus.pairingIface);
+        call(path, "Reject", [], reply => { bus.lastMessage = bus.outcome(reply).message; },
+             bus.pairingIface);
     }
 
     function dismiss(key: string): void {
-        daemonCall("DismissNotification", "s", [DBus.string(key)]);
+        daemonCall("DismissNotification", [bus.text(key)]);
     }
 
     function dismissAll(): void {
-        daemonCall("DismissAllNotifications", "", []);
+        daemonCall("DismissAllNotifications", []);
     }
 
     /* Replies go out through the app that posted the notification, on the phone. Nothing here
@@ -457,8 +617,9 @@ QtObject {
         if (!text)
             return;
 
-        daemonCall("ReplyToNotification", "ss", [DBus.string(key), DBus.string(text)], result => {
-            bus.replied(key, Boolean(result[0]), String(result[1]));
+        daemonCall("ReplyToNotification", [bus.text(key), bus.text(text)], result => {
+            const answer = bus.outcome(result);
+            bus.replied(key, answer.ok, answer.message);
         });
     }
 }

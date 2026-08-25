@@ -24,6 +24,20 @@ Item {
     id: root
 
     required property MeshBus bus
+
+    /*
+     * Which conversation this row IS, as opposed to which message it is currently threading on.
+     *
+     * MeshBus.fill() rewrites rows in place rather than clearing and refilling - so the pointer
+     * does not lose a row from under it - which means a delegate at index 0 can become a
+     * different conversation while a half-typed reply is still sitting in it. The list re-sorts
+     * newest-first on every arrival, so that is not a corner case. Without this, a message meant
+     * for one person is sent to whoever the sort moved into that slot.
+     */
+    required property string identity
+
+    onIdentityChanged: root.forget()
+
     required property string notificationKey
     required property string groupKeys
     required property string appName
@@ -36,6 +50,23 @@ Item {
 
     property string status: ""
     property bool sending: false
+
+    /*
+     * The key this box is waiting on, taken when Send was pressed.
+     *
+     * A group carries its newest message's key, so a message arriving while a reply is in flight
+     * moves notificationKey - and an answer matched against the current key would then never
+     * match at all, leaving the field disabled on "Sending…" until the widget was rebuilt.
+     */
+    property string pendingKey: ""
+
+    /// Everything about this row that belonged to whoever was in it before.
+    function forget(): void {
+        draft.text = "";
+        root.status = "";
+        root.sending = false;
+        root.pendingKey = "";
+    }
 
     implicitHeight: layout.implicitHeight + Kirigami.Units.smallSpacing * 2
 
@@ -67,8 +98,11 @@ Item {
                     Layout.fillWidth: true
                     spacing: Kirigami.Units.smallSpacing
 
+                    /* fillWidth rather than a width computed from the parent's: a child of a
+                       layout that reads parent.width is feeding the layout's own output back into
+                       its input, which is the shape a binding loop takes. */
                     PlasmaComponents.Label {
-                        Layout.maximumWidth: parent.width - Kirigami.Units.gridUnit * 3
+                        Layout.fillWidth: true
                         elide: Text.ElideRight
                         font.weight: Font.DemiBold
                         text: root.heading
@@ -96,7 +130,6 @@ Item {
                         }
                     }
 
-                    Item { Layout.fillWidth: true }
                 }
 
                 PlasmaComponents.Label {
@@ -170,8 +203,10 @@ Item {
         root.status = i18n("Sending…");
 
         // Threaded onto the newest message in the group, which is the one whose reply action the
-        // phone still has open.
-        root.bus.reply(root.notificationKey, text);
+        // phone still has open - and held, so the answer can be matched even if a newer message
+        // has moved the group on since.
+        root.pendingKey = root.notificationKey;
+        root.bus.reply(root.pendingKey, text);
     }
 
     /* The daemon answers asynchronously and names the notification, so the right row picks it up.
@@ -181,9 +216,10 @@ Item {
         target: root.bus
 
         function onReplied(key: string, ok: bool, message: string): void {
-            if (key !== root.notificationKey)
+            if (key !== root.pendingKey || root.pendingKey.length === 0)
                 return;
 
+            root.pendingKey = "";
             root.sending = false;
             root.status = message;
             if (ok)

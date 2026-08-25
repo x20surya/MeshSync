@@ -10,6 +10,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 
 import org.kde.kirigami as Kirigami
@@ -22,25 +23,53 @@ PlasmaExtras.Representation {
 
     required property MeshBus bus
 
+    /*
+     * As tall as it needs to be, between a floor and a ceiling.
+     *
+     * It used to be a flat 26 grid units whatever it held, so one device and no notifications
+     * drew a single row and then two thirds of a popup of nothing. A panel widget is expected to
+     * size to its content. The floor gives the empty state room to sit in rather than squeezing
+     * it; the ceiling makes a busy shade scroll instead of covering the screen.
+     */
     Layout.minimumWidth: Kirigami.Units.gridUnit * 20
-    Layout.minimumHeight: Kirigami.Units.gridUnit * 16
     Layout.preferredWidth: Kirigami.Units.gridUnit * 24
-    Layout.preferredHeight: Kirigami.Units.gridUnit * 26
+    Layout.minimumHeight: Kirigami.Units.gridUnit * 12
+    /*
+     * The header and the footer are part of this height and are not part of the scroll area, so
+     * they have to be added back or the popup is exactly that much too short - the scroll view
+     * then decides it is overflowing, shows a bar, narrows the content, rewraps the previews,
+     * gets a different content height, and Plasma's ScrollBar reports the circle as a binding
+     * loop on `visible`. The extra grid unit on top is headroom, so the answer to "is this
+     * overflowing" is decisive rather than exactly on its own boundary.
+     */
+    readonly property real chrome: (root.header ? root.header.height : 0)
+                                 + (root.footer ? root.footer.height : 0)
+                                 + Kirigami.Units.gridUnit
+
+    readonly property real ceiling: Kirigami.Units.gridUnit * 30
+
+    Layout.preferredHeight: Math.min(root.ceiling,
+                                     Math.max(Kirigami.Units.gridUnit * 12,
+                                              stack.implicitHeight + root.chrome))
 
     collapseMarginsHint: true
 
-    /* Only refresh the tree while somebody is looking at it. */
-    Component.onCompleted: root.bus.watching = true
-    Component.onDestruction: root.bus.watching = false
+    /* One read on the way in, so a popup opened after a long idle is right before the first
+       change arrives. Everything after that is event-driven - see MeshBus. */
+    Component.onCompleted: root.bus.refreshObjects()
 
     header: PlasmaExtras.PlasmoidHeading {
         contentItem: RowLayout {
             spacing: Kirigami.Units.smallSpacing
 
+            /* Medium, and centred against the two-line block beside it. At iconSizes.small the
+               mark sat level with the first line and looked like it had slipped. */
             Kirigami.Icon {
                 source: "meshsync"
-                Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                Layout.alignment: Qt.AlignVCenter
+                Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+                Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                Layout.rightMargin: Kirigami.Units.smallSpacing / 2
                 visible: root.bus.available
             }
 
@@ -69,6 +98,17 @@ PlasmaExtras.Representation {
             }
 
             PlasmaComponents.ToolButton {
+                icon.name: "list-add-symbolic"
+                display: PlasmaComponents.AbstractButton.IconOnly
+                text: i18n("Pair a device…")
+                visible: root.bus.available
+                onClicked: root.bus.show("devices")
+
+                PlasmaComponents.ToolTip.text: text
+                PlasmaComponents.ToolTip.visible: hovered
+            }
+
+            PlasmaComponents.ToolButton {
                 icon.name: "view-refresh-symbolic"
                 display: PlasmaComponents.AbstractButton.IconOnly
                 text: i18n("Reconnect now")
@@ -79,8 +119,11 @@ PlasmaExtras.Representation {
                 PlasmaComponents.ToolTip.visible: hovered
             }
 
+            /* Not "configure". That icon means settings everywhere else in Plasma, and Plasma's
+               own header puts the real settings button beside it - two sliders side by side, one
+               of which opened an application. */
             PlasmaComponents.ToolButton {
-                icon.name: "configure"
+                icon.name: "window-new-symbolic"
                 display: PlasmaComponents.AbstractButton.IconOnly
                 text: i18n("Open Mesh Sync…")
                 visible: root.bus.available
@@ -100,11 +143,27 @@ PlasmaExtras.Representation {
         }
 
         PlasmaComponents.ScrollView {
+            id: scroller
             anchors.fill: parent
             visible: root.bus.available
+
             contentWidth: availableWidth
 
+            /*
+             * This popup never scrolls sideways.
+             *
+             * Every row here elides or wraps, so a horizontal bar can only ever appear because a
+             * Text reported the width it would LIKE - implicitWidth, the whole unwrapped string -
+             * and inflated the column that contains it. One long notification preview was enough
+             * to put a scrollbar under the whole widget.
+             *
+             * It also holds bottomPadding at zero, which is one of the two things the vertical
+             * bar's own visibility was chasing round in a circle.
+             */
+            QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff
+
             ColumnLayout {
+                id: stack
                 width: parent.width
                 spacing: Kirigami.Units.smallSpacing
 
@@ -145,6 +204,7 @@ PlasmaExtras.Representation {
                         deviceName: model.Name || model.ShortFingerprint || i18n("Unnamed device")
                         fingerprint: model.ShortFingerprint || ""
                         connected: model.IsConnected === true
+                        ringing: model.IsRinging === true
                         activeLink: model.ActiveLink || "none"
                         lastAddress: model.LastAddress || ""
                         lastSeen: model.LastSeen || 0
@@ -184,6 +244,7 @@ PlasmaExtras.Representation {
                         required property var model
                         Layout.fillWidth: true
                         bus: root.bus
+                        identity: model.path
                         notificationKey: model.key
                         groupKeys: model.keys
                         appName: model.appName
@@ -196,7 +257,6 @@ PlasmaExtras.Representation {
                     }
                 }
 
-                Item { Layout.fillHeight: true }
             }
         }
     }

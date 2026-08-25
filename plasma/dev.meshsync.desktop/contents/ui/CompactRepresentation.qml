@@ -19,8 +19,34 @@ DropArea {
     required property PlasmoidItem plasmoidItem
 
     onEntered: drag => {
-        if (drag.hasUrls)
+        if (!drag.hasUrls)
+            drag.accepted = false;
+    }
+
+    /*
+     * One reachable device takes the file directly - that is the whole gesture, and having to
+     * open a popup to pick the only device there is would be the wrong answer to it.
+     *
+     * With several, or with none, there is nothing to guess, so the popup opens and a device row
+     * takes the drop instead. Opening on drop rather than on hover also stops a file dragged
+     * across the panel on its way somewhere else from throwing the widget open.
+     */
+    onDropped: drop => {
+        if (!drop.hasUrls || drop.urls.length === 0)
+            return;
+
+        const only = root.plasmoidItem.bus.onlyReachableDevice();
+
+        if (only.length === 0) {
             root.plasmoidItem.expanded = true;
+            return;
+        }
+
+        for (const url of drop.urls) {
+            const file = root.plasmoidItem.bus.localPath(url);
+            if (file.length > 0)
+                root.plasmoidItem.bus.sendFile(only, file);
+        }
     }
 
     MouseArea {

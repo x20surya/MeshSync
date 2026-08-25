@@ -24,7 +24,12 @@ PlasmoidItem {
         PlasmaCore.Types.LeftEdge,
     ].includes(Plasmoid.location)
 
-    readonly property MeshBus bus: MeshBus { }
+    readonly property MeshBus bus: MeshBus {
+        /* Whether anybody can see the device list. Not component lifetime: Plasma keeps a full
+           representation alive after the first expand, so a widget opened once at login used to
+           go on waking up every ten seconds until logout. */
+        watching: root.expanded || !root.inPanel
+    }
 
     readonly property bool connected: bus.available && bus.connected
     readonly property int waiting: bus.available ? bus.pendingCount : 0
@@ -70,6 +75,20 @@ PlasmoidItem {
             root.expanded = true;
     }
 
+    /*
+     * Added to the menu, never substituted into it.
+     *
+     * setInternalAction("configure", ...) replaces the action that EVERY route to a widget's own
+     * settings goes through - CompactApplet.qml for a panel or tray applet, ConfigOverlay.qml for
+     * a widget on the desktop, BasicPlasmoidHeading.qml for the popup's own header button.
+     * Overriding it left config/configGeneral.qml with no way in at all, so the two checkboxes and
+     * the two settings that belong to the app could not be reached from anywhere.
+     *
+     * KDE Connect's plasmoid does override it, and ships no contents/config directory - which is
+     * the condition under which that is the right call, and is not the case here.
+     */
+    Plasmoid.contextualActions: [openAction, clipboardAction, reconnectAction]
+
     PlasmaCore.Action {
         id: openAction
         text: i18n("Open Mesh Sync…")
@@ -78,8 +97,25 @@ PlasmoidItem {
         onTriggered: root.bus.show("home")
     }
 
+    /* The two things worth doing without opening anything. Both are already one gesture inside
+       the popup; on the menu they are one gesture from a panel that is showing something else. */
+    PlasmaCore.Action {
+        id: clipboardAction
+        text: i18n("Send clipboard")
+        icon.name: "edit-paste-symbolic"
+        enabled: root.bus.available
+        onTriggered: root.bus.sendClipboard()
+    }
+
+    PlasmaCore.Action {
+        id: reconnectAction
+        text: i18n("Reconnect now")
+        icon.name: "view-refresh-symbolic"
+        enabled: root.bus.available
+        onTriggered: root.bus.dial()
+    }
+
     Component.onCompleted: {
-        Plasmoid.setInternalAction("configure", openAction);
         root.bus.refreshObjects();
         root.bus.refreshNotifications();
     }
