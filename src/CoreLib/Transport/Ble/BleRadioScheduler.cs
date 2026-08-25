@@ -270,11 +270,36 @@ namespace CoreLib.Transport.Ble
             Interlocked.Increment(ref _rounds);
 
             IReadOnlyList<BleCandidate> seen;
+
+            // A round that never comes back must not be the end of Bluetooth.
+            //
+            // The radio talks to the platform, and a platform call that goes unanswered awaits for
+            // ever: no error, no exception, nothing in the log. Observed on Linux, where one
+            // unanswered BlueZ call left the last scan line three hours old and the adapter still
+            // discovering, because the round's own cleanup never ran either - while Wi-Fi, the
+            // clipboard and the notifications all carried on, so nothing about the symptom pointed
+            // here.
+            //
+            // Cancelled through a linked token rather than abandoned with WaitAsync, so the radio
+            // gets to run its own finally and hand the antenna back.
+            using var round = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            round.CancelAfter(_timings.ScanRoundBudget);
+
             try
             {
-                seen = await _radio.ScanAsync(_timings.ScanWindow, cancellationToken).ConfigureAwait(false);
+                seen = await _radio.ScanAsync(_timings.ScanWindow, round.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;   // Shutting down, which is not a failure.
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Write("Ble",
+                    $"A scan round did not finish within {_timings.ScanRoundBudget.TotalSeconds:0}s " +
+                    "and was abandoned; the radio will be asked again.");
+                return _timings.ScanInterval;
+            }
             catch (Exception ex)
             {
                 Log.Write("Ble", "Scanning failed", ex);

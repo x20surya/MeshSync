@@ -8,7 +8,7 @@ code:
   - src/CoreLib/Transport/TcpTransportConnection.cs
   - src/CoreLib/Transport/BleProtocol.cs
   - src/CoreLib/Transport/Ble/MeshBeacon.cs
-updated: 2026-08-24
+updated: 2026-08-25
 ---
 
 # Every timeout and interval
@@ -31,6 +31,7 @@ were already in the field, not fresh choices.
 | `IdleCeiling` | 60s | Backoff ceiling with the screen off |
 | `RefusalCooldown` | 5 min | How long a device that produced no session is left alone |
 | `ScanInterval` / `ScanWindow` | 30s / 12s | One discovery window, stopped in a `finally` between rounds |
+| `ScanRoundBudget` | 45s | The longest a whole round may take before it is cancelled and retried. The window is what a scan aims for; this is what happens when it never comes back **at all** - one unanswered BlueZ call took Bluetooth off a Linux box for the life of the process, with the adapter left discovering because the round's own `finally` never ran |
 | `RotationInterval` | 2 min | How often the radio reconsiders which peers hold its central links |
 | `MaxBleCentralLinks` | 4 | Concurrent outbound radio links |
 | `ReconcileInterval` | 15s | How often the supervisor runs with nothing signalling it |
@@ -76,6 +77,8 @@ Bluetooth carries presence anyway and notices a vanished peer in 24s.
 | Chunk receipt timeout | 5s | `BleProtocol.AckTimeout` |
 | Scan interval | 30s | `RouteTimings`, shared by every head |
 | Scan window | 12s | `RouteTimings` |
+| Scan round budget | 45s | `RouteTimings` |
+| BlueZ call timeout | 20s | `BlueZ.CallTimeout` - a D-Bus call that is never answered awaits for ever |
 | Handshake grace | 12s | `RouteTimings`, and it is now the same value on all three |
 | Refusal cooldown | 5 min | `RouteTimings` |
 | Reassembly stale | 30s | `BleReassembler` |

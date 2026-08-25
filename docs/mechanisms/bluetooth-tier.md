@@ -10,7 +10,7 @@ code:
   - src/CoreLib/Transport/Ble/IBleRadio.cs
   - src/DesktopCore/Bluetooth/
   - src/WinDaemon/WindowsBleRadio.cs
-updated: 2026-08-24
+updated: 2026-08-25
 ---
 
 # Bluetooth tier
@@ -63,6 +63,28 @@ Peers are found by scanning for the service UUID, so [[pairing]] carries no Blue
 no OS-level bonding is used or needed.
 Both characteristics are `GattProtectionLevel.Plain`, so "forget this device" in Bluetooth
 settings changes nothing.
+
+## A round that never comes back
+
+**The failure that looks like "Bluetooth just does not work on Linux".**
+
+A D-Bus call that goes unanswered awaits for ever - no error, no exception, no log line. One
+unanswered BlueZ call inside a scan round left the round hanging, so its `finally` never ran, the
+adapter was left discovering, and the last thing the log said was an ordinary scan result three
+hours earlier. Wi-Fi, the clipboard and the notifications all carried on, so nothing about the
+symptom pointed here; `BluetoothStatus` still read `scanning`, because it was.
+
+Two bounds now, because either alone leaves a hole:
+
+- **`BlueZ.CallTimeout`** (20s) on every call. Callers already treat a failed BlueZ call as "this
+  did not work"; a call that vanished is a stronger version of the same thing, and what it must
+  not do is nothing.
+- **`RouteTimings.ScanRoundBudget`** (45s) on the whole round, cancelled through a *linked token*
+  rather than abandoned with `WaitAsync` - so the radio runs its own cleanup and hands the antenna
+  back, instead of the scheduler walking away from a scan that is still holding it.
+
+`BleRadioSchedulerTests` wedges the fake radio to hold both, with `Timeout` on the facts so a
+regression fails the suite rather than hanging it.
 
 ## Platform state
 

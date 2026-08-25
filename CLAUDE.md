@@ -122,7 +122,7 @@ systemctl --user restart plasma-plasmashell.service
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-452 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
+455 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
 warnings, so use `-t:Rebuild` when you need to be sure.
 
 **All three heads build on Linux**, which is worth knowing before assuming CI is the only check.
@@ -211,6 +211,6 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
   and dialler, Bluetooth GATT client and server, the ringer, and the Quick Settings tile,
   `PROCESS_TEXT` and share targets.
 - `src/assets`: brand handoff, the source of truth for the mark, palette and illustrations.
-- `tests/CoreLib.Tests`: 452 tests, including a three-device mesh over real loopback sockets, the
+- `tests/CoreLib.Tests`: 455 tests, including a three-device mesh over real loopback sockets, the
   per-peer route state machine, the mesh beacon and its 31-byte advertisement budget, and a fake
   radio that replays every Bluetooth finding in `HANDOFF.md` as a scripted scenario.

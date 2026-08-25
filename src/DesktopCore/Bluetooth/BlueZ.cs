@@ -173,20 +173,69 @@ public sealed class BlueZ : IDisposable
         }
     }
 
+    /// <summary>
+    /// How long any single BlueZ call may take before it is treated as lost.
+    ///
+    /// <para><b>Why every call needs one.</b> A D-Bus call that is never answered awaits for ever,
+    /// and there is no error, no exception and no log line - the caller simply stops existing. One
+    /// unanswered call inside the scan loop took Bluetooth off this machine for the life of the
+    /// process: the round never returned, so its <c>finally</c> never ran, the adapter was left
+    /// discovering, and the last thing the log said was an ordinary scan result three hours
+    /// earlier. Nothing in "Wi-Fi works, Bluetooth does not" pointed at it.</para>
+    ///
+    /// <para>Generous on purpose. BlueZ answers in milliseconds when it is well; this is the
+    /// boundary between slow and gone, not a performance budget.</para>
+    /// </summary>
+    public static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(20);
+
     /// <summary>Calls a method that takes no arguments and returns nothing.</summary>
     public Task CallAsync(string path, string iface, string member) =>
-        Connection.CallMethodAsync(BuildCall(path, iface, member, "", null));
+        Bounded(Connection.CallMethodAsync(BuildCall(path, iface, member, "", null)), path, member);
 
     /// <summary>Calls a method, writing its arguments with <paramref name="args"/>.</summary>
     public Task CallAsync(string path, string iface, string member, string signature,
                           MessageArgs args) =>
-        Connection.CallMethodAsync(BuildCall(path, iface, member, signature, args));
+        Bounded(Connection.CallMethodAsync(BuildCall(path, iface, member, signature, args)), path, member);
 
     /// <summary>Reads one property.</summary>
     public Task<VariantValue> GetPropertyAsync(string path, string iface, string name) =>
-        Connection.CallMethodAsync(
+        Bounded(Connection.CallMethodAsync(
             BuildCall(path, Properties, "Get", "ss", (ref MessageWriter w) => { w.WriteString(iface); w.WriteString(name); }),
-            static (Message message, object? _) => message.GetBodyReader().ReadVariantValue(), null);
+            static (Message message, object? _) => message.GetBodyReader().ReadVariantValue(), null),
+            path, name);
+
+    /// <summary>
+    /// The same call, with a bound on how long it may go unanswered.
+    ///
+    /// <para>A timeout is raised as <see cref="TimeoutException"/> rather than swallowed: every
+    /// caller here already treats a failed BlueZ call as "this did not work", and a call that
+    /// vanished is a stronger version of the same thing. What it must not do is nothing.</para>
+    /// </summary>
+    private static async Task Bounded(Task call, string path, string member)
+    {
+        try
+        {
+            await call.WaitAsync(CallTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            Log.Write("BlueZ", $"{member} on {path} went unanswered for {CallTimeout.TotalSeconds:0}s.");
+            throw;
+        }
+    }
+
+    private static async Task<T> Bounded<T>(Task<T> call, string path, string member)
+    {
+        try
+        {
+            return await call.WaitAsync(CallTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            Log.Write("BlueZ", $"{member} on {path} went unanswered for {CallTimeout.TotalSeconds:0}s.");
+            throw;
+        }
+    }
 
     /// <summary>
     /// Watches <c>PropertiesChanged</c> across every BlueZ object, which is how a characteristic

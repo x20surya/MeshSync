@@ -28,6 +28,75 @@ public class BleRadioSchedulerTests
 
     private static string Fingerprint() => DeviceIdentity.CreateEphemeral().Fingerprint;
 
+    // ── a round that never comes back ────────────────────────────────────────
+
+    /// <summary>
+    /// A scan that never returns is abandoned, not waited on for ever.
+    ///
+    /// Found on Linux: one unanswered BlueZ call left the round awaiting with no error, no
+    /// exception and no log line. Bluetooth was gone for the life of the process while Wi-Fi, the
+    /// clipboard and the notifications all carried on - and the round's own cleanup never ran
+    /// either, so the adapter was left discovering. Nothing about the symptom pointed at it.
+    /// </summary>
+    [Fact(Timeout = 10_000)]
+    public async Task A_scan_that_never_returns_is_abandoned_and_the_radio_is_let_go()
+    {
+        var timings = Timings with { ScanRoundBudget = TimeSpan.FromMilliseconds(120) };
+        var (scheduler, radio, _) = Rig(timings: timings);
+        await using var _s = scheduler;
+
+        radio.Place("aa:aa", rssi: -40);
+        radio.WedgeScan = true;
+        scheduler.SetWanted(new HashSet<string> { Fingerprint() });
+
+        var next = await scheduler.RunRoundAsync(CancellationToken.None);
+
+        // It came back at all, which is the whole point.
+        Assert.Equal(timings.ScanInterval, next);
+
+        // And the radio was cancelled rather than left hanging, so its own cleanup could run.
+        Assert.Equal(1, radio.ScansCancelled);
+    }
+
+    /// <summary>The next round still scans: one lost round is not the end of the radio.</summary>
+    [Fact(Timeout = 10_000)]
+    public async Task The_round_after_an_abandoned_one_scans_again()
+    {
+        var timings = Timings with { ScanRoundBudget = TimeSpan.FromMilliseconds(120) };
+        var (scheduler, radio, _) = Rig(timings: timings);
+        await using var _s = scheduler;
+
+        radio.Place("aa:aa", rssi: -40);
+        scheduler.SetWanted(new HashSet<string> { Fingerprint() });
+
+        radio.WedgeScan = true;
+        await scheduler.RunRoundAsync(CancellationToken.None);
+
+        radio.WedgeScan = false;
+        await scheduler.RunRoundAsync(CancellationToken.None);
+
+        Assert.Equal(2, radio.ScanWindows.Count);
+        Assert.NotEmpty(radio.ConnectAttempts);
+    }
+
+    /// <summary>Shutting down is not a lost round, and must still propagate.</summary>
+    [Fact]
+    public async Task Cancelling_the_scheduler_still_throws_rather_than_being_swallowed()
+    {
+        var (scheduler, radio, _) = Rig();
+        await using var _s = scheduler;
+
+        radio.Place("aa:aa", rssi: -40);
+        radio.WedgeScan = true;
+        scheduler.SetWanted(new HashSet<string> { Fingerprint() });
+
+        using var stopping = new CancellationTokenSource();
+        stopping.CancelAfter(TimeSpan.FromMilliseconds(80));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => scheduler.RunRoundAsync(stopping.Token));
+    }
+
     // ── when to scan ─────────────────────────────────────────────────────────
 
     /// <summary>

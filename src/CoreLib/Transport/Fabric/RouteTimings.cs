@@ -60,6 +60,22 @@ namespace CoreLib.Transport.Fabric
         /// </summary>
         public TimeSpan ScanWindow { get; init; } = TimeSpan.FromSeconds(12);
 
+        /// <summary>
+        /// The longest a whole scan round may take before it is abandoned and retried.
+        ///
+        /// <para><b>Why a round needs a bound and not only the window.</b> The window is what the
+        /// scan aims for; this is what happens when it never comes back at all. A radio call that
+        /// goes unanswered leaves the round awaiting for ever - no error, no exception, no log
+        /// line - and Bluetooth is simply gone for the life of the process while every other part
+        /// of the app carries on. Observed on Linux: the last scan line in the log was three hours
+        /// old and the adapter was still discovering, because the round's own cleanup never ran
+        /// either.</para>
+        ///
+        /// <para>Comfortably more than <see cref="ScanWindow"/>, because overrunning the window is
+        /// normal and being gone is not.</para>
+        /// </summary>
+        public TimeSpan ScanRoundBudget { get; init; } = TimeSpan.FromSeconds(45);
+
         /// <summary>How often the radio reconsiders which peers hold its central links.</summary>
         public TimeSpan RotationInterval { get; init; } = TimeSpan.FromMinutes(2);
 

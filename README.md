@@ -226,7 +226,7 @@ it does not.
   screen watchers; a boot receiver; a notification listener; TCP listener and dialler; Bluetooth
   GATT client and server; and the Quick Settings tile, `PROCESS_TEXT` and share targets.
 - **`src/assets`** - brand handoff: the mark, the palette and the illustrations.
-- **`tests/CoreLib.Tests`** - 452 tests: a three-device mesh over real loopback sockets, the
+- **`tests/CoreLib.Tests`** - 455 tests: a three-device mesh over real loopback sockets, the
   per-peer route state machine, the mesh beacon and its advertisement budget, key agreement, wire
   formats, Bluetooth role rules and the peer registry. A fake radio replays every hard-won
   Bluetooth finding as a scripted scenario.

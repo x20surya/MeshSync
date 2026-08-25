@@ -59,7 +59,7 @@ Exact, code-derived, and the part that cannot be got from `AGENTS.md` or `HANDOF
 | [[shared-folders-security]] | The four-step path resolution, and why each step is needed |
 | [[on-disk-formats]] | `device.key`, `peers.json`, and the `WouldLosePort` guard |
 | [[timings]] | **Every timeout and interval in the project, in one table** |
-| [[testing]] | What the 452 cases cover, and what still has no check at all |
+| [[testing]] | What the 455 cases cover, and what still has no check at all |
 | [[building]] | Build, run, package, reset, and two devices on one machine |
 | [[installing]] | What to do on a machine that is not yours, and what it runs on |
 | [[dbus-interface]] | The bus surface and `meshsyncctl` |

@@ -101,10 +101,35 @@ public sealed class FakeBleRadio : IBleRadio
         return Task.CompletedTask;
     }
 
-    public Task<IReadOnlyList<BleCandidate>> ScanAsync(TimeSpan window, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Set to make a scan never come back on its own, the way an unanswered platform call does.
+    ///
+    /// <para>It still honours the token, because that is exactly what the real radio does: the
+    /// round is cancelled, its cleanup runs, and the antenna is handed back.</para>
+    /// </summary>
+    public bool WedgeScan { get; set; }
+
+    /// <summary>Whether a wedged scan was let go rather than left hanging.</summary>
+    public int ScansCancelled { get; private set; }
+
+    public async Task<IReadOnlyList<BleCandidate>> ScanAsync(TimeSpan window, CancellationToken cancellationToken = default)
     {
         ScanWindows.Add(window);
-        return Task.FromResult<IReadOnlyList<BleCandidate>>(_inRange.ToList());
+
+        if (WedgeScan)
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                ScansCancelled++;
+                throw;
+            }
+        }
+
+        return _inRange.ToList();
     }
 
     /// <summary>Addresses this fake should claim it already holds a link to.</summary>
