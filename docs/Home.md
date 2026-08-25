@@ -61,6 +61,7 @@ Exact, code-derived, and the part that cannot be got from `AGENTS.md` or `HANDOF
 | [[timings]] | **Every timeout and interval in the project, in one table** |
 | [[testing]] | What the 452 cases cover, and what still has no check at all |
 | [[building]] | Build, run, package, reset, and two devices on one machine |
+| [[installing]] | What to do on a machine that is not yours, and what it runs on |
 | [[dbus-interface]] | The bus surface and `meshsyncctl` |
 | [[apt-repository]] | How `apt install meshsync` works, and three ways it fails silently |
 

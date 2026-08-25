@@ -139,4 +139,4 @@ packages. It belongs in a password manager, not only in a repository secret.
 
 ## See also
 
-[[building]] · [[testing]] · [[desktop-shell]] · [[linux-daemon]]
+[[installing]] · [[building]] · [[testing]] · [[desktop-shell]] · [[linux-daemon]]

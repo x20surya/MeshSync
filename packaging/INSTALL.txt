@@ -1,9 +1,28 @@
 Mesh Sync - Linux
+=================
 
-Run it:
+You have the tarball. If this machine runs Debian or Ubuntu, the apt repository
+is the better route - it upgrades itself:
+
+    sudo install -d -m 0755 /usr/share/keyrings
+    curl -fsSL http://x20surya.me/MeshSync/meshsync.gpg \
+      | sudo tee /usr/share/keyrings/meshsync.gpg > /dev/null
+
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] http://x20surya.me/MeshSync stable main" \
+      | sudo tee /etc/apt/sources.list.d/meshsync.list > /dev/null
+
+    sudo apt update && sudo apt install meshsync
+
+Signing key  64B7 9912 F802 21C1 0E3A 341D 4C84 A1AE A04A B302
+
+
+Run it from here
+----------------
     ./meshsync
 
-Install it for your user, so it appears in the launcher:
+
+Install it for your user, so it appears in the launcher
+-------------------------------------------------------
     mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons
     cp -r . ~/.local/share/meshsync
     ln -sf ~/.local/share/meshsync/meshsync ~/.local/bin/meshsync
@@ -11,9 +30,18 @@ Install it for your user, so it appears in the launcher:
         > ~/.local/share/applications/meshsync.desktop
     cp meshsync.svg ~/.local/share/icons/meshsync.svg
 
-Clipboard sync needs a helper:
-    Wayland   wl-clipboard
-    X11       xclip, or xsel
+Nothing here needs root, and nothing here needs a .NET runtime - this build is
+self-contained.
 
-Without one the app still pairs, holds links and sends; it just cannot read or
-write the clipboard by itself.
+
+What it needs
+-------------
+glibc 2.27 or newer, which is Ubuntu 18.04, Debian 10, and anything since.
+x86-64 only. There is no arm64 build yet.
+
+Clipboard sync needs no helper on Wayland: Mesh Sync speaks ext-data-control to
+the compositor itself. On X11 install xclip or xsel. Without either, the app
+still pairs, holds links and sends - it just cannot read the clipboard itself.
+
+On KDE Plasma a panel widget is included. It installs itself on first run; add
+it from Add Widgets.

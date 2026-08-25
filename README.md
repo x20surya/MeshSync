@@ -63,6 +63,8 @@ getting in by connecting first.
 
 ### Debian and Ubuntu
 
+Also Mint, Pop!_OS, Zorin, elementary, Kali and Raspberry Pi OS on amd64.
+
 ```bash
 sudo install -d -m 0755 /usr/share/keyrings
 curl -fsSL http://x20surya.me/MeshSync/meshsync.gpg \
@@ -74,18 +76,43 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] http://x20sury
 sudo apt update && sudo apt install meshsync
 ```
 
-`apt upgrade` then picks up new releases like anything else.
-Nothing else is needed - the package is self-contained and does not want a .NET runtime.
+It installs to `/opt/meshsync` with a launcher entry, the Plasma widget and the icons, and
+`apt upgrade` carries it forward from there. Nothing else is needed - the build is self-contained
+and wants no .NET runtime.
 
 The repository is served over `http` and every index is GPG-signed, which is how apt authenticates
-a repository and why Debian's own mirrors are `http` too - see the note below for the detail.
-See [docs/reference/apt-repository.md](docs/reference/apt-repository.md).
+a repository, and why Debian's own mirrors are `http` too. The signing key is
+`64B7 9912 F802 21C1 0E3A 341D 4C84 A1AE A04A B302`.
 
-### Everything else
+### Fedora, Arch, openSUSE, NixOS
 
-An **AppImage**, a **`.deb`**, a **tarball**, a **Windows `.exe`** and a **signed APK** are
-attached to every [release](https://github.com/x20surya/MeshSync/releases).
-There is no store listing yet.
+The **AppImage** from any [release](https://github.com/x20surya/MeshSync/releases):
+
+```bash
+chmod +x MeshSync-v0.5.0-linux-x86_64.AppImage
+./MeshSync-v0.5.0-linux-x86_64.AppImage
+```
+
+If it fails naming `libfuse.so.2`, that is FUSE 2, which Ubuntu 22.04+ and current Fedora no
+longer install. Either add `libfuse2`, or skip FUSE with `--appimage-extract-and-run`.
+
+`packaging/install-user.sh` does a full install with no root - launcher entry, icons, the Plasma
+widget, `meshsyncctl` and D-Bus activation.
+
+### Windows and Android
+
+A self-contained `.exe` and a signed `.apk` are attached to every release. There is no store
+listing yet.
+
+### What it runs on
+
+**GLIBC_2.27 and newer** - Ubuntu 18.04, Debian 10, and anything since. Measured from the shipped
+binaries, not assumed.
+
+**Every artifact is x86-64.** A Raspberry Pi or an arm64 machine gets nothing yet; `build.sh`
+already takes `ARCH=arm64`, but the release workflow only ever calls it for x64.
+
+Full detail in [docs/reference/installing.md](docs/reference/installing.md).
 
 ## Building from source
 

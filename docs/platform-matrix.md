@@ -1,6 +1,6 @@
 ---
 type: meta
-updated: 2026-08-24
+updated: 2026-08-25
 ---
 
 # Platform matrix
@@ -15,6 +15,21 @@ no key protector and no clipboard watcher, and carrying an unverified column thr
 transport refactor was maintaining a claim nobody had checked.
 The cross-publish target stays in the solution and `IBleRadio` is shaped so CoreBluetooth drops in
 behind it. See [[desktop-core]].
+
+## How each head is installed
+
+| Head | Route | Architecture |
+|---|---|---|
+| Linux, Debian-derived | apt, `http://x20surya.me/MeshSync` | **amd64 only** |
+| Linux, everything else | AppImage, or `packaging/install-user.sh` | **amd64 only** |
+| Windows | self-contained `.exe` from the release | x64 |
+| Android | signed `.apk` from the release, CI debug key | all |
+
+**Nothing ships for arm64.** A Raspberry Pi, an arm64 server or an Asahi Mac has no route at all.
+`packaging/build.sh` already takes `ARCH=arm64` and derives the RID, the Debian architecture and
+the AppImage architecture from it; `release.yml` calls it once with no `ARCH`, and that is the
+whole of the gap. The Linux floor is **glibc 2.27** - Ubuntu 18.04, Debian 10 - measured from the
+shipped binaries. See [[installing]].
 
 ## Features by head
 

@@ -11,6 +11,8 @@ updated: 2026-08-25
 
 # Building and running
 
+> Installing a **released** build is [[installing]]. This note is about building one.
+
 .NET 10 SDK for everything. Android also needs the `maui-android` workload.
 
 ## The five heads

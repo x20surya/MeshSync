@@ -245,7 +245,10 @@ See `docs/mechanisms/peer-link.md` and `docs/mechanisms/mesh-beacon.md`.
 `DesktopCore` holds the running device, `DesktopShell` is the Avalonia window and tray for both, and `LinuxDaemon` is the same core with a terminal in front of it.
 Clipboard, files, find my device and notification mirroring all work, and mirrored notifications go into the desktop's own notification centre.
 Linux has both tiers and wraps its identity key with the desktop keyring; macOS has neither, for the reason in the gaps below.
-Packaged as an AppImage, a .deb and a tarball by `packaging/build.sh`.
+Packaged as an AppImage, a .deb and a tarball by `packaging/build.sh`, and published as a
+signed apt repository at `http://x20surya.me/MeshSync` - so Debian and Ubuntu install and
+upgrade it like anything else. x86-64 only; `build.sh` takes `ARCH=arm64` but the release
+workflow never calls it that way. See `docs/reference/installing.md`.
 - **One shared answer for link state**: COMPLETED for the desktop head, PENDING for Windows.
 `LinkState`, `TransportSettings` and `BleLinkArbiter` live in `CoreLib` and every head calls them, so a rule is written once and a platform supplies only storage.
 The desktop head answers per peer as well; Windows still answers per app, so it can mark only one device connected and guesses which by name.

@@ -83,6 +83,19 @@ Cross-published from Linux. The binary is real; signing and notarising still nee
 dotnet publish src/DesktopShell/DesktopShell.csproj -c Release -r osx-arm64 --self-contained true
 ```
 
+### Package And Publish
+
+```bash
+packaging/build.sh                      # AppImage, .deb and tarball into packaging/out
+packaging/apt-repo.sh <debs> <out>      # a signed apt repository from those .debs
+```
+
+A release is a `v*` tag: CI builds all four heads, publishes the GitHub release, and republishes
+the apt repository at `http://x20surya.me/MeshSync` from the last three releases.
+The signing key lives in the `APT_GPG_PRIVATE_KEY` and `APT_GPG_PASSPHRASE` repository secrets.
+See [docs/reference/apt-repository.md](docs/reference/apt-repository.md) and
+[docs/reference/installing.md](docs/reference/installing.md).
+
 ### Run And Check The Plasma Widget
 
 The widget is QML with no build step, so it is run out of the working tree and checked against a
