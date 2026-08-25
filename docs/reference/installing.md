@@ -39,8 +39,8 @@ activation file. `apt upgrade` carries it forward from there.
 The AppImage from any [release](https://github.com/x20surya/MeshSync/releases).
 
 ```bash
-chmod +x MeshSync-v0.5.0-linux-x86_64.AppImage
-./MeshSync-v0.5.0-linux-x86_64.AppImage
+chmod +x MeshSync-v0.5.1-linux-x86_64.AppImage
+./MeshSync-v0.5.1-linux-x86_64.AppImage
 ```
 
 **AppImages need FUSE 2, which Ubuntu 22.04 and later and current Fedora no longer install.** The
@@ -48,7 +48,7 @@ failure names `libfuse.so.2` and reads like a corrupt download. Either install `
 FUSE entirely:
 
 ```bash
-./MeshSync-v0.5.0-linux-x86_64.AppImage --appimage-extract-and-run
+./MeshSync-v0.5.1-linux-x86_64.AppImage --appimage-extract-and-run
 ```
 
 `packaging/install-user.sh` does a proper install with **no root**: the AppImage into
