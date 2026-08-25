@@ -117,6 +117,18 @@ are caught there rather than by a person whose `apt install` 404s.
 
 ## The signing key
 
+```
+64B7 9912 F802 21C1 0E3A 341D 4C84 A1AE A04A B302
+Mesh Sync <suryanshuc659@gmail.com>   rsa4096, no expiry
+```
+
+Check what you downloaded against that before trusting it:
+
+```bash
+gpg --show-keys --with-fingerprint /usr/share/keyrings/meshsync.gpg
+```
+
+
 Held as the `APT_GPG_PRIVATE_KEY` repository secret, with `APT_GPG_PASSPHRASE` if it has one. The
 workflow refuses to publish without it rather than producing an unsigned repository, which every
 apt client rejects anyway.

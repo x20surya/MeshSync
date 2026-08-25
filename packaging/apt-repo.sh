@@ -230,6 +230,12 @@ sudo apt install meshsync</pre>
 
 <p>After that <code>sudo apt upgrade</code> picks up new releases like anything else.</p>
 
+<p>The key you just added should be this one:</p>
+<pre>64B7 9912 F802 21C1 0E3A 341D 4C84 A1AE A04A B302
+Mesh Sync &lt;suryanshuc659@gmail.com&gt;</pre>
+<p>Check with
+<code>gpg --show-keys --with-fingerprint /usr/share/keyrings/meshsync.gpg</code>.</p>
+
 <p>The clipboard needs no helper on Wayland &mdash; Mesh Sync speaks
 <code>ext-data-control</code> to the compositor itself. On X11 install
 <code>xclip</code> or <code>wl-clipboard</code>, which the package recommends.</p>
