@@ -160,13 +160,50 @@ EOF
 
 # The clipboard needs a helper on X11; say so once at install time rather than leaving the
 # user to discover a silently inert feature.
+# The clipboard needs a helper on X11, and an upgrade does not take effect on its own. Both are
+# said once here rather than left for the user to discover - a silently inert feature and a
+# silently old version look exactly like a working install.
 cat > "$DEB/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
-if [ "$1" = "configure" ]; then
-    if ! command -v wl-paste >/dev/null 2>&1 && ! command -v xclip >/dev/null 2>&1; then
-        echo "Mesh Sync: install wl-clipboard (Wayland) or xclip (X11) to turn on clipboard sync."
+
+[ "$1" = "configure" ] || exit 0
+
+if ! command -v wl-paste >/dev/null 2>&1 && ! command -v xclip >/dev/null 2>&1; then
+    echo "Mesh Sync: install wl-clipboard (Wayland) or xclip (X11) to turn on clipboard sync."
+fi
+
+# WHY THIS IS A MESSAGE AND NOT A RESTART.
+#
+# Mesh Sync runs in somebody's desktop session and this script runs as root, outside it. Reaching
+# into a user's session bus from here to stop their app is the kind of thing a package should not
+# do even when it can - and on a multi-user machine there is no single right answer to whose.
+#
+# But saying nothing is worse. dpkg replaces the files; the process already in memory carries on
+# running the old code, and plasmashell keeps the widget QML it loaded at login. "apt upgrade
+# succeeded" and "you are running the new version" are two different facts, and only one of them
+# is visible.
+# $2 is the version being upgraded from, and is empty on a first install - where nothing is
+# running yet and there is nothing to say. pgrep -x matches the process NAME exactly: -f would
+# match any process whose command line merely mentions the path, which during testing included
+# the shell that was running this script.
+if [ -n "$2" ] && pgrep -x meshsync >/dev/null 2>&1; then
+    echo ""
+    echo "Mesh Sync: the new version is installed, but the copy already running is still the old"
+    echo "one. Quit it from the tray and start it again, or:"
+    echo ""
+    echo "    pkill -x meshsync && (setsid /opt/meshsync/meshsync >/dev/null 2>&1 &)"
+    echo ""
+
+    if pgrep -x plasmashell >/dev/null 2>&1; then
+        echo "The Plasma widget is cached by plasmashell and needs it to reload:"
+        echo ""
+        echo "    systemctl --user restart plasma-plasmashell.service"
+        echo ""
     fi
+
+    echo "Logging out and back in does both."
+    echo ""
 fi
 EOF
 chmod 755 "$DEB/DEBIAN/postinst"
