@@ -308,9 +308,23 @@ namespace CoreLib.Transport.Ble
 
             if (usable.Count == 0)
             {
+                // Say which filter emptied the round, not just that it is empty.
+                //
+                // This line used to report "none of them in this mesh" whenever `usable` came out
+                // empty - for any of the four reasons. `ours` is counted three lines above and was
+                // not used, so a peer that was merely cooling off after a refusal, or one whose
+                // link was already up, was reported as belonging to somebody else's mesh. That is
+                // the worst possible lie to tell here, because it sends the reader to the mesh key
+                // and the pairing when the radio is working exactly as intended.
+                int linked = seen.Count(c => c.IsPresent && BeaconFilter(c) && _radio.HasLinkTo(c.Address));
+                int cooling = ours - linked;
+
                 Log.Write("Ble", seen.Count == 0
                     ? "Nothing in range advertising the Mesh Sync service."
-                    : $"{seen.Count} device(s) advertising the service, none of them in this mesh.");
+                    : ours == 0
+                        ? $"{seen.Count} device(s) advertising the service, none of them in this mesh."
+                        : $"{seen.Count} seen, {ours} in this mesh: {linked} already linked, " +
+                          $"{cooling} cooling off after a refusal.");
 
                 // Only a round that saw *nothing at all* counts towards recovery. A round that
                 // saw devices and refused them is the radio working exactly as intended.
