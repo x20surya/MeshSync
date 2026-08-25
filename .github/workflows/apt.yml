@@ -1,0 +1,142 @@
+name: APT repository
+
+# Republishes the apt repository whenever a release is published.
+#
+# WHY IT IS REBUILT RATHER THAN APPENDED TO. The repository is derived entirely from GitHub
+# Releases: every run downloads the .deb from the most recent few and builds the whole thing from
+# scratch. Nothing accumulates, nothing drifts, and a repository that has gone wrong is fixed by
+# running this again rather than by working out what state it got into.
+#
+# Deployed as a Pages artifact rather than committed to a gh-pages branch, because a 33 MB .deb
+# per release committed to a branch is 33 MB in the repository's history for ever.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Only one publish at a time, and never cancel one half-done: an interrupted deploy leaves the
+# repository advertising a Packages index whose .deb is not there yet.
+concurrency:
+  group: apt-repository
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the signing key is configured
+        env:
+          KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::APT_GPG_PRIVATE_KEY is not set. An unsigned apt repository is one" \
+                 "every client refuses, so this stops here rather than publishing something" \
+                 "that cannot be installed. See docs/reference/apt-repository.md."
+            exit 1
+          fi
+
+      # The last three, so somebody pinned to an older version can still install it and the site
+      # stays about a hundred megabytes rather than growing without limit.
+      - name: Collect the .deb from recent releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p debs
+          for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 3 --json tagName \
+                         --jq '.[].tagName'); do
+            echo "looking in $tag"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern '*linux-amd64.deb' --dir debs --clobber 2>/dev/null || {
+                echo "  no .deb attached to $tag, skipping"; continue; }
+          done
+
+          # The release names its assets after the tag; apt names packages after the control
+          # file. Rename so the pool reads the way a Debian pool reads.
+          for f in debs/*.deb; do
+            [ -e "$f" ] || continue
+            name="$(dpkg-deb -f "$f" Package)"
+            version="$(dpkg-deb -f "$f" Version)"
+            arch="$(dpkg-deb -f "$f" Architecture)"
+            mv -f "$f" "debs/${name}_${version}_${arch}.deb"
+          done
+
+          ls -la debs/
+          ls debs/*.deb >/dev/null 2>&1 || { echo "::error::No .deb found in the last 3 releases."; exit 1; }
+
+      - name: Import the signing key
+        env:
+          KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          echo "$KEY" | gpg --batch --import
+          FPR="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          echo "APT_SIGNING_KEY=$FPR" >> "$GITHUB_ENV"
+          echo "signing as $FPR"
+
+          # A passphrase-protected key cannot be used unattended without this, and the failure is
+          # gpg asking for input on a runner where nothing can answer.
+          if [ -n "$PASSPHRASE" ]; then
+            echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+            gpgconf --reload gpg-agent
+            echo "GPG_TTY=" >> "$GITHUB_ENV"
+            printf '%s' "$PASSPHRASE" > "$RUNNER_TEMP/pass"
+            echo "APT_GPG_PASSPHRASE_FILE=$RUNNER_TEMP/pass" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the repository
+        run: packaging/apt-repo.sh debs site
+
+      - name: Show what was built
+        run: |
+          find site -type f | sort
+          echo "── Release ──"
+          cat site/dists/stable/Release
+
+      # The same check the script's own test does: a real apt, in a sandbox, against the tree that
+      # is about to be published. It catches a bad signature, a missing index and a Filename that
+      # points nowhere - all of which otherwise reach people as "apt update works and install
+      # 404s".
+      - name: Verify it with a real apt
+        run: |
+          S="$RUNNER_TEMP/aptcheck"
+          mkdir -p "$S"/etc/apt/{sources.list.d,preferences.d,trusted.gpg.d} \
+                   "$S"/var/lib/apt/lists/partial "$S"/var/cache/apt/archives/partial "$S"/var/lib/dpkg
+          : > "$S/var/lib/dpkg/status"; : > "$S/etc/apt/sources.list"
+          cp site/meshsync.gpg "$S/etc/apt/trusted.gpg.d/meshsync.gpg"
+          echo "deb [arch=amd64 signed-by=$S/etc/apt/trusted.gpg.d/meshsync.gpg] file://$PWD/site stable main" \
+            > "$S/etc/apt/sources.list.d/meshsync.list"
+
+          OPTS=(-o "Dir=$S" -o "Dir::State=$S/var/lib/apt" -o "Dir::State::status=$S/var/lib/dpkg/status"
+                -o "Dir::Cache=$S/var/cache/apt" -o "Dir::Etc=$S/etc/apt"
+                -o "Dir::Etc::sourcelist=$S/etc/apt/sources.list"
+                -o "Dir::Etc::sourceparts=$S/etc/apt/sources.list.d"
+                -o "Dir::Etc::trustedparts=$S/etc/apt/trusted.gpg.d"
+                -o "APT::Architecture=amd64" -o "Acquire::Languages=none")
+
+          apt-get "${OPTS[@]}" update
+          apt-cache "${OPTS[@]}" policy meshsync
+          apt-cache "${OPTS[@]}" policy meshsync | grep -q "Candidate: [0-9]" \
+            || { echo "::error::apt did not resolve a candidate version."; exit 1; }
+
+          ( cd "$S" && apt-get "${OPTS[@]}" download meshsync )
+          ls -la "$S"/*.deb
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -61,7 +61,33 @@ getting in by connecting first.
 
 ## Installing
 
-There is no store release yet. The app is built from source or installed as a signed APK.
+### Debian and Ubuntu
+
+```bash
+sudo install -d -m 0755 /usr/share/keyrings
+curl -fsSL http://x20surya.me/MeshSync/meshsync.gpg \
+  | sudo tee /usr/share/keyrings/meshsync.gpg > /dev/null
+
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] http://x20surya.me/MeshSync stable main" \
+  | sudo tee /etc/apt/sources.list.d/meshsync.list > /dev/null
+
+sudo apt update && sudo apt install meshsync
+```
+
+`apt upgrade` then picks up new releases like anything else.
+Nothing else is needed - the package is self-contained and does not want a .NET runtime.
+
+The repository is served over `http` and every index is GPG-signed, which is how apt authenticates
+a repository and why Debian's own mirrors are `http` too - see the note below for the detail.
+See [docs/reference/apt-repository.md](docs/reference/apt-repository.md).
+
+### Everything else
+
+An **AppImage**, a **`.deb`**, a **tarball**, a **Windows `.exe`** and a **signed APK** are
+attached to every [release](https://github.com/x20surya/MeshSync/releases).
+There is no store listing yet.
+
+## Building from source
 
 ### Windows
 

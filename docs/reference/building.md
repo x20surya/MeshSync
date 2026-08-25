@@ -5,7 +5,8 @@ platforms: [windows, android, linux, macos]
 tier: n/a
 code:
   - packaging/build.sh
-updated: 2026-08-23
+  - packaging/apt-repo.sh
+updated: 2026-08-25
 ---
 
 # Building and running
@@ -73,6 +74,11 @@ packaging/build.sh
 ```
 
 Produces an **AppImage**, a **`.deb`** and a **tarball** into `packaging/out`.
+
+The `.deb` is also what people install from, through the apt repository at
+`http://x20surya.me/MeshSync` - see [[apt-repository]]. `packaging/apt-repo.sh` builds
+that repository from a directory of `.deb` files and can be run locally against a throwaway key,
+which is the point of it being a script rather than only a workflow step.
 Nothing needs root. `appimagetool` is fetched on first use and cached in `packaging/.tools`.
 
 `ARCH` defaults to `x64`; `arm64` also works.

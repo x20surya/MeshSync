@@ -26,8 +26,8 @@ What the owner of a device can point at.
 | [[pairing]] | Wi-Fi to start | Shipped, two steps, both required |
 | [[mesh-name]] | Either | Shipped, renaming does not propagate |
 | [[transport-preference]] | n/a | Shipped on Windows and the desktop head |
-| [[plasma-widget]] | n/a | In flight; pure QML, no compiled plugin |
-| [[tray-applet]] | n/a | In flight; replaces Avalonia's, and the headless head has one now |
+| [[plasma-widget]] | n/a | Pure QML, no compiled plugin |
+| [[tray-applet]] | n/a | Replaces Avalonia's, and the headless head has one now |
 | [[password-vault]] | n/a | Planned and deliberately gated |
 
 ## Mechanisms
@@ -59,9 +59,10 @@ Exact, code-derived, and the part that cannot be got from `AGENTS.md` or `HANDOF
 | [[shared-folders-security]] | The four-step path resolution, and why each step is needed |
 | [[on-disk-formats]] | `device.key`, `peers.json`, and the `WouldLosePort` guard |
 | [[timings]] | **Every timeout and interval in the project, in one table** |
-| [[testing]] | What the 296 cases cover, and the six things nothing covers |
+| [[testing]] | What the 452 cases cover, and what still has no check at all |
 | [[building]] | Build, run, package, reset, and two devices on one machine |
-| [[dbus-interface]] | The bus surface and `meshsyncctl`. In flight |
+| [[dbus-interface]] | The bus surface and `meshsyncctl` |
+| [[apt-repository]] | How `apt install meshsync` works, and three ways it fails silently |
 
 ## Heads
 
