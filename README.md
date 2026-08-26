@@ -92,8 +92,8 @@ a repository, and why Debian's own mirrors are `http` too. The signing key is
 The **AppImage** from any [release](https://github.com/x20surya/MeshSync/releases):
 
 ```bash
-chmod +x MeshSync-v0.5.1-linux-x86_64.AppImage
-./MeshSync-v0.5.1-linux-x86_64.AppImage
+chmod +x MeshSync-v0.6.0-linux-x86_64.AppImage
+./MeshSync-v0.6.0-linux-x86_64.AppImage
 ```
 
 If it fails naming `libfuse.so.2`, that is FUSE 2, which Ubuntu 22.04+ and current Fedora no
