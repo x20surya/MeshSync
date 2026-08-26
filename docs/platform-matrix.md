@@ -20,7 +20,7 @@ behind it. See [[desktop-core]].
 
 | Head | Route | Architecture |
 |---|---|---|
-| Linux, Debian-derived | apt, `http://x20surya.me/MeshSync` | **amd64 only** |
+| Linux, Debian-derived | apt, `https://x20surya.me/MeshSync` | **amd64 only** |
 | Linux, everything else | AppImage, or `packaging/install-user.sh` | **amd64 only** |
 | Windows | self-contained `.exe` from the release | x64 |
 | Android | signed `.apk` from the release, CI debug key | all |

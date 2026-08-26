@@ -11,37 +11,45 @@ updated: 2026-08-25
 
 # APT repository
 
-`http://x20surya.me/MeshSync` - the `.deb` from the last three releases, indexed and
+`https://x20surya.me/MeshSync` - the `.deb` from the last three releases, indexed and
 signed, so a Debian or Ubuntu machine installs and **upgrades** Mesh Sync like anything else.
 
 ```bash
 sudo install -d -m 0755 /usr/share/keyrings
-curl -fsSL http://x20surya.me/MeshSync/meshsync.gpg \
+curl -fsSL https://x20surya.me/MeshSync/meshsync.gpg \
   | sudo tee /usr/share/keyrings/meshsync.gpg > /dev/null
 
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] http://x20surya.me/MeshSync stable main" \
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] https://x20surya.me/MeshSync stable main" \
   | sudo tee /etc/apt/sources.list.d/meshsync.list > /dev/null
 
 sudo apt update && sudo apt install meshsync
 ```
 
-## Why the URL is that, and why it is http
+## Why the URL is that
 
 The account's Pages site carries a custom domain, `x20surya.me`, so **every project site under the
 account is served from `x20surya.me/<repo>`** rather than `x20surya.github.io/<repo>` - and the
 github.io address 301s to it, so writing that one into a `sources.list` buys a redirect and
 nothing else.
 
-It is `http` because GitHub has not issued a certificate for the domain. The DNS is correct - apex
-`A` records on the four Pages addresses, `www` a CNAME to the apex - but the certificate actually
-served on `x20surya.me:443` is still `*.github.io`, so `https` fails to verify. **Removing and
-re-adding the custom domain** in the user site's Pages settings re-triggers issuance; once
-`https://x20surya.me` verifies, set `APT_BASE_URL` and change the one line in the README.
+## It was http until the certificate arrived
 
-**`http` is not a hole here.** apt authenticates a repository by the GPG signature over `Release`,
-not by the transport, which is why Debian's own mirrors are `http` to this day. What plain `http`
-costs is privacy: somebody watching the network can see that this machine fetched `meshsync`. It
-cannot let them change what it fetched.
+Until 2026-08-25 this repository was served over plain `http`, because GitHub had not issued a
+certificate for the domain: the DNS was correct all along - apex `A` records on the four Pages
+addresses, `www` a CNAME to the apex - but the certificate actually served on `x20surya.me:443`
+was still `*.github.io`, so `https` failed to verify.
+
+**That certificate now exists.** Let's Encrypt, `CN=x20surya.me`, and
+`https://x20surya.me/MeshSync/` verifies, so `APT_BASE_URL` and every published snippet say
+`https`.
+
+**Nothing about the repository's integrity turned on this.** apt authenticates a repository by the
+GPG signature over `Release`, not by the transport, which is why Debian's own mirrors are `http`
+to this day. What `https` buys is privacy: over plain `http` somebody watching the network could
+see that this machine fetched `meshsync`, though they could never change what it fetched.
+
+**A `sources.list` written before the change still says `http`, and still works.** Pages serves
+both schemes, so nobody has to be told to go and edit a file.
 
 ## Why a repository and not a download link
 
@@ -65,6 +73,18 @@ is available, and a signature over that index.
 Handing people an armored `.asc` and telling them to put it in `/usr/share/keyrings` is the most
 common way this is got wrong, and it fails with a message about a missing key rather than about a
 wrong format.
+
+## It shares its Pages site with the download page
+
+The same artifact carries both. `apt-repo.sh` builds the repository and writes the repository's
+own page - the key, the two commands and the fingerprint - to `apt/index.html`; `site.sh` then
+writes the [[download-page]] at the root. That order matters, because `apt-repo.sh` starts by
+wiping its output directory.
+
+**The repository URL is unchanged by that.** apt reads `dists/` and `pool/`, and neither moved, so
+a `sources.list` written against any earlier version still resolves. What moved is the page a
+person sees after pasting the URL into a browser, which is now a download page rather than an apt
+page - and it carries the same two commands.
 
 ## It is called by the release, not triggered by it
 

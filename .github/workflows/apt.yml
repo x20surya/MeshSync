@@ -107,6 +107,25 @@ jobs:
       - name: Build the repository
         run: packaging/apt-repo.sh debs site
 
+      # Into the same tree, after the repository, because the repository build starts by wiping
+      # its output directory. The page is the root of the Pages site; the repository lives under
+      # it and is untouched by this.
+      #
+      # --check follows every download link the page names. It is here rather than left for
+      # somebody to run because the page names its five assets by hand: a rename in release.yml
+      # that nobody carried across produces a page that looks perfect and downloads nothing.
+      #
+      # If it fails on SHA256SUMS, the release predates that file. Re-run the Release workflow
+      # against that tag - it re-uploads with --clobber and attaches one.
+      - name: Render the download page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName \
+                   --jq '.[0].tagName')"
+          [ -n "$TAG" ] || { echo "::error::No release to render a download page for."; exit 1; }
+          packaging/site.sh site --version "$TAG" --check
+
       - name: Show what was built
         run: |
           find site -type f | sort

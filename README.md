@@ -61,16 +61,19 @@ getting in by connecting first.
 
 ## Installing
 
+**[https://x20surya.me/MeshSync](https://x20surya.me/MeshSync/)** has the build for whichever
+machine is asking, the checksums, and why Windows warns about the download.
+
 ### Debian and Ubuntu
 
 Also Mint, Pop!_OS, Zorin, elementary, Kali and Raspberry Pi OS on amd64.
 
 ```bash
 sudo install -d -m 0755 /usr/share/keyrings
-curl -fsSL http://x20surya.me/MeshSync/meshsync.gpg \
+curl -fsSL https://x20surya.me/MeshSync/meshsync.gpg \
   | sudo tee /usr/share/keyrings/meshsync.gpg > /dev/null
 
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] http://x20surya.me/MeshSync stable main" \
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] https://x20surya.me/MeshSync stable main" \
   | sudo tee /etc/apt/sources.list.d/meshsync.list > /dev/null
 
 sudo apt update && sudo apt install meshsync

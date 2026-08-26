@@ -41,21 +41,23 @@ LABEL="Mesh Sync"
 DESCRIPTION="Local-first universal clipboard for your own devices"
 SITE="https://github.com/x20surya/MeshSync"
 
-# WHERE THIS REPOSITORY IS SERVED FROM, and why it is http.
+# WHERE THIS REPOSITORY IS SERVED FROM.
 #
 # The account's Pages site carries a custom domain, x20surya.me, so every project site under it is
 # served from x20surya.me/<repo> rather than x20surya.github.io/<repo> - and github.io 301s to it,
 # so writing the github.io URL into a sources.list only buys a redirect.
 #
-# It is http because GitHub has not issued a certificate for that domain: the DNS is right (apex A
-# records on the four Pages addresses) but the cert served is still *.github.io, so https fails to
-# verify. Removing and re-adding the custom domain in the user site's Pages settings re-triggers
-# issuance; when it works, set this to https and nothing else changes.
+# It was http until 2026-08-25, because GitHub had not issued a certificate for the domain and the
+# cert actually served on x20surya.me:443 was still *.github.io. That has been issued: Let's
+# Encrypt, CN=x20surya.me, and https://x20surya.me/MeshSync/ now verifies. Nothing else changed
+# with it - apt authenticates a repository by the GPG signature over Release rather than by the
+# transport, which is why Debian's own mirrors are http to this day.
 #
-# http is not a hole here. apt authenticates a repository by the GPG signature over Release, not
-# by the transport - which is why Debian's own mirrors are http. What plain http costs is privacy:
-# somebody watching the network sees that this machine fetched meshsync.
-BASE_URL="${APT_BASE_URL:-http://x20surya.me/MeshSync}"
+# What the change buys is privacy. Over plain http, somebody watching the network sees that this
+# machine fetched meshsync; they could never alter what it fetched.
+#
+# A sources.list written before this still says http and still works. Both schemes are served.
+BASE_URL="${APT_BASE_URL:-https://x20surya.me/MeshSync}"
 
 command -v dpkg-deb >/dev/null 2>&1 || { echo "apt-repo.sh needs dpkg-deb." >&2; exit 2; }
 command -v gpg      >/dev/null 2>&1 || { echo "apt-repo.sh needs gpg." >&2; exit 2; }
@@ -185,14 +187,20 @@ EXPORT=(gpg --export)
 
 [ -s "$OUT/meshsync.gpg" ] || { echo "The exported public key is empty - is $KEY a key this gpg has?" >&2; exit 1; }
 
-# ─────────────────────────────────────────────────────────────── the landing page
+# ─────────────────────────────────────────────────────────────── the repository's own page
 #
-# Somebody who pastes the repository URL into a browser gets the two commands rather than a
-# directory listing or a 404, because that URL is what ends up in an issue thread.
+# Somebody who pastes the repository URL into a browser gets the commands rather than a directory
+# listing or a 404, because that URL is what ends up in an issue thread.
+#
+# It sits at apt/ rather than at the root because the root is the download page now - see
+# packaging/site.sh, which writes into this same tree afterwards. The repository URL itself is
+# unchanged: apt reads dists/ and pool/, neither of which moved, so a sources.list written against
+# any earlier version still resolves.
 
 NEWEST="$(ls -1 "$POOL"/*.deb | sed 's|.*/meshsync_||; s|_amd64\.deb$||' | sort -V | tail -1)"
 
-cat > "$OUT/index.html" <<HTMLEOF
+mkdir -p "$OUT/apt"
+cat > "$OUT/apt/index.html" <<HTMLEOF
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -214,7 +222,8 @@ cat > "$OUT/index.html" <<HTMLEOF
 </style>
 
 <h1>Mesh Sync &middot; APT repository</h1>
-<p class="sub">Current version $NEWEST &middot; amd64 &middot; <a href="$SITE">source on GitHub</a></p>
+<p class="sub">Current version $NEWEST &middot; amd64 &middot; <a href="$BASE_URL/">downloads</a>
+&middot; <a href="$SITE">source on GitHub</a></p>
 
 <p>Add the signing key and the repository, then install:</p>
 

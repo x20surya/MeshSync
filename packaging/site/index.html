@@ -1,0 +1,328 @@
+<!doctype html>
+<!--
+  The download page, rendered by packaging/site.sh into the same Pages artifact the apt
+  repository is published from. The at-delimited placeholders are substituted at publish time;
+  this file is the whole of the page and is openable in a browser as it stands.
+
+  NO EXTERNAL REQUESTS. No web font, no CDN, no analytics, no icon set. A page selling a tool
+  whose entire claim is "no cloud, no server, no account" cannot itself phone three hosts to
+  render. That rules out Archivo from the brand sheet, so the wordmark is set in the system stack
+  at the brand's letterspacing rather than fetched.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mesh Sync - clipboard sync with no network at all</title>
+<meta name="description" content="Copy on your phone, paste on your laptop - over Bluetooth, with no Wi-Fi, no cloud, no server and no account. Free and open source for Windows, Android and Linux.">
+<link rel="canonical" href="@BASE_URL@/">
+<meta property="og:title" content="Mesh Sync">
+<meta property="og:description" content="Copy on your phone, paste on your laptop. On a plane, with Wi-Fi off.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="@BASE_URL@/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='36.5 70.5 167 99'%3E%3Ccircle cx='86' cy='120' r='44' stroke='%232F7A6B' stroke-width='11' fill='none'/%3E%3Ccircle cx='154' cy='120' r='44' stroke='%232F7A6B' stroke-width='11' fill='none'/%3E%3Cpath d='M 120 92.1 A 44 44 0 0 1 120 147.9 A 44 44 0 0 1 120 92.1 Z' fill='%232F7A6B'/%3E%3C/svg%3E">
+<style>
+  /* Brand tokens: src/assets/design_handoff_mesh_sync_brand. Flat only - no shadow, no gradient,
+     no blur. Teal never sits on teal. Sand appears at most once per screen. */
+  :root{
+    --off-white:#F7F6F3; --white:#FFFFFF; --teal:#2F7A6B; --pale-teal:#E6F1EE;
+    --sand:#F0E3D0; --ink:#262523; --grey:#77726A; --rule:#DEDBD4;
+    --surface:var(--off-white); --raised:var(--white); --text:var(--ink);
+    --muted:var(--grey); --line:var(--rule); --accent:var(--teal); --soft:var(--pale-teal);
+    color-scheme:light dark;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --surface:#1C1A19; --raised:#232120; --text:#F0EEE9; --muted:#A29C93;
+      --line:#37342F; --accent:#6FBFAC; --soft:#22332F; --sand:#3A3226;
+    }
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--surface);color:var(--text);
+       font:400 16px/1.62 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:62rem;margin:0 auto;padding:0 1.5rem}
+  a{color:var(--accent)}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  h2{font-size:clamp(1.25rem,2.5vw,1.6rem);font-weight:600;letter-spacing:-.01em;margin:0 0 .6rem}
+  h3{font-size:1rem;font-weight:600;margin:0 0 .35rem}
+  p{margin:0 0 .85rem;max-width:70ch}
+  section{padding:3rem 0;border-top:1px solid var(--line)}
+
+  header{padding:1.4rem 0}
+  .lockup{display:flex;align-items:center;gap:.7rem}
+  .lockup svg{width:44px;height:26px;flex:none}
+  .wordmark{font-weight:600;letter-spacing:.15em;text-indent:.15em;text-transform:uppercase;font-size:.9rem}
+
+  .hero{text-align:center;padding:3rem 0 3.4rem}
+  /* balance, because the headline is three sentences and the default greedy break splits them
+     mid-clause - "your laptop. With" on one line reads as a stumble. */
+  .hero h1{font-size:clamp(1.85rem,5vw,3.05rem);line-height:1.1;font-weight:600;
+           letter-spacing:-.02em;margin:0 auto .9rem;max-width:21ch;text-wrap:balance}
+  .hero .claim{color:var(--accent)}
+  .hero p.sub{color:var(--muted);font-size:1.05rem;margin:0 auto 2rem;max-width:52ch}
+
+  .dl{display:inline-block;background:var(--accent);color:var(--off-white);text-decoration:none;
+      font-weight:600;font-size:1rem;padding:.8rem 1.9rem;border-radius:5px;border:none}
+  @media (prefers-color-scheme:dark){.dl{color:#12211D}}
+  .dl:hover{opacity:.9}
+  .meta{font-family:ui-monospace,monospace;font-size:.74rem;color:var(--muted);margin-top:.7rem}
+
+  .platforms{display:grid;gap:.75rem;margin:2.2rem auto 0;text-align:left;
+             grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr))}
+  .plat{background:var(--raised);border:1px solid var(--line);border-radius:6px;padding:.85rem .95rem}
+  .plat[data-you]{border-color:var(--accent)}
+  .plat h3{display:flex;justify-content:space-between;gap:.5rem;align-items:baseline}
+  .plat .you{font-family:ui-monospace,monospace;font-size:.6rem;letter-spacing:.08em;
+             text-transform:uppercase;color:var(--accent);display:none}
+  .plat[data-you] .you{display:inline}
+  .plat p{font-size:.82rem;color:var(--muted);margin:0 0 .5rem}
+  .plat a{font-size:.85rem;font-weight:600;text-decoration:none}
+  .plat a:hover{text-decoration:underline}
+
+  .cols{display:grid;gap:1.4rem;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr))}
+  .cols p{font-size:.92rem;color:var(--muted);margin:0}
+  .cols h3{color:var(--text)}
+
+  pre{background:var(--raised);border:1px solid var(--line);border-radius:5px;padding:1rem;
+      overflow-x:auto;font-size:.8rem;line-height:1.6;margin:0 0 1rem}
+  /* The panels are capped rather than left to fill .wrap, because the paragraphs inside them stop
+     at their own measure and a full-width box with text hugging one edge looks like a bug. */
+  .warn{border-left:3px solid var(--accent);background:var(--soft);padding:1.1rem 1.3rem;
+        border-radius:0 6px 6px 0;max-width:44rem}
+  .warn p{max-width:none}
+  .warn p:last-child{margin-bottom:0}
+
+  table{border-collapse:collapse;width:100%;font-size:.86rem;min-width:32rem}
+  .tbl{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--raised)}
+  th,td{text-align:left;padding:.55rem .8rem;border-bottom:1px solid var(--line)}
+  thead th{font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+           font-weight:400;background:var(--surface)}
+  tbody tr:last-child td{border-bottom:none}
+  td.y{color:var(--accent);font-weight:600}
+  td.n{color:var(--muted)}
+
+  .talk{background:var(--sand);border-radius:6px;padding:1.6rem 1.8rem;max-width:44rem}
+  .talk p{margin-bottom:0;max-width:none}
+  @media (prefers-color-scheme:dark){.talk{color:var(--text)}}
+
+  footer{padding:2.4rem 0 3.5rem;border-top:1px solid var(--line);color:var(--muted);font-size:.84rem}
+  footer a{margin-right:1.1rem;display:inline-block}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="lockup">
+      <svg viewBox="36.5 70.5 167 99" role="img" aria-label="Mesh Sync">
+        <circle cx="86" cy="120" r="44" stroke="var(--accent)" stroke-width="11" fill="none"/>
+        <circle cx="154" cy="120" r="44" stroke="var(--accent)" stroke-width="11" fill="none"/>
+        <path d="M 120 92.1 A 44 44 0 0 1 120 147.9 A 44 44 0 0 1 120 92.1 Z" fill="var(--accent)"/>
+      </svg>
+      <span class="wordmark">Mesh Sync</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>Copy on your phone. Paste on your laptop. <span class="claim">With Wi-Fi off.</span></h1>
+    <p class="sub">Mesh Sync holds a Bluetooth link open between your own devices. No cloud, no
+      server, no account, and no network of any kind required. Free and open source.</p>
+
+    <a class="dl" id="primary" href="#downloads">Download</a>
+    <div class="meta">@VERSION@ &middot; released @DATE@ &middot;
+      <a href="@RELEASE_URL@/SHA256SUMS">SHA-256 checksums</a></div>
+
+    <div class="platforms" id="downloads">
+      <div class="plat" data-os="windows">
+        <h3>Windows <span class="you">your machine</span></h3>
+        <p>10 or 11, 64-bit. Nothing to install alongside it.</p>
+        <a href="@RELEASE_URL@/MeshSync-@VERSION@-windows-x64.exe">MeshSync-@VERSION@-windows-x64.exe</a>
+      </div>
+      <div class="plat" data-os="android">
+        <h3>Android <span class="you">your device</span></h3>
+        <p>Sideload the APK. Not on Google Play yet.</p>
+        <a href="@RELEASE_URL@/MeshSync-@VERSION@-android.apk">MeshSync-@VERSION@-android.apk</a>
+      </div>
+      <div class="plat" data-os="debian">
+        <h3>Debian &middot; Ubuntu <span class="you">your machine</span></h3>
+        <p>Install and upgrade through apt. <a href="#linux">Three commands below.</a></p>
+        <a href="@RELEASE_URL@/MeshSync-@VERSION@-linux-amd64.deb">MeshSync-@VERSION@-linux-amd64.deb</a>
+      </div>
+      <div class="plat" data-os="linux">
+        <h3>Other Linux <span class="you">your machine</span></h3>
+        <p>Fedora, Arch, openSUSE, NixOS. Needs FUSE 2.</p>
+        <a href="@RELEASE_URL@/MeshSync-@VERSION@-linux-x86_64.AppImage">MeshSync-@VERSION@-linux-x86_64.AppImage</a>
+      </div>
+      <div class="plat" data-os="tarball">
+        <h3>Tarball</h3>
+        <p>For a machine you would rather unpack by hand.</p>
+        <a href="@RELEASE_URL@/MeshSync-@VERSION@-linux-x64.tar.xz">MeshSync-@VERSION@-linux-x64.tar.xz</a>
+      </div>
+      <div class="plat" data-os="mac">
+        <h3>macOS</h3>
+        <p>Not shipped. The binary cross-builds, but nothing has ever launched it, so there is
+          nothing here to download yet.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="why">
+  <div class="wrap">
+    <h2>What makes it different</h2>
+    <div class="cols">
+      <div>
+        <h3>It works with no network at all</h3>
+        <p>Bluetooth is the link that is held open, not the fallback. No router, no hotspot,
+          nothing: two devices and a radio. Wi-Fi is raised only when there is an image or a file
+          to send, and dropped again. Every other tool in this space needs a LAN.</p>
+      </div>
+      <div>
+        <h3>Every device is equal</h3>
+        <p>There is no host and no client. Every device listens and dials, and which one accepts a
+          given link is decided per connection by comparing key fingerprints. Laptop to laptop
+          works exactly as phone to laptop does.</p>
+      </div>
+      <div>
+        <h3>Each connection has its own key</h3>
+        <p>Devices authenticate by keypair and agree a fresh AES-256 key per connection. A paired
+          device cannot read traffic meant for another pair, and traffic captured today cannot be
+          opened later by recovering a key.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="windows-warning">
+  <div class="wrap">
+    <h2>Windows will warn you, and here is why</h2>
+    <div class="warn">
+      <p><strong>The download is not code-signed.</strong> Windows will show "Windows protected
+        your PC" on a blue screen, and running it takes clicking <strong>More info</strong> and
+        then <strong>Run anyway</strong>.</p>
+      <p>That warning is not about what the program does. It means nobody has paid a certificate
+        authority to vouch for the publisher - a few hundred dollars a year, which this project
+        does not earn. Signing is on the list; until then the honest thing is to say so on the
+        download page rather than let it ambush you.</p>
+      <p><strong>You do not have to take my word for the file.</strong> Every release publishes
+        <a href="@RELEASE_URL@/SHA256SUMS">SHA256SUMS</a>. Check the one you downloaded:</p>
+      <pre>Get-FileHash .\MeshSync-@VERSION@-windows-x64.exe -Algorithm SHA256</pre>
+      <p>Every binary is built by GitHub Actions from this repository, never on a personal
+        machine - the <a href="@REPO_URL@/actions">run that produced it</a> is public.</p>
+    </div>
+  </div>
+</section>
+
+<section id="linux">
+  <div class="wrap">
+    <h2>Linux, through apt</h2>
+    <p>Debian, Ubuntu, Mint, Pop!_OS, Zorin, elementary, Kali and Raspberry Pi OS on amd64 all take
+      the same three commands. After this, <code>apt upgrade</code> carries it forward like
+      anything else.</p>
+<pre>sudo install -d -m 0755 /usr/share/keyrings
+curl -fsSL @BASE_URL@/meshsync.gpg \
+  | sudo tee /usr/share/keyrings/meshsync.gpg > /dev/null
+
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] @BASE_URL@ stable main" \
+  | sudo tee /etc/apt/sources.list.d/meshsync.list > /dev/null
+
+sudo apt update &amp;&amp; sudo apt install meshsync</pre>
+    <p>The key you just added should be this one, which
+      <code>gpg --show-keys --with-fingerprint /usr/share/keyrings/meshsync.gpg</code> will
+      confirm:</p>
+<pre>64B7 9912 F802 21C1 0E3A 341D 4C84 A1AE A04A B302
+Mesh Sync</pre>
+    <p>The clipboard needs no helper on Wayland - Mesh Sync speaks <code>ext-data-control</code> to
+      the compositor itself. On X11 install <code>xclip</code> or <code>wl-clipboard</code>, which
+      the package recommends. <a href="@BASE_URL@/apt/">More about the repository.</a></p>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <h2>What works today</h2>
+    <p>Published rather than implied, because a tool that reads your clipboard should not make you
+      guess. <strong>Y</strong> works, <strong>P</strong> is partial, <strong>-</strong> is not
+      built, <strong>n</strong> never will be.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>&nbsp;</th><th>Windows</th><th>Android</th><th>Linux</th></tr></thead>
+        <tbody>
+          <tr><td>Clipboard, receiving</td><td class="y">Y</td><td class="y">Y</td><td class="n">P</td></tr>
+          <tr><td>Clipboard, sending automatically</td><td class="y">Y</td><td class="n">n</td><td class="n">P</td></tr>
+          <tr><td>Clipboard, sending with one tap</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td></tr>
+          <tr><td>Files</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td></tr>
+          <tr><td>Notification mirroring, from</td><td class="n">-</td><td class="y">Y</td><td class="n">-</td></tr>
+          <tr><td>Notification mirroring, to</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td></tr>
+          <tr><td>Find my device</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td></tr>
+          <tr><td>Bluetooth tier</td><td class="y">Y</td><td class="y">Y</td><td class="n">P</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:1rem"><strong>Android cannot send the clipboard on its own</strong>, and
+      that is deliberate. Android 10 and later refuse clipboard reads to any app that is not in the
+      foreground, and the only way around it is an accessibility service - which UPI and banking
+      apps refuse to run alongside, correctly. A clipboard tool is not worth breaking payments for,
+      so sending from the phone is one tap on the tile, the share sheet or the notification.</p>
+  </div>
+</section>
+
+<section id="talk">
+  <div class="wrap">
+    <div class="talk">
+      <h2>Tell me what broke</h2>
+      <p>This is built by one person, and almost nobody has run it on hardware that is not mine.
+        If you install it - especially if pairing goes wrong - I would rather hear about it than
+        not. <strong><a href="@REPO_URL@/issues/new">Open an issue</a></strong>, or if you would
+        rather talk for twenty minutes while you set it up, say so in one and I will send a time.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <a href="@REPO_URL@">Source on GitHub</a>
+      <a href="@REPO_URL@/releases">All releases</a>
+      <a href="@REPO_URL@/blob/master/SECURITY.md">Security</a>
+      <a href="@BASE_URL@/apt/">APT repository</a>
+    </p>
+    <p style="margin-bottom:0">GPL-3.0. Your clipboard is encrypted for the device it is going to,
+      sent straight there, and never written to disk.</p>
+  </div>
+</footer>
+
+<script>
+  // Highlights the row for the visitor's platform and points the big button at it. Everything is
+  // already a working link before this runs, so a browser with no JS loses a highlight and
+  // nothing else.
+  (function () {
+    var ua = navigator.userAgent;
+    var os =
+      /Android/i.test(ua)                      ? "android" :
+      /Windows/i.test(ua)                      ? "windows" :
+      /(Ubuntu|Debian)/i.test(ua)              ? "debian"  :
+      /(Linux|X11|CrOS)/i.test(ua)             ? "linux"   :
+      /(Macintosh|Mac OS X|iPhone|iPad)/i.test(ua) ? "mac"  : null;
+    if (!os) return;
+
+    var card = document.querySelector('.plat[data-os="' + os + '"]');
+    if (!card) return;
+    card.setAttribute("data-you", "");
+
+    var link = card.querySelector("a[href*='/releases/download/']");
+    var button = document.getElementById("primary");
+    if (!link || !button) return;   // macOS has no asset, so the button stays generic
+
+    var label = { windows: "Windows", android: "Android", debian: "Debian or Ubuntu",
+                  linux: "Linux" }[os];
+    button.href = link.href;
+    button.textContent = "Download for " + label;
+  })();
+</script>
+</body>
+</html>

@@ -88,10 +88,15 @@ dotnet publish src/DesktopShell/DesktopShell.csproj -c Release -r osx-arm64 --se
 ```bash
 packaging/build.sh                      # AppImage, .deb and tarball into packaging/out
 packaging/apt-repo.sh <debs> <out>      # a signed apt repository from those .debs
+packaging/site.sh <out> [--check]       # the download page, into the same tree, afterwards
 ```
 
-A release is a `v*` tag: CI builds all four heads, publishes the GitHub release, and republishes
-the apt repository at `http://x20surya.me/MeshSync` from the last three releases.
+Order matters: `apt-repo.sh` wipes its output directory, so the page is rendered after it.
+`--check` follows every download link the page names and is what CI runs.
+
+A release is a `v*` tag: CI builds all four heads, publishes the GitHub release with a
+`SHA256SUMS`, and republishes the apt repository and the download page at
+`https://x20surya.me/MeshSync` from the last three releases.
 The signing key lives in the `APT_GPG_PRIVATE_KEY` and `APT_GPG_PASSPHRASE` repository secrets.
 See [docs/reference/apt-repository.md](docs/reference/apt-repository.md) and
 [docs/reference/installing.md](docs/reference/installing.md).

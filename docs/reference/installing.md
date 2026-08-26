@@ -22,10 +22,10 @@ commands.
 
 ```bash
 sudo install -d -m 0755 /usr/share/keyrings
-curl -fsSL http://x20surya.me/MeshSync/meshsync.gpg \
+curl -fsSL https://x20surya.me/MeshSync/meshsync.gpg \
   | sudo tee /usr/share/keyrings/meshsync.gpg > /dev/null
 
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] http://x20surya.me/MeshSync stable main" \
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/meshsync.gpg] https://x20surya.me/MeshSync stable main" \
   | sudo tee /etc/apt/sources.list.d/meshsync.list > /dev/null
 
 sudo apt update && sudo apt install meshsync

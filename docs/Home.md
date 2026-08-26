@@ -64,6 +64,7 @@ Exact, code-derived, and the part that cannot be got from `AGENTS.md` or `HANDOF
 | [[installing]] | What to do on a machine that is not yours, and what it runs on |
 | [[dbus-interface]] | The bus surface and `meshsyncctl` |
 | [[apt-repository]] | How `apt install meshsync` works, and three ways it fails silently |
+| [[download-page]] | The one URL to hand somebody, and why it says the .exe is unsigned |
 
 ## Heads
 
