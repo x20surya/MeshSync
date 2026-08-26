@@ -105,6 +105,15 @@ jobs:
           cp artifacts/linux/*.tar.xz                        "out/MeshSync-$TAG-linux-x64.tar.xz"
           ls -lh out
 
+      # Published because the Windows build is not code-signed, so the download page has to tell
+      # people they will get a SmartScreen warning - and telling somebody to click through a
+      # security warning without giving them a way to check the file first is not advice.
+      - name: Checksum every file
+        run: |
+          cd out
+          sha256sum MeshSync-* > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Attach them to the release
         env:
           GH_TOKEN: ${{ github.token }}
