@@ -104,6 +104,27 @@ ran: the release page showed the new version while the repository quietly kept s
 previous one, with nothing failing anywhere. Caught on v0.5.1 by checking the run list rather than
 by anything going red.
 
+**The reusable call then hit a second gate, and this one does go red.**
+`apt.yml` deploys to the `github-pages` environment, and that environment carries a deployment
+branch policy naming `master` and nothing else.
+A release is triggered by a **tag**, so the run's ref is `refs/tags/v0.6.0` - which is not
+`master`, so the deployment is refused before the job starts.
+The job reports `failure` with **no steps and no log at all**, which is the signature worth
+recognising: a job that fails without producing a log did not fail, it was never allowed to run.
+
+Until the environment accepts tags, the site does not republish itself and the run has to be
+dispatched by hand from `master` after every release:
+
+```bash
+gh workflow run apt.yml --ref master
+```
+
+That is what happened on v0.5.1 and again on v0.6.0.
+The fix is a deployment branch policy of type `tag` matching `v*` on the `github-pages`
+environment, under **Settings -> Environments -> github-pages**, alongside the existing `master`
+rule. It cannot be added from a workflow: changing it needs repository administration, which
+`GITHUB_TOKEN` deliberately does not have.
+
 ## Rebuilt, never appended to
 
 `.github/workflows/apt.yml` derives the whole repository from GitHub Releases on every run: it
