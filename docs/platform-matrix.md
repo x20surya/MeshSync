@@ -18,6 +18,8 @@ behind it. See [[desktop-core]].
 
 ## How each head is installed
 
+Every route below is also one click from the [[download-page]], which is what to hand a person.
+
 | Head | Route | Architecture |
 |---|---|---|
 | Linux, Debian-derived | apt, `https://x20surya.me/MeshSync` | **amd64 only** |

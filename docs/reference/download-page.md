@@ -14,6 +14,7 @@ updated: 2026-08-26
 
 `https://x20surya.me/MeshSync/` - one page, one job: get the right file onto the machine of
 whoever is reading it.
+Live since 2026-08-26. `x20surya.me/meshsync` reaches it too, by a redirect, for the reason below.
 It is the root of the same Pages site the [[apt-repository]] is published from, rendered by
 `packaging/site.sh` straight after `packaging/apt-repo.sh` has built the repository under it.
 
@@ -66,7 +67,15 @@ packaging/site.sh site                # the page, into site/index.html
 packaging/site.sh site --check        # ...and follow every download link it names
 ```
 
-`--check` HEADs all six URLs the page advertises.
+`--check` asks for **the first byte** of all six URLs the page advertises.
+
+Not a plain `GET`: that downloads every asset the page names, about 210 MB for a release, on every
+publish, to look at three digits and throw the body away.
+Not `HEAD` either, because the release URL redirects to object storage and a store that declined
+`HEAD` would fail this for a file that downloads perfectly.
+A served range answers `206` and a server that ignores `Range` answers `200`; both mean the object
+is there and readable, so both pass, and a missing one still answers `404`.
+Six links take about five seconds.
 The page names its assets by hand, so a rename in `release.yml` that nobody carried across
 produces a page that looks perfect and downloads nothing; CI runs with `--check` for that reason
 and refuses to publish a page with a dead link in it.
@@ -87,12 +96,50 @@ move costs here.
 apt reads `dists/` and `pool/`; a `sources.list` written against any earlier version still
 resolves, which is the only reason the root was free to take.
 
+## The path is case-sensitive, and lowercase is what people type
+
+GitHub Pages serves a project site at the repository's name **spelled exactly as the repository
+spells it**.
+The repository is `MeshSync`, so `/MeshSync/` answers and `/meshsync/` and `/Meshsync/` both
+return GitHub's own 404 page - which reads as "the site is down" rather than as "you typed it in
+the wrong case".
+
+`x20surya.me/meshsync` works anyway, because `meshsync/index.html` in the **user site repo**
+(`x20surya/x20surya.github.io`) redirects to `/MeshSync/`.
+That is the non-obvious part: the user site answers for every path under the domain that no
+project repository has claimed, so it can hold an alias for one that has.
+
+**It is deliberately not a rename.**
+Renaming the repository to `meshsync` would fix the case in one step and move the Pages path with
+it, and GitHub does not redirect an old project path.
+Every `sources.list` already written says `/MeshSync`, so the rename that saves one redirect file
+breaks `apt update` on every machine that has installed the `.deb`.
+
+**The redirect is for browsers only.**
+It is a `<meta refresh>` with a `location.replace` behind it, and apt can follow neither.
+The canonical apt URL stays `/MeshSync`, which is what every published snippet says.
+
+A product domain removes the whole class of problem, because there is no path left to get wrong.
+
 ## The one thing it promises that CI has to keep
 
 The page links `SHA256SUMS`, which `release.yml` attaches from `sha256sum` over the built
 artifacts.
-Releases made before 2026-08-26 have no such file, so `--check` fails against them - re-run the
-Release workflow against that tag and it re-uploads with `--clobber` and attaches one.
-
 Telling somebody to click through a security warning without giving them a way to check the file
 first is not advice.
+
+Releases made before 2026-08-26 have no such file, so `--check` fails against them and the publish
+stops rather than shipping a page whose checksum link is a 404.
+
+**Backfill by hashing what is already published, not by re-running the Release workflow.**
+A re-run rebuilds, and a rebuild is not bit-identical, so the checksums it attaches would describe
+bytes that nobody downloaded - every copy taken before the re-run would now fail verification
+against the file that claims to describe it.
+
+```bash
+gh release download <tag> --repo x20surya/MeshSync --pattern 'MeshSync-*'
+sha256sum MeshSync-* > SHA256SUMS
+gh release upload <tag> SHA256SUMS --repo x20surya/MeshSync --clobber
+```
+
+v0.5.1 was backfilled that way on 2026-08-26.

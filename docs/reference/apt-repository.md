@@ -6,7 +6,7 @@ tier: n/a
 code:
   - packaging/apt-repo.sh
   - .github/workflows/apt.yml
-updated: 2026-08-25
+updated: 2026-08-26
 ---
 
 # APT repository
@@ -85,6 +85,12 @@ wiping its output directory.
 a `sources.list` written against any earlier version still resolves. What moved is the page a
 person sees after pasting the URL into a browser, which is now a download page rather than an apt
 page - and it carries the same two commands.
+
+**The capital letters in `/MeshSync` are load-bearing.** GitHub Pages serves a project site at the
+repository's name spelled exactly, so `/meshsync` is a 404 to apt as much as to a browser. A
+browser reaching the lowercase path gets redirected; apt cannot follow that, which is why every
+published snippet spells it `/MeshSync`. See [[download-page]] for where the redirect lives and
+why the repository was not simply renamed.
 
 ## It is called by the release, not triggered by it
 

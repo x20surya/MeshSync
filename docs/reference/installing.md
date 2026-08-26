@@ -7,13 +7,17 @@ code:
   - packaging/build.sh
   - packaging/install-user.sh
   - packaging/INSTALL.txt
-updated: 2026-08-25
+updated: 2026-08-26
 ---
 
 # Installing
 
 What to do on a machine that is not this one. For the repository that serves the `.deb`, see
 [[apt-repository]]; for building rather than installing, [[building]].
+
+For a person rather than a note, send them to the [[download-page]] at
+`https://x20surya.me/MeshSync/`: it names the file for whichever machine is asking, carries the
+checksums, and says why Windows warns about the download.
 
 ## Debian, Ubuntu, and anything derived from them
 
