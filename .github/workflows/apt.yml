@@ -124,7 +124,15 @@ jobs:
           TAG="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName \
                    --jq '.[0].tagName')"
           [ -n "$TAG" ] || { echo "::error::No release to render a download page for."; exit 1; }
-          packaging/site.sh site --version "$TAG" --check
+
+          # The date comes from the release rather than from the tag, because actions/checkout
+          # fetches no tags - so site.sh's own lookup finds nothing here and the page named no
+          # date at all. It is the release's date that a visitor cares about anyway.
+          PUBLISHED="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json publishedAt \
+                         --jq '.publishedAt' | cut -dT -f1)"
+          DATE="$(date -u -d "$PUBLISHED" '+%-d %B %Y' 2>/dev/null || echo "")"
+
+          packaging/site.sh site --version "$TAG" ${DATE:+--date "$DATE"} --check
 
       - name: Show what was built
         run: |

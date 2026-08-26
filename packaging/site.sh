@@ -66,7 +66,21 @@ if [ -z "$DATE" ]; then
     DATE="$(git -C "$HERE/.." log -1 --format=%ad --date=format:'%e %B %Y' "$VERSION" 2>/dev/null \
             | sed 's/^ *//' || true)"
 fi
-[ -n "$DATE" ] || DATE="$VERSION"
+# WHY THE DATE CAN BE MISSING, AND WHY IT IS NOT FAKED. `actions/checkout` fetches no tags, so
+# the lookup above finds nothing on CI and the page said "v0.6.0 - released v0.6.0" for every
+# release that has ever been published. The phrase is dropped rather than filled with the only
+# other string to hand: a version is not a date, and printing it as one is worse than saying
+# nothing. The workflow passes --date from the release itself, which is where the answer is.
+if [ -n "$DATE" ]; then
+    # The & is escaped because sed reads a bare & in a replacement as "the whole match", so
+    # "&middot;" substituted itself back in as "@RELEASED@middot;". It renders as a broken
+    # entity next to a token that survived, which is exactly the failure the token check below
+    # exists to catch - and it caught it.
+    RELEASED="released $DATE \&middot; "
+else
+    RELEASED=""
+    echo "site.sh: no release date for $VERSION, so the page will not name one." >&2
+fi
 
 RELEASE_URL="$REPO_URL/releases/download/$VERSION"
 
@@ -75,7 +89,7 @@ mkdir -p "$OUT"
 # @TOKEN@ rather than ${TOKEN}, so the template stays valid HTML that opens in a browser and so
 # nothing in the page's own CSS or JavaScript can be mistaken for a substitution.
 sed -e "s|@VERSION@|$VERSION|g" \
-    -e "s|@DATE@|$DATE|g" \
+    -e "s|@RELEASED@|$RELEASED|g" \
     -e "s|@BASE_URL@|$BASE_URL|g" \
     -e "s|@REPO_URL@|$REPO_URL|g" \
     -e "s|@RELEASE_URL@|$RELEASE_URL|g" \
@@ -88,7 +102,7 @@ if grep -o '@[A-Z_]\{2,\}@' "$OUT/index.html" | sort -u | grep .; then
     exit 1
 fi
 
-echo "Rendered $OUT/index.html for $VERSION ($DATE) at $BASE_URL"
+echo "Rendered $OUT/index.html for $VERSION (${DATE:-no date}) at $BASE_URL"
 
 # ─────────────────────────────────────────────────────────────── the links, actually followed
 #

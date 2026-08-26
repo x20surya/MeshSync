@@ -64,9 +64,17 @@
   .hero p.sub{color:var(--muted);font-size:1.05rem;margin:0 auto 2rem;max-width:52ch}
 
   .dl{display:inline-block;background:var(--accent);color:var(--off-white);text-decoration:none;
-      font-weight:600;font-size:1rem;padding:.8rem 1.9rem;border-radius:5px;border:none}
+      font-weight:600;font-size:1rem;padding:.8rem 1.9rem;border-radius:5px;
+      border:1px solid transparent}
   @media (prefers-color-scheme:dark){.dl{color:#12211D}}
   .dl:hover{opacity:.9}
+  /* The second button is outlined rather than filled: two solid accent buttons side by side
+     read as two equal choices, and the visitor's own platform is the one being recommended. */
+  .dl.alt{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  @media (prefers-color-scheme:dark){.dl.alt{color:var(--accent)}}
+  .dl.alt:hover{background:var(--raised);opacity:1}
+  /* Wraps rather than shrinking on a narrow screen, so neither button loses its label. */
+  .buttons{display:flex;flex-wrap:wrap;gap:.7rem;justify-content:center}
   .meta{font-family:ui-monospace,monospace;font-size:.74rem;color:var(--muted);margin-top:.7rem}
 
   .platforms{display:grid;gap:.75rem;margin:2.2rem auto 0;text-align:left;
@@ -132,9 +140,15 @@
     <p class="sub">Mesh Sync holds a Bluetooth link open between your own devices. No cloud, no
       server, no account, and no network of any kind required. Free and open source.</p>
 
-    <a class="dl" id="primary" href="#downloads">Download</a>
-    <div class="meta">@VERSION@ &middot; released @DATE@ &middot;
-      <a href="@RELEASE_URL@/SHA256SUMS">SHA-256 checksums</a></div>
+    <div class="buttons">
+      <a class="dl" id="primary" href="#downloads">Download</a>
+      <!-- The phone half of the product, one tap from the top of the page. The primary button
+           follows whatever machine the visitor is on, which on a laptop is never Android - so
+           the app the whole thing exists to pair with was four hundred pixels further down. -->
+      <a class="dl alt" id="secondary"
+         href="@RELEASE_URL@/MeshSync-@VERSION@-android.apk">Download for Android</a>
+    </div>
+    <div class="meta">@VERSION@ &middot; @RELEASED@<a href="@RELEASE_URL@/SHA256SUMS">SHA-256 checksums</a></div>
 
     <div class="platforms" id="downloads">
       <div class="plat" data-os="windows">
@@ -322,6 +336,18 @@ Mesh Sync</pre>
                   linux: "Linux" }[os];
     button.href = link.href;
     button.textContent = "Download for " + label;
+
+    // On a phone the second button would say the same thing as the first. Windows is what the
+    // other end of that pair is most likely to be, so it takes the slot rather than vanishing:
+    // somebody reading this on their phone is exactly the person who needs the desktop half.
+    var second = document.getElementById("secondary");
+    if (!second || os !== "android") return;
+
+    var windows = document.querySelector('.plat[data-os="windows"] a[href*="/releases/download/"]');
+    if (!windows) { second.hidden = true; return; }
+
+    second.href = windows.href;
+    second.textContent = "Download for Windows";
   })();
 </script>
 </body>
