@@ -543,13 +543,10 @@ namespace WinDaemon
         {
             try
             {
-                // The mesh name rides along, so a device that scans this joins something with
-                // a name rather than pairing with an anonymous address.
-                string mesh = Program.Security?.Peers.MeshName ?? "";
-                string payload =
-                    $"meshsync://pair?ip={Uri.EscapeDataString(_ipAddress)}" +
-                    $"&key={Uri.EscapeDataString(_pairingCode)}" +
-                    (mesh.Length > 0 ? $"&mesh={Uri.EscapeDataString(mesh)}" : "");
+                // Built by CoreLib, because the phone reads one format and a second one
+                // written out here would be a second thing to keep in step.
+                string payload = CoreLib.Identity.PairingCode.Build(
+                    _pairingCode, _ipAddress, Program.Security?.Peers.MeshName);
                 using var generator = new QRCodeGenerator();
                 var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.Q);
                 using var qr = new QRCode(data);

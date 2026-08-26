@@ -351,11 +351,8 @@ public sealed class Daemon : IDisposable
             // a bare address dials 45001 - which is right for every real device and wrong only
             // for a second one sharing this machine.
             if (Port != TcpTransportConnection.DefaultPort) ip = $"{ip}:{Port}";
-            string mesh = Security.Peers.MeshName ?? "";
 
-            return $"meshsync://pair?ip={Uri.EscapeDataString(ip)}" +
-                   $"&key={Uri.EscapeDataString(Security.Identity.PublicKey)}" +
-                   (mesh.Length > 0 ? $"&mesh={Uri.EscapeDataString(mesh)}" : "");
+            return PairingCode.Build(Security.Identity.PublicKey, ip, Security.Peers.MeshName);
         }
     }
 
@@ -788,27 +785,19 @@ public sealed class Daemon : IDisposable
     /// </summary>
     public (bool Ok, string Message) Join(string pairingUri)
     {
-        if (!Uri.TryCreate(pairingUri.Trim(), UriKind.Absolute, out var uri) ||
-            !string.Equals(uri.Scheme, "meshsync", StringComparison.OrdinalIgnoreCase))
+        if (!PairingCode.TryParse(pairingUri, out var parsed, out string error))
         {
-            return (false, "That is not a meshsync:// pairing code.");
+            return (false, error);
         }
 
-        var query = ParseQuery(uri.Query);
-
-        if (!query.TryGetValue("key", out string? key) || !DeviceIdentity.IsValidPublicKey(key))
-        {
-            return (false, "That code carries no usable public key.");
-        }
-
-        query.TryGetValue("ip", out string? address);
-        query.TryGetValue("mesh", out string? mesh);
+        string key = parsed!.PublicKey;
+        string? address = parsed.Address;
 
         // Adopted only if this device has no name of its own, so joining names an unnamed mesh
         // and re-pairing later cannot silently rename it underneath the user.
-        Security.Peers.AdoptMeshName(mesh);
+        Security.Peers.AdoptMeshName(parsed.MeshName);
 
-        if (!Security.Peers.Trust(key!, name: null, address: address))
+        if (!Security.Peers.Trust(key, name: null, address: address))
         {
             return (false, "That pairing key is not valid.");
         }
@@ -825,29 +814,10 @@ public sealed class Daemon : IDisposable
         // the supervisor is nudged rather than waited out.
         NudgeDial();
 
-        string fingerprint = DeviceIdentity.FingerprintOf(key!);
+        string fingerprint = DeviceIdentity.FingerprintOf(key);
         return (true, $"Trusting {DeviceIdentity.Shorten(fingerprint)}" +
                       (address != null ? $" at {address}." : ".") +
                       " Now confirm this device on the other screen.");
-    }
-
-    /// <summary>
-    /// Reads a URI query into a dictionary. Hand-rolled rather than pulling in
-    /// <c>HttpUtility</c> for three keys that this code also generates.
-    /// </summary>
-    private static Dictionary<string, string> ParseQuery(string query)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (string pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            int eq = pair.IndexOf('=');
-            if (eq <= 0) continue;
-
-            result[Uri.UnescapeDataString(pair[..eq])] = Uri.UnescapeDataString(pair[(eq + 1)..]);
-        }
-
-        return result;
     }
 
     /// <summary>
