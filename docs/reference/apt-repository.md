@@ -112,18 +112,22 @@ A release is triggered by a **tag**, so the run's ref is `refs/tags/v0.6.0` - wh
 The job reports `failure` with **no steps and no log at all**, which is the signature worth
 recognising: a job that fails without producing a log did not fail, it was never allowed to run.
 
-Until the environment accepts tags, the site does not republish itself and the run has to be
-dispatched by hand from `master` after every release:
+**Fixed on 2026-08-26** by adding a second deployment branch policy to that environment: type
+`tag`, pattern `v*`, alongside the existing `master` rule.
+It lives under **Settings -> Environments -> github-pages** and cannot be added from a workflow -
+changing it needs repository administration, which `GITHUB_TOKEN` deliberately does not have, so
+it is a setting rather than a file and this note is the only place it is written down.
+
+Verified by dispatching `apt.yml` against the tag rather than the branch, which is the same ref
+the release uses and the exact thing that was refused:
 
 ```bash
-gh workflow run apt.yml --ref master
+gh workflow run apt.yml --ref v0.6.0
 ```
 
-That is what happened on v0.5.1 and again on v0.6.0.
-The fix is a deployment branch policy of type `tag` matching `v*` on the `github-pages`
-environment, under **Settings -> Environments -> github-pages**, alongside the existing `master`
-rule. It cannot be added from a workflow: changing it needs repository administration, which
-`GITHUB_TOKEN` deliberately does not have.
+Fourteen steps and a success, where the identical job had reported failure with none.
+Both releases before that were published by hand with `gh workflow run apt.yml --ref master`,
+which is still the way to force a republish without cutting a release.
 
 ## Rebuilt, never appended to
 
