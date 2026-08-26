@@ -10,13 +10,13 @@ code:
   - src/WinDaemon/WindowsToasts.cs
   - src/DesktopCore/MirroredNotifications.cs
   - src/DesktopCore/Platform/DesktopNotifier.cs
-updated: 2026-08-23
+updated: 2026-08-26
 ---
 
 # Notification mirroring
 
-Mirror the apps you choose from your phone, dismiss them from either end, and **reply to them
-without picking the phone up**.
+Mirror your phone's notifications, mute the apps you would rather not, dismiss them from either
+end, and **reply to them without picking the phone up**.
 A few hundred bytes each, so Bluetooth carries them, which means notifications keep mirroring -
 and keep being answerable - with no network at all.
 
@@ -58,6 +58,23 @@ and the desktop are updated on different days by different means.
 
 Three content types: `Notification` (0x07), `NotificationDismiss` (0x08) and
 `NotificationReply` (0x0C).
+
+## On by default, once Android says yes
+
+**Every app mirrors, and muting is per application.**
+This used to deny by default and require each app to be picked, on the reasoning that granting
+the listener says "you may see my notifications" rather than "send them all to my laptop".
+That is a defensible position and it made the feature nearly unusable, so settings schema 2
+dropped it.
+There is no honest translation between an allow list and a mute list, and the stored
+`Enabled=false` was a default rather than a choice.
+
+**Android's listener grant is the real gate, and it was the thing nobody was ever asked for.**
+The stored preference has defaulted to on since schema 2, so mirroring was switched on for
+everyone and running for nobody who had not gone hunting through Settings.
+It is a settings screen rather than a permission dialog, which is why the setup wizard explains
+it, opens it, and watches for the grant instead of asking.
+See [[android-client]].
 
 ## Which heads have it
 

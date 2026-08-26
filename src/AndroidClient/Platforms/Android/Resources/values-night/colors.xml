@@ -4,4 +4,16 @@
     <color name="colorPrimary">#17181A</color>
     <color name="colorPrimaryDark">#17181A</color>
     <color name="colorAccent">#4FA894</color>
+
+    <!--
+        The splash background. MauiSplashScreen generates this from the single Color in the
+        .csproj and offers no theme variant, so every phone got the light off-white one - a
+        full-screen white flash on the way into a near-black app.
+
+        Overridden here rather than in the .csproj because a qualifier is the only place
+        Android will pick between two. drawable-night/maui_splash.xml carries the matching
+        lockup, since the wordmark is dark ink and darkening the background alone would have
+        hidden it.
+    -->
+    <color name="maui_splash_color">#FF17181A</color>
 </resources>

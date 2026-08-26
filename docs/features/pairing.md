@@ -4,11 +4,12 @@ status: shipped
 platforms: [windows, android, linux]
 tier: either
 code:
+  - src/CoreLib/Identity/PairingCode.cs
   - src/CoreLib/Identity/PairingWindow.cs
   - src/CoreLib/Identity/PeerSecurity.cs
   - src/CoreLib/Identity/PendingPairing.cs
   - src/CoreLib/Identity/PeerRegistry.cs
-updated: 2026-08-24
+updated: 2026-08-26
 ---
 
 # Pairing
@@ -18,6 +19,7 @@ Both steps are required and the second one is the one that matters.
 
 ## Where it lives
 
+- `src/CoreLib/Identity/PairingCode.cs` - the `meshsync://` format, built and read in one place.
 - `src/CoreLib/Identity/PairingWindow.cs` - the window during which a stranger may be queued.
 - `src/CoreLib/Identity/PeerSecurity.cs` - owns the window and the confirmation queue.
 - `src/CoreLib/Identity/PendingPairing.cs` - a stranger waiting for a human.
@@ -26,6 +28,15 @@ Both steps are required and the second one is the one that matters.
 ## How it works
 
 The QR code carries three things: an address, a public key, and the [[mesh-name]].
+**The address is the optional one.**
+The key is what the session is agreed against, so it is validated before anything is stored; the
+address is a Wi-Fi hint that does not exist when the inviter is offering the radio only.
+
+`PairingCode` owns both halves of that format.
+It had grown four implementations - two building it and two reading it - and the Android reader
+was the one that had drifted: it pulled the address and key straight out of the URI without
+looking at either, so a damaged code produced a link that connected and then failed every
+decryption, behind a toast saying it was connecting.
 
 The scan is one-directional, which is the problem the whole design works around.
 It shows one device's public key and the other scans it, so the scanner can authenticate us and we
@@ -75,6 +86,21 @@ It belongs to `PeerSecurity` now, which is better design and fixed the tests as 
 
 **`SetupComplete` and "is paired" used to mean the same thing and no longer do.**
 Pairing lives in the peer registry, so a device can finish setup and hold no peers.
+
+**The phone never pinned the device it had just scanned.**
+`Daemon.Join` has set `MeshDiscovery.InvitedPublicKey` since v0.4 and the Android client never
+did, so pairing with no network worked on the phone only by luck: a device with no peers has no
+mesh key, and an unverifiable beacon is ranked second rather than refused.
+Add a *second* device that way and it fails outright - the phone now has a mesh key, the
+inviter's pairing beacon verifies against neither that key nor an invitation, and the beacon is
+refused as `Foreign` before a connection is ever opened.
+
+**Pairing from a code opens the pairing window itself**, rather than relying on whichever page
+happens to be on screen.
+The scanner is a modal, so pushing it takes the Devices page off screen and shuts the window that
+page had opened; and a `meshsync://` link arriving from outside the app has no pairing page open
+at all.
+The window is also what bounds the invitation: `InvitedPublicKey` is only read while it is up.
 
 ## What is still open
 

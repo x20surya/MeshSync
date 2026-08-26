@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+    The dark half of the splash.
+
+    MauiSplashScreen takes one Color and one image and generates @drawable/maui_splash from
+    them, with no theme variant - so a phone in dark mode got a full-screen off-white flash
+    before a near-black app, and the wordmark underneath it is near-black ink that would have
+    been invisible had the background simply been darkened.
+
+    Overriding the generated drawable under the -night qualifier is the whole fix: Android
+    resolves it at runtime, so this follows the system theme with nothing to keep in step.
+    maui_splash_color is overridden the same way in values-night/colors.xml.
+
+    Structurally identical to what MAUI generates, and it has to be. Pointing straight at the
+    bitmap instead of at maui_splash_image skips the -v31 wrapper below, and on Android 12+ the
+    lockup is then drawn full size into the system splash icon slot and masked - which clipped
+    the M and the C off "MESH SYNC" in dark mode only.
+-->
+<layer-list android:opacity="opaque" xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/maui_splash_color" />
+    <item android:drawable="@drawable/maui_splash_image" android:gravity="center" />
+</layer-list>

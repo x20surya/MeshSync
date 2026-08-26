@@ -113,25 +113,111 @@ public partial class DashboardPage : ContentPage
     }
 
     /// <summary>
-    /// The one thing left worth warning about.
+    /// What is worth saying on the way past, one thing at a time.
     ///
-    /// There used to be a warning above this one about clipboard access being off, because the
-    /// app watched the clipboard through an accessibility service. Nothing watches it now, so
-    /// there is nothing to warn about - sending from this phone is something the user does
-    /// rather than something that fails quietly.
+    /// <para>There used to be a warning here about clipboard access being off, because the app
+    /// watched the clipboard through an accessibility service. Nothing watches it now, so there
+    /// is nothing to warn about - sending from this phone is something the user does rather than
+    /// something that fails quietly.</para>
+    ///
+    /// <para><b>This is also the only route to the new setup steps for anyone already using the
+    /// app.</b> The wizard runs once and stores a flag, so every existing install would otherwise
+    /// never be offered notification mirroring or the battery exemption. Re-running a wizard on
+    /// somebody already set up is worse than the gap it closes, so the offer is made here
+    /// instead - one card, in priority order, and the optional ones dismissible for good.</para>
     /// </summary>
     private void RenderWarning()
     {
-        bool missing = !AreNotificationsEnabled();
+        _warning = NextWarning();
 
-        if (missing)
+        switch (_warning)
         {
-            WarningTitle.Text = "Notifications are off";
-            WarningBody.Text = "Turn them on to see sync status and the quick Sync button.";
-            WarningAction.Text = "Fix";
+            case Warning.Notifications:
+                WarningTitle.Text = "Notifications are off";
+                WarningBody.Text = "Turn them on to see sync status and the quick Sync button.";
+                WarningAction.Text = "Fix";
+                WarningDismiss.IsVisible = false;
+                break;
+
+            case Warning.Mirroring:
+                WarningTitle.Text = "Mirror your notifications";
+                WarningBody.Text = "Messages and calls can appear on your computer, and be answered from there.";
+                WarningAction.Text = "Turn on";
+                WarningDismiss.IsVisible = true;
+                break;
+
+            case Warning.Battery:
+                WarningTitle.Text = "Android may stop Mesh Sync";
+                WarningBody.Text = "Letting it run in the background keeps syncing working while the phone is idle.";
+                WarningAction.Text = "Allow";
+                WarningDismiss.IsVisible = true;
+                break;
         }
 
-        WarningCard.IsVisible = missing;
+        WarningCard.IsVisible = _warning != Warning.None;
+    }
+
+    /// <summary>What the warning card is currently offering.</summary>
+    private enum Warning { None, Notifications, Mirroring, Battery }
+
+    private Warning _warning = Warning.None;
+
+    /// <summary>
+    /// The most important outstanding thing, or none.
+    ///
+    /// Notifications first, because without them the app is invisible while it runs; then
+    /// mirroring, which is a whole feature nobody is otherwise offered; then the battery
+    /// exemption, which only degrades reliability.
+    /// </summary>
+    private static Warning NextWarning()
+    {
+#if ANDROID
+        if (!AreNotificationsEnabled()) return Warning.Notifications;
+
+        if (!Platforms.Android.NotificationMirrorService.IsGranted() && !IsDismissed(DismissedMirroring))
+            return Warning.Mirroring;
+
+        if (Platforms.Android.AppPermissions.IsBatteryOptimised() && !IsDismissed(DismissedBattery))
+            return Warning.Battery;
+#endif
+        return Warning.None;
+    }
+
+    private const string DismissedMirroring = "DismissedMirroringPrompt";
+    private const string DismissedBattery = "DismissedBatteryPrompt";
+
+    private static bool IsDismissed(string key)
+    {
+#if ANDROID
+        try
+        {
+            var prefs = global::Android.App.Application.Context
+                .GetSharedPreferences("SyncPrefs", global::Android.Content.FileCreationMode.Private);
+            return prefs?.GetBoolean(key, false) ?? false;
+        }
+        catch
+        {
+            return false;
+        }
+#else
+        return true;
+#endif
+    }
+
+    private static void Dismiss(string key)
+    {
+#if ANDROID
+        try
+        {
+            var prefs = global::Android.App.Application.Context
+                .GetSharedPreferences("SyncPrefs", global::Android.Content.FileCreationMode.Private);
+            prefs?.Edit()?.PutBoolean(key, true)?.Apply();
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Dashboard", "Could not remember a dismissed prompt", ex);
+        }
+#endif
     }
 
     private static bool AreNotificationsEnabled()
@@ -204,31 +290,58 @@ public partial class DashboardPage : ContentPage
 #if ANDROID
         try
         {
-            // Notifications are the only thing left worth warning about, now that nothing
-            // watches the clipboard and so nothing can silently fail to.
-
-            // Ask inline first; only fall back to Settings if the prompt is no longer offered.
-            if (OperatingSystem.IsAndroidVersionAtLeast(33) &&
-                await Permissions.RequestAsync<Permissions.PostNotifications>() == PermissionStatus.Granted)
+            switch (_warning)
             {
-                RenderWarning();
-                return;
-            }
+                case Warning.Notifications:
+                    // Ask inline first; only fall back to Settings if the prompt is no longer
+                    // offered, which is what Android does once it has been refused twice.
+                    if (await Platforms.Android.AppPermissions.RequestPostNotificationsAsync()
+                        == Platforms.Android.AppPermissions.Outcome.Granted)
+                    {
+                        RenderWarning();
+                        return;
+                    }
 
-            var settings = new global::Android.Content.Intent(
-                global::Android.Provider.Settings.ActionAppNotificationSettings);
-            settings.PutExtra(global::Android.Provider.Settings.ExtraAppPackage,
-                global::Android.App.Application.Context.PackageName);
-            settings.AddFlags(global::Android.Content.ActivityFlags.NewTask);
-            global::Android.App.Application.Context.StartActivity(settings);
+                    var settings = new global::Android.Content.Intent(
+                        global::Android.Provider.Settings.ActionAppNotificationSettings);
+                    settings.PutExtra(global::Android.Provider.Settings.ExtraAppPackage,
+                        global::Android.App.Application.Context.PackageName);
+                    settings.AddFlags(global::Android.Content.ActivityFlags.NewTask);
+                    global::Android.App.Application.Context.StartActivity(settings);
+                    return;
+
+                case Warning.Mirroring:
+                    bool go = await DisplayAlertAsync("Notification access",
+                        "Android asks for this in its own settings. Find Mesh Sync on the screen that opens and turn it on - then come straight back.",
+                        "Open settings", "Not now");
+
+                    if (go) Platforms.Android.NotificationMirrorService.RequestGrant();
+                    return;
+
+                case Warning.Battery:
+                    Platforms.Android.AppPermissions.RequestBatteryExemption();
+                    return;
+            }
         }
         catch (Exception ex)
         {
-            Log.Write("Dashboard", "Could not open settings", ex);
+            Log.Write("Dashboard", "Could not act on the warning", ex);
         }
 #else
         await Task.CompletedTask;
 #endif
+    }
+
+    /// <summary>Remembered, so a refusal is not re-asked on every visit to the dashboard.</summary>
+    private void OnWarningDismissClicked(object? sender, EventArgs e)
+    {
+        switch (_warning)
+        {
+            case Warning.Mirroring: Dismiss(DismissedMirroring); break;
+            case Warning.Battery: Dismiss(DismissedBattery); break;
+        }
+
+        RenderWarning();
     }
 
     /// <summary>

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:shapes="clr-namespace:Microsoft.Maui.Controls.Shapes;assembly=Microsoft.Maui.Controls"
+             x:Class="AndroidClient.ScanPage"
+             BackgroundColor="#101112">
+
+    <!-- Deliberately not MeshPage. A viewfinder is dark in both themes, because the page is
+         mostly camera and a light chrome around a dark image reads as a bug. -->
+
+    <Grid>
+
+        <!-- ══════════ The camera ══════════
+             Filled in from code once the camera has actually been granted, never before.
+             The reader binds CameraX when its handler is created, and a handler created while
+             the permission is refused stays bound to nothing: granting afterwards left a black
+             rectangle where the preview should be, with no error anywhere to say why. -->
+        <Grid x:Name="PreviewHost" />
+
+        <!-- ══════════ Reticle ══════════
+             Four corners rather than a closed frame: a rectangle reads as something the code
+             has to be lined up inside, which it does not - the decoder reads the whole frame.
+             Four separate paths rather than one with four figures, because a single path is
+             laid out from its own bounds and the corners came out unequal. -->
+        <Grid x:Name="Reticle" WidthRequest="228" HeightRequest="228"
+              HorizontalOptions="Center" VerticalOptions="Center" InputTransparent="True">
+
+            <Path WidthRequest="48" HeightRequest="48" HorizontalOptions="Start" VerticalOptions="Start"
+                  Stroke="#4FA894" StrokeThickness="4" StrokeLineCap="Round" StrokeLineJoin="Round"
+                  Data="M 3,47 L 3,15 A 12,12 0 0 1 15,3 L 47,3" />
+
+            <Path WidthRequest="48" HeightRequest="48" HorizontalOptions="End" VerticalOptions="Start"
+                  Stroke="#4FA894" StrokeThickness="4" StrokeLineCap="Round" StrokeLineJoin="Round"
+                  Data="M 1,3 L 33,3 A 12,12 0 0 1 45,15 L 45,47" />
+
+            <Path WidthRequest="48" HeightRequest="48" HorizontalOptions="End" VerticalOptions="End"
+                  Stroke="#4FA894" StrokeThickness="4" StrokeLineCap="Round" StrokeLineJoin="Round"
+                  Data="M 45,1 L 45,33 A 12,12 0 0 1 33,45 L 1,45" />
+
+            <Path WidthRequest="48" HeightRequest="48" HorizontalOptions="Start" VerticalOptions="End"
+                  Stroke="#4FA894" StrokeThickness="4" StrokeLineCap="Round" StrokeLineJoin="Round"
+                  Data="M 47,45 L 15,45 A 12,12 0 0 1 3,33 L 3,1" />
+        </Grid>
+
+        <!-- ══════════ Scrims ══════════
+             The chrome sits on top of whatever the camera happens to be pointing at, and a
+             bright scene washed the title and the buttons out completely. A gradient rather
+             than a flat panel, so the viewfinder still reads as one image. -->
+        <Border VerticalOptions="Start" HeightRequest="150" StrokeThickness="0" InputTransparent="True">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#D9101112" Offset="0.0" />
+                    <GradientStop Color="#00101112" Offset="1.0" />
+                </LinearGradientBrush>
+            </Border.Background>
+        </Border>
+
+        <Border VerticalOptions="End" HeightRequest="260" StrokeThickness="0" InputTransparent="True">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#00101112" Offset="0.0" />
+                    <GradientStop Color="#E6101112" Offset="0.55" />
+                    <GradientStop Color="#F2101112" Offset="1.0" />
+                </LinearGradientBrush>
+            </Border.Background>
+        </Border>
+
+        <!-- ══════════ Title ══════════ -->
+        <Label Text="Scan a pairing code"
+               FontSize="16" FontAttributes="Bold" TextColor="#E9E7E3"
+               HorizontalOptions="Center" VerticalOptions="Start" Margin="24,26,24,0"
+               InputTransparent="True" />
+
+        <!-- ══════════ Instruction and torch ══════════ -->
+        <VerticalStackLayout VerticalOptions="End" Margin="24,0,24,34" Spacing="10">
+            <Label x:Name="HintLabel" HorizontalTextAlignment="Center"
+                   FontSize="13" TextColor="#C9C4BC"
+                   Text="Point at the code shown on your other device" />
+
+            <Button x:Name="TorchButton" Text="Torch" FontSize="13.5" HeightRequest="42"
+                    CornerRadius="12" BackgroundColor="#1F2124" TextColor="#E9E7E3"
+                    HorizontalOptions="Center" Padding="26,0" Clicked="OnTorchClicked" />
+
+            <Button Text="Enter details instead" FontSize="14"
+                    BackgroundColor="Transparent" TextColor="#9C978F" HeightRequest="42"
+                    Clicked="OnManualClicked" />
+        </VerticalStackLayout>
+
+        <!-- ══════════ No camera permission ══════════
+             Shown in place of the viewfinder rather than as an alert, because a refusal is a
+             state the page has to sit in, not an event. Pairing still finishes from here: the
+             manual route is one tap away and is never hidden. -->
+        <Grid x:Name="DeniedPanel" IsVisible="False" BackgroundColor="#101112" Padding="30">
+            <VerticalStackLayout VerticalOptions="Center" Spacing="14">
+
+                <shapes:Ellipse WidthRequest="58" HeightRequest="58" HorizontalOptions="Center"
+                                Fill="#1C2E2A" />
+
+                <Label x:Name="DeniedTitle" Text="Mesh Sync needs the camera to scan"
+                       FontSize="17" FontAttributes="Bold" TextColor="#E9E7E3"
+                       HorizontalTextAlignment="Center" />
+
+                <Label x:Name="DeniedBody" FontSize="13.5" TextColor="#9C978F"
+                       HorizontalTextAlignment="Center"
+                       Text="It is used to read the pairing code and nothing else. No photo is taken and nothing is uploaded." />
+
+                <Button x:Name="DeniedPrimary" Text="Allow the camera" FontSize="15"
+                        HeightRequest="46" CornerRadius="12"
+                        BackgroundColor="#2F7A6B" TextColor="White"
+                        Margin="0,10,0,0" Clicked="OnDeniedPrimaryClicked" />
+
+                <Button Text="Enter details instead" FontSize="14" HeightRequest="42"
+                        BackgroundColor="Transparent" TextColor="#9C978F"
+                        Clicked="OnManualClicked" />
+            </VerticalStackLayout>
+        </Grid>
+
+    </Grid>
+</ContentPage>

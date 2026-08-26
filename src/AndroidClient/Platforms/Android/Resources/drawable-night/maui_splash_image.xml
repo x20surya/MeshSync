@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- The dark lockup, in place of the generated light one. Mirrors MAUI's own
+     drawable/maui_splash_image.xml; see drawable-night/maui_splash.xml. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <bitmap android:gravity="center" android:src="@drawable/splash_dark" android:mipMap="true" />
+    </item>
+</layer-list>

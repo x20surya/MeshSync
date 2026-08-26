@@ -82,9 +82,17 @@
                         <Label x:Name="WarningBody" Style="{StaticResource T.Faint}"
                                Text="Copying on this phone will not sync until you switch it on." />
                     </VerticalStackLayout>
-                    <Button Grid.Column="1" x:Name="WarningAction" Text="Fix"
-                            Style="{StaticResource S.BtnOutline}" HeightRequest="40" Padding="16,0"
-                            FontSize="13.5" VerticalOptions="Center" Clicked="OnWarningActionClicked" />
+                    <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                        <Button x:Name="WarningAction" Text="Fix"
+                                Style="{StaticResource S.BtnOutline}" HeightRequest="40" Padding="16,0"
+                                FontSize="13.5" Clicked="OnWarningActionClicked" />
+                        <!-- Everything this card offers is optional, so every one of them has to
+                             be refusable. A prompt that can only be satisfied and never dismissed
+                             is a prompt that gets ignored for good. -->
+                        <Button x:Name="WarningDismiss" Text="Not now" IsVisible="False"
+                                Style="{StaticResource S.BtnQuiet}" HeightRequest="32" Padding="12,0"
+                                FontSize="12" Clicked="OnWarningDismissClicked" />
+                    </VerticalStackLayout>
                 </Grid>
             </Border>
 

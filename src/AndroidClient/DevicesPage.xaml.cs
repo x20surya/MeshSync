@@ -247,7 +247,27 @@ public partial class DevicesPage : ContentPage
         await SyncManager.RingAsync(fingerprint, on: false);
     }
 
-    private void OnScanClicked(object? sender, EventArgs e) => OpenCamera();
+    /// <summary>
+    /// Opens the scanner and pairs with whatever it reads.
+    ///
+    /// This used to leave for the system camera app and hope it recognised the code. The
+    /// pairing window is already open because this page is on screen, which is what lets the
+    /// scanned key be pinned as the device to look for over the radio.
+    /// </summary>
+    private async void OnScanClicked(object? sender, EventArgs e)
+    {
+        var code = await ScanPage.ScanAsync(Navigation);
+        if (code == null) return;
+
+        if (!await SyncManager.ConnectAsync(code))
+        {
+            await DisplayAlertAsync("Not added yet",
+                $"The other device has to allow this one in. Look for a prompt on it and check the code shown there is {SyncManager.Security.Identity.ShortFingerprint}.",
+                "OK");
+        }
+
+        Render();
+    }
 
     private void OnManualToggled(object? sender, EventArgs e)
     {
@@ -294,24 +314,6 @@ public partial class DevicesPage : ContentPage
         {
             Log.Write("Devices", "Copying the pairing key failed", ex);
         }
-    }
-
-    private static void OpenCamera()
-    {
-#if ANDROID
-        try
-        {
-            // Most camera apps recognise a QR code in the viewfinder and offer the deep link,
-            // which lands back in this app through the meshsync:// scheme.
-            var intent = new global::Android.Content.Intent("android.media.action.STILL_IMAGE_CAMERA");
-            intent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
-            global::Android.App.Application.Context.StartActivity(intent);
-        }
-        catch (Exception ex)
-        {
-            Log.Write("Devices", "Could not open the camera", ex);
-        }
-#endif
     }
 
     private sealed class DeviceRow

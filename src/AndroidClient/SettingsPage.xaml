@@ -33,10 +33,16 @@
                                    Text="Copy on any device and it appears on the others" />
                         </VerticalStackLayout>
                         <!-- Coloured explicitly: the default is the platform grey, which is the
-                             one control on the page that did not look like this app. -->
+                             one control on the page that did not look like this app.
+
+                             The thumb is a light neutral rather than the surface colour. It used
+                             to be SurfaceDark, which is exactly the card it sits on, so in dark
+                             mode the thumb was invisible and the switch read as half a teal
+                             crescent with no handle. It always sits on the track, never on bare
+                             card, so it needs to contrast with the track and nothing else. -->
                         <Switch Grid.Column="1" x:Name="PausedSwitch" VerticalOptions="Center"
                                 OnColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
-                                ThumbColor="{AppThemeBinding Light={StaticResource SurfaceLight}, Dark={StaticResource SurfaceDark}}"
+                                ThumbColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource TextDark}}"
                                 Toggled="OnPausedToggled" />
                     </Grid>
                 </VerticalStackLayout>
@@ -92,7 +98,7 @@
                         </VerticalStackLayout>
                         <Button Grid.Column="1" x:Name="BluetoothButton" Text="Open" HeightRequest="34"
                                 Style="{StaticResource S.BtnQuiet}" FontSize="12" Padding="14,4"
-                                VerticalOptions="Center" Clicked="OnAppSettingsClicked" />
+                                VerticalOptions="Center" Clicked="OnBluetoothClicked" />
                     </Grid>
 
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
@@ -103,7 +109,21 @@
                         </VerticalStackLayout>
                         <Button Grid.Column="1" x:Name="PhotosButton" Text="Open" HeightRequest="34"
                                 Style="{StaticResource S.BtnQuiet}" FontSize="12" Padding="14,4"
-                                VerticalOptions="Center" Clicked="OnAppSettingsClicked" />
+                                VerticalOptions="Center" Clicked="OnPhotosClicked" />
+                    </Grid>
+
+                    <!-- Not a permission Android prompts for in the usual way, but it belongs
+                         beside these: it decides whether the links survive the phone being put
+                         down, which is the difference between syncing and appearing to. -->
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2">
+                            <Label Text="Run in the background" Style="{StaticResource T.Body}" FontSize="14" />
+                            <Label x:Name="BatteryState" Style="{StaticResource T.Faint}" FontSize="11.5"
+                                   Text="Keeps syncing working while the phone is idle" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1" x:Name="BatteryButton" Text="Allow" HeightRequest="34"
+                                Style="{StaticResource S.BtnQuiet}" FontSize="12" Padding="14,4"
+                                VerticalOptions="Center" Clicked="OnBatteryClicked" />
                     </Grid>
 
                 </VerticalStackLayout>
@@ -123,7 +143,11 @@
                             <Label x:Name="NotificationsState" Style="{StaticResource T.Faint}" FontSize="11.5"
                                    Text="Shows the apps you choose on your other devices" />
                         </VerticalStackLayout>
+                        <!-- Coloured for the same reason the sync switch is: the platform grey
+                             is the one control that does not look like this app. -->
                         <Switch Grid.Column="1" x:Name="NotificationsSwitch" VerticalOptions="Center"
+                                OnColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                ThumbColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource TextDark}}"
                                 Toggled="OnNotificationsToggled" />
                     </Grid>
 
@@ -145,6 +169,8 @@
                                                LineBreakMode="TailTruncation" />
                                         <Switch Grid.Column="1" IsToggled="{Binding Mirrored, Mode=OneWay}"
                                                 VerticalOptions="Center"
+                                                OnColor="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}"
+                                                ThumbColor="{AppThemeBinding Light={StaticResource White}, Dark={StaticResource TextDark}}"
                                                 ClassId="{Binding Package}"
                                                 Toggled="OnNotificationAppToggled" />
                                     </Grid>

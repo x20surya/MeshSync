@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Android.App;
@@ -312,8 +312,13 @@ namespace AndroidClient.Platforms.Android
             }
         }
 
-        /// <summary>A package name is not a name. This is what the user actually recognises.</summary>
-        private static string NameOf(string package)
+        /// <summary>
+        /// A package name is not a name. This is what the user actually recognises.
+        ///
+        /// Needs <c>QUERY_ALL_PACKAGES</c> on Android 11 and above, or every third-party app
+        /// answers with its package name - see the manifest.
+        /// </summary>
+        public static string NameOf(string package)
         {
             try
             {
@@ -347,14 +352,47 @@ namespace AndroidClient.Platforms.Android
             }
         }
 
-        /// <summary>Opens the Settings screen where the grant lives. Only the user can give it.</summary>
+        /// <summary>
+        /// Opens the Settings screen where the grant lives. Only the user can give it.
+        ///
+        /// <para>There is no permission dialog for notification access - it is a settings screen
+        /// listing every app on the phone, and every manufacturer lays it out differently. So on
+        /// Android 11 and above this asks for the screen for <em>this</em> app specifically,
+        /// which is a single switch rather than a list to go hunting in. The list is the
+        /// fallback, because that detail screen is not honoured everywhere.</para>
+        /// </summary>
         public static void RequestGrant()
         {
+            var context = global::Android.App.Application.Context;
+
+            if (OperatingSystem.IsAndroidVersionAtLeast(30))
+            {
+                try
+                {
+                    var component = new ComponentName(
+                        context, Java.Lang.Class.FromType(typeof(NotificationMirrorService)));
+
+                    var direct = new Intent(global::Android.Provider.Settings
+                        .ActionNotificationListenerDetailSettings);
+
+                    direct.PutExtra(global::Android.Provider.Settings
+                        .ExtraNotificationListenerComponentName, component.FlattenToString());
+
+                    direct.AddFlags(ActivityFlags.NewTask);
+                    context.StartActivity(direct);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Notify", "This device has no per-app notification access screen; opening the list", ex);
+                }
+            }
+
             try
             {
                 var intent = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
                 intent.AddFlags(ActivityFlags.NewTask);
-                global::Android.App.Application.Context.StartActivity(intent);
+                context.StartActivity(intent);
             }
             catch (Exception ex)
             {

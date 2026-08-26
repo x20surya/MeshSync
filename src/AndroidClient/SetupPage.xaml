@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="AndroidClient.SetupPage"
@@ -11,16 +11,18 @@
 
             <Label Text="Set up Mesh Sync" Style="{StaticResource T.Title}" />
 
-            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="6" HeightRequest="4">
+            <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="6" HeightRequest="4">
                 <BoxView x:Name="Bar1" Grid.Column="0" CornerRadius="2"
                          Color="{AppThemeBinding Light={StaticResource AccentLight}, Dark={StaticResource AccentDark}}" />
                 <BoxView x:Name="Bar2" Grid.Column="1" CornerRadius="2"
                          Color="{AppThemeBinding Light={StaticResource Gray100}, Dark={StaticResource BorderDark}}" />
                 <BoxView x:Name="Bar3" Grid.Column="2" CornerRadius="2"
                          Color="{AppThemeBinding Light={StaticResource Gray100}, Dark={StaticResource BorderDark}}" />
+                <BoxView x:Name="Bar4" Grid.Column="3" CornerRadius="2"
+                         Color="{AppThemeBinding Light={StaticResource Gray100}, Dark={StaticResource BorderDark}}" />
             </Grid>
 
-            <Label x:Name="StepCounter" Text="Step 1 of 3" Style="{StaticResource T.Faint}" />
+            <Label x:Name="StepCounter" Text="Step 1 of 4" Style="{StaticResource T.Faint}" />
         </VerticalStackLayout>
 
         <!-- ══════════ Step body ══════════ -->
@@ -35,9 +37,11 @@
                 <Grid HeightRequest="180" HorizontalOptions="Center" Margin="0,4,0,14">
                     <Image x:Name="IconPair" Source="illo_pair.png"
                            HeightRequest="180" WidthRequest="180" Aspect="AspectFit" />
-                    <Image x:Name="IconClipboard" Source="illo_copy.png" IsVisible="False"
+                    <Image x:Name="IconLink" Source="illo_link.png" IsVisible="False"
                            HeightRequest="180" WidthRequest="180" Aspect="AspectFit" />
-                    <Image x:Name="IconImage" Source="illo_send.png" IsVisible="False"
+                    <Image x:Name="IconNotify" Source="illo_notify.png" IsVisible="False"
+                           HeightRequest="180" WidthRequest="180" Aspect="AspectFit" />
+                    <Image x:Name="IconSend" Source="illo_send.png" IsVisible="False"
                            HeightRequest="180" WidthRequest="180" Aspect="AspectFit" />
                 </Grid>
 
@@ -47,7 +51,7 @@
 
                 <Label x:Name="StepBody" Style="{StaticResource T.Muted}"
                        HorizontalTextAlignment="Center" Margin="6,12,6,0"
-                       Text="Open Mesh Sync on the other device and point your camera at the code it shows." />
+                       Text="Open Mesh Sync on your computer, show its pairing code, and scan it here." />
 
                 <!-- Reassurance -->
                 <Border Style="{StaticResource S.Card}" Margin="0,22,0,0" Padding="14"
@@ -85,7 +89,7 @@
         <!-- ══════════ Actions ══════════ -->
         <VerticalStackLayout Grid.Row="2" Spacing="2" Margin="0,8,0,20">
             <Button x:Name="PrimaryButton" Style="{StaticResource S.BtnPrimary}"
-                    Text="Open camera instructions" Clicked="OnPrimaryClicked" />
+                    Text="Scan the code" Clicked="OnPrimaryClicked" />
             <Button x:Name="SecondaryButton" Style="{StaticResource S.BtnQuiet}"
                     Text="Enter details manually" Clicked="OnSecondaryClicked" />
         </VerticalStackLayout>

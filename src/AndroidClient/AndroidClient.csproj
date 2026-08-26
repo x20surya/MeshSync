@@ -63,6 +63,11 @@
 		<MauiImage Include="Resources\Images\*" />
 		<MauiImage Update="Resources\Images\illo_*.svg" BaseSize="512,512" />
 		<MauiImage Update="Resources\Images\mesh_mark.svg" BaseSize="167,99" />
+
+		<!-- The dark lockup behind the splash. Same geometry as Resources\Splash\splash.svg,
+		     in the dark palette, and the same BaseSize so the two render identically.
+		     Referenced from Platforms\Android\Resources\drawable-night\maui_splash.xml. -->
+		<MauiImage Update="Resources\Images\splash_dark.svg" BaseSize="192,192" />
 		
 		<!-- Custom Fonts -->
 		<MauiFont Include="Resources\Fonts\*" />
@@ -75,6 +80,12 @@
 		<PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
 		<PackageReference Include="Plugin.BLE" Version="3.2.1" />
+
+		<!-- The QR reader. Pairing used to hand the job to whatever camera app answered
+		     STILL_IMAGE_CAMERA and hope it recognised a code, which is a coin toss on a stock
+		     OEM camera. This wraps CameraX, which is what a hand-rolled scanner would have used
+		     anyway, and keeps the scanner a XAML page so it looks like the rest of the app. -->
+		<PackageReference Include="ZXing.Net.Maui.Controls" Version="0.10.4" />
 	</ItemGroup>
 
 	<ItemGroup>

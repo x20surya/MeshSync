@@ -40,6 +40,30 @@
 	<!-- Only Android 11 and below needed location to scan for BLE devices. -->
 	<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+	<!-- Turns a package name into the name a person recognises.
+
+	     Android 11 hid every other installed app behind package visibility, and
+	     PackageManager.getApplicationInfo throws NameNotFoundException without this - which
+	     NameOf catches and answers with the package name. So the mute list read
+	     "in.swiggy.android" rather than "Swiggy", and worse, every notification mirrored to the
+	     desktop was labelled with the package too. System packages are always visible, which is
+	     why "Android System" resolved and nothing else did.
+
+	     Broad rather than a <queries> block because there is no narrower question to ask: the
+	     apps whose names are wanted are whichever ones happen to notify, which is not knowable
+	     in advance. Play restricts this permission to a short list of app types; Mesh Sync ships
+	     from a GitHub release, and it reads names only - it never enumerates what is installed. -->
+	<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+	<!-- The pairing scanner. Pairing used to leave for whatever camera app answered
+	     STILL_IMAGE_CAMERA, which is only a QR reader if that particular camera happens to be
+	     one - so on a stock OEM camera the first thing the app ever asks of a user simply did
+	     not work. required="false" because everything except scanning works without a camera,
+	     and a phone with none must still be able to install and be joined by manual entry. -->
+	<uses-permission android:name="android.permission.CAMERA" />
+	<uses-feature android:name="android.hardware.camera" android:required="false" />
+	<uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 	<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 	<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
@@ -63,4 +87,11 @@
 	     exemptions from the Android 12 ban on starting a foreground service from the
 	     background, which is what makes it the right place to do it. -->
 	<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+	<!-- Asked for once, from a tap, and never nagged. The foreground service is the mechanism
+	     that holds the links, but several OEM battery managers stop one anyway once the phone
+	     has been idle a while - which reads as "sync is unreliable" rather than as a setting.
+	     Only the ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS dialog needs this; the settings
+	     screen it falls back to does not. -->
+	<uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 </manifest>

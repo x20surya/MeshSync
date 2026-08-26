@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using CoreLib;
@@ -574,18 +574,26 @@ namespace AndroidClient
 
         // ---------------------------------------------------------------- public API
 
+        /// <summary>Pairs from a scanned or deep-linked <c>meshsync://</c> code.</summary>
+        public static Task<bool> ConnectAsync(PairingCode code) =>
+            ConnectAsync(code.Address, code.PublicKey, code.MeshName);
+
         /// <summary>
-        /// Pairs with a computer and starts the managed reconnect loops.
+        /// Pairs with another device and starts the managed reconnect loops.
         ///
         /// The public key is no longer decoration. It used to be scanned, stored and never
         /// consulted while both sides derived from a hardcoded password; it is now the thing
         /// the session key is agreed against, so a code that will not parse is refused here
         /// rather than producing a link that connects and then fails every decryption.
+        ///
+        /// <para><b>The address is optional</b>, as it has always been in
+        /// <c>DesktopCore.Daemon.Join</c>. This used to open by refusing an empty one, which
+        /// made a phone unable to accept exactly the codes that pairing-with-no-network
+        /// produces: the inviter advertises a beacon derived from the key, and an address is a
+        /// Wi-Fi hint that may not exist.</para>
         /// </summary>
-        public static async Task<bool> ConnectAsync(string hostIp, string hostPubKey, string? meshName = null)
+        public static async Task<bool> ConnectAsync(string? hostIp, string hostPubKey, string? meshName = null)
         {
-            if (string.IsNullOrWhiteSpace(hostIp)) return false;
-
             // Adopted only if this device has not already been given one, so joining a mesh
             // names it and re-pairing later cannot silently rename it underneath the user.
             Security.Peers.AdoptMeshName(meshName);
@@ -600,6 +608,28 @@ namespace AndroidClient
             // Pairing is an explicit "I want this on", so it clears an earlier Stop.
             SetPaused(false);
             StartLoops();
+
+            // Scanning a code is the signal that a human is here pairing, which is exactly what
+            // the pairing window is for - and it has to be opened here rather than left to
+            // whichever page happened to be on screen. The scanner is a modal, so pushing it
+            // takes the Devices page off screen and shuts the window that page had opened; and a
+            // deep link arriving from outside the app has no pairing page open at all.
+            //
+            // It also has to be open for the line below to have any effect: MeshDiscovery only
+            // reads InvitedPublicKey while the window is up, which is what makes the invitation
+            // expire on its own instead of pinning the radio for good.
+            Security.Pairing.Open();
+
+            // The device whose code was just scanned, so the radio looks for that one and
+            // nothing else. Its beacon is derived from the same key, so a second pairing screen
+            // open in the same room is told apart rather than connected to.
+            //
+            // The desktop has done this since v0.4 and the phone never did, which is why adding
+            // a *second* device with no network failed here: once this phone holds one peer it
+            // has a mesh key, so an inviter's pairing beacon verifies against neither that key
+            // nor an invitation, and MeshDiscovery refuses it as Foreign before a connection is
+            // ever opened. Set after StartLoops, which is what builds the discovery.
+            if (_discovery != null) _discovery.InvitedPublicKey = hostPubKey;
 
             // Nudge both loops so a freshly paired host is tried immediately rather than
             // after whatever backoff the previous failures had accumulated.

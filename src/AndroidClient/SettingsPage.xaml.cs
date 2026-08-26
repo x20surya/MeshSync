@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using CoreLib.Diagnostics;
 using CoreLib.Identity;
 
@@ -48,7 +48,8 @@ public partial class SettingsPage : ContentPage
             : "Not granted - this phone can find others but cannot be found";
         BluetoothButton.Text = advertise ? "Settings" : "Fix";
 
-        PhotosState.Text = "Sends every screenshot you take, automatically";
+        RenderPhotos();
+        RenderBattery();
 
         DeviceName.Text = SyncManager.LocalDeviceName;
         DeviceFingerprint.Text = security.Identity.ShortFingerprint;
@@ -114,7 +115,12 @@ public partial class SettingsPage : ContentPage
             foreach (string package in muted)
             {
                 if (!seen.Add(package)) continue;
-                _notificationApps.Add(new NotificationAppRow { Package = package, Name = package, Mirrored = false });
+                _notificationApps.Add(new NotificationAppRow
+                {
+                    Package = package,
+                    Name = Platforms.Android.NotificationMirrorService.NameOf(package),
+                    Mirrored = false,
+                });
             }
         }
 
@@ -226,6 +232,102 @@ public partial class SettingsPage : ContentPage
     }
 
     private void OnAppSettingsClicked(object? sender, EventArgs e) => OpenAppSettings();
+
+    // ──────────────────────────────────── permission rows
+
+    /// <summary>
+    /// Says whether screenshots are actually being sent, rather than describing the feature.
+    ///
+    /// The row used to read "Sends every screenshot you take, automatically" whether or not the
+    /// permission had ever been granted, which is a description of what the app would do rather
+    /// than a report of what it is doing.
+    /// </summary>
+    private async void RenderPhotos()
+    {
+#if ANDROID
+        bool granted = await Platforms.Android.AppPermissions.HasPhotosAsync();
+
+        PhotosState.Text = granted
+            ? "Granted - every screenshot you take is sent automatically"
+            : "Not granted - screenshots stay on this phone";
+
+        PhotosButton.Text = granted ? "Settings" : "Allow";
+#else
+        await Task.CompletedTask;
+#endif
+    }
+
+    private void RenderBattery()
+    {
+#if ANDROID
+        bool optimised = Platforms.Android.AppPermissions.IsBatteryOptimised();
+
+        BatteryState.Text = optimised
+            ? "Android may stop Mesh Sync once the phone has been idle"
+            : "Allowed - the links stay up while the phone is idle";
+
+        // Never disabled. A greyed-out button that still reads "Settings" is a control that
+        // looks available and does nothing; the list is a real destination either way.
+        BatteryButton.Text = optimised ? "Allow" : "Settings";
+#endif
+    }
+
+    /// <summary>
+    /// Asks inline when Android will still show a dialog, and only then falls back to settings.
+    ///
+    /// Opening app settings for something the user has never been asked about makes them go
+    /// hunting for a switch a single tap could have offered.
+    /// </summary>
+    private async void OnBluetoothClicked(object? sender, EventArgs e)
+    {
+#if ANDROID
+        if (CanAdvertise())
+        {
+            OpenAppSettings();
+            return;
+        }
+
+        var outcome = await Platforms.Android.AppPermissions.RequestBluetoothAsync();
+
+        if (outcome == Platforms.Android.AppPermissions.Outcome.Blocked) OpenAppSettings();
+        else if (outcome == Platforms.Android.AppPermissions.Outcome.Granted) SyncManager.RetryBluetoothPeripheral();
+
+        Render();
+#else
+        await Task.CompletedTask;
+#endif
+    }
+
+    private async void OnPhotosClicked(object? sender, EventArgs e)
+    {
+#if ANDROID
+        if (await Platforms.Android.AppPermissions.HasPhotosAsync())
+        {
+            OpenAppSettings();
+            return;
+        }
+
+        if (await Platforms.Android.AppPermissions.RequestPhotosAsync()
+            == Platforms.Android.AppPermissions.Outcome.Blocked)
+        {
+            OpenAppSettings();
+        }
+
+        Render();
+#else
+        await Task.CompletedTask;
+#endif
+    }
+
+    private void OnBatteryClicked(object? sender, EventArgs e)
+    {
+#if ANDROID
+        if (Platforms.Android.AppPermissions.IsBatteryOptimised())
+            Platforms.Android.AppPermissions.RequestBatteryExemption();
+        else
+            Platforms.Android.AppPermissions.OpenBatterySettings();
+#endif
+    }
 
     // ──────────────────────────────────── platform hops
 

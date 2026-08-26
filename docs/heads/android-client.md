@@ -6,7 +6,10 @@ tier: either
 code:
   - src/AndroidClient/SyncManager.cs
   - src/AndroidClient/Platforms/Android/SyncForegroundService.cs
-updated: 2026-08-24
+  - src/AndroidClient/Platforms/Android/AppPermissions.cs
+  - src/AndroidClient/ScanPage.xaml.cs
+  - src/AndroidClient/SetupPage.xaml.cs
+updated: 2026-08-26
 ---
 
 # Android client
@@ -78,10 +81,28 @@ The moment you want to find a phone is the moment it is on silent.
 Generating the identity key inside the Keystore would mean doing ECDH through `KeyAgreement`,
 which forks the key agreement between platforms. See [[key-at-rest]].
 
-**`NotificationMirrorService`** is the only sensitive permission left, and it is off until asked,
-then allowed per application. Nothing is mirrored by default and nothing is ever stored.
+**`NotificationMirrorService`** is the only sensitive permission left.
+**Every app mirrors once Android's listener grant is given**, and muting is per application -
+which is the opposite of what this note said until 2026-08-26, and had been for a while.
+The deny-by-default model was dropped at settings schema 2: the grant was in place, the service
+was bound, and nothing appeared, because a second and third opt-in were still waiting in a
+settings screen.
+A mirror that shows nothing until configured is indistinguishable from a broken one.
+Nothing is ever stored either way.
 Its reply path **fills the `RemoteInput` the app itself attached** - it is not automating an app
 from the outside, which is the line this project drew when it banned the accessibility service.
+
+**`AppPermissions`** is the one place that knows what this app asks Android for and when.
+Every request answers two questions rather than one: is it granted, and *will Android still ask*.
+That second one is not a nicety - Android silently ignores a request for something already
+refused twice, so a button that asks again does nothing at all and reads as broken.
+See [[#Permissions are asked where they are explained]].
+
+**`ScanPage`** is the pairing scanner, and it is the app's own.
+The reader binds CameraX when its handler is created, so it is built in code **after** the camera
+grant is in hand rather than declared in the XAML: a handler created while the permission is
+refused binds to nothing, and granting afterwards leaves a black rectangle with no error anywhere
+to say why.
 
 ## Building and installing
 
@@ -97,12 +118,56 @@ MAUI device deployment is broken enough on .NET 10 that this is done by hand, wi
 FastDeployment disabled in the `.csproj`.
 Debug builds deployed by CLI need `<EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>`.
 
+## Permissions are asked where they are explained
+
+One per step of the setup wizard, immediately after the screen that says why it is wanted, and
+never before.
+
+| Step | Asks for |
+|---|---|
+| Pair | `CAMERA`, on tapping *Scan the code* |
+| Keep it connected | the three `BLUETOOTH_*` grants, then the battery exemption |
+| See your phone on your computer | `POST_NOTIFICATIONS` and the notification listener |
+| Sending from this phone | `READ_MEDIA_IMAGES`, for screenshots |
+
+**Three of these used to fire from `MainActivity.OnCreate`**, before the user had seen a single
+screen: two system dialogs stacked on the splash, and a refusal quietly cost radio pairing and
+screenshot sync with nothing anywhere to say so.
+Photo access was then asked for a second time by the wizard, where Android ignored it because it
+had already been answered - so that step appeared to do nothing.
+
+**The listener grant is a settings screen, not a dialog.**
+Nothing else here can be asked for the same way, so the wizard explains it, opens the screen for
+this app specifically on Android 11+, and lets its own 700ms poll notice the grant and advance.
+That poll is why no step ever has to ask "did that work?".
+
+**The wizard runs once and stores `SetupComplete`**, so an existing install never sees a new step.
+Anything added later reaches those users through the dashboard's warning card instead - which is
+where notification mirroring and the battery exemption are offered, one at a time and each
+dismissible for good.
+Re-running a wizard on somebody already set up is worse than the gap it closes.
+
 ## Platform gotchas
 
 **Declaring a permission is not requesting it.**
 The Bluetooth permissions are runtime grants on Android 12+ and being refused one fails silently.
 `android.permission.VIBRATE` was simply missing, and Android throws for the vibrate call rather
 than ignoring it.
+
+**`QUERY_ALL_PACKAGES` is what turns a package name into a name.**
+Android 11 hid every other installed app behind package visibility, so
+`PackageManager.getApplicationInfo` throws for anything but a system package.
+The mute list read `in.swiggy.android`, and worse, **every notification mirrored to the desktop
+was labelled with the package too**.
+
+**The splash screen has no theme variant.**
+`MauiSplashScreen` takes one colour and one image, so a phone in dark mode got a full-screen
+off-white flash before a near-black app.
+It is fixed with Android resource qualifiers - `values-night` for the colour and
+`drawable-night` for the lockup - and the night drawable has to mirror MAUI's own structure
+exactly, including the `-v31` wrapper that sizes the icon.
+Pointing straight at the bitmap instead skips that wrapper, and Android 12+ then draws the lockup
+full size into the system splash icon slot and masks it, clipping the wordmark.
 
 **`ACTION_SCREEN_ON` and `ACTION_SCREEN_OFF` cannot be declared in the manifest.**
 Android only delivers them to receivers registered at runtime, and such a receiver must not carry

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Android 12+ hands this to the system splash screen as the icon and masks it, so the
+     lockup has to be sized into the icon slot rather than drawn at its natural size.
+     Mirrors MAUI's own drawable-v31/maui_splash_image.xml. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:width="108dp" android:height="108dp" android:gravity="center">
+        <bitmap android:gravity="fill" android:src="@drawable/splash_dark" android:mipMap="true" />
+    </item>
+</layer-list>
