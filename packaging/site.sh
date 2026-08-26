@@ -97,11 +97,18 @@ echo "Rendered $OUT/index.html for $VERSION ($DATE) at $BASE_URL"
 if [ "$CHECK" = yes ]; then
     command -v curl >/dev/null 2>&1 || { echo "--check needs curl." >&2; exit 2; }
 
+    # One byte of each, not all of it. A plain GET here downloads every asset the page names -
+    # about 210 MB for a release - on every publish, to look at a status code and throw the body
+    # away. A range request proves the same thing: that the object is there and readable.
+    #
+    # Range rather than HEAD because the release URL redirects to object storage, and a store that
+    # declines HEAD would fail this for a file that downloads perfectly. A served range answers
+    # 206; a server that ignores Range answers 200 and both mean the same thing here.
     failed=0
     for url in $(grep -o "$RELEASE_URL/[^\"]*" "$OUT/index.html" | sort -u); do
-        code="$(curl -sSL -o /dev/null -w '%{http_code}' --max-time 30 "$url" || echo 000)"
+        code="$(curl -sSL -o /dev/null -w '%{http_code}' --max-time 30 -r 0-0 "$url" || echo 000)"
         printf '  %s  %s\n' "$code" "$url"
-        [ "$code" = 200 ] || failed=1
+        case "$code" in 200|206) ;; *) failed=1 ;; esac
     done
 
     [ "$failed" = 0 ] || { echo "site.sh: the links above are not downloadable." >&2; exit 1; }
