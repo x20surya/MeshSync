@@ -26,6 +26,27 @@
     <!-- Shown on the executable, in the taskbar and in Alt+Tab. Without it the window
          fell back to the generic default icon. -->
     <ApplicationIcon>Resources\meshsync.ico</ApplicationIcon>
+
+    <!--
+      WHY THIS IS HERE. `PublishSingleFile` bundles managed assemblies and nothing else: the five
+      native libraries WPF needs - `wpfgfx_cor3`, `PresentationNative_cor3`, `D3DCompiler_47_cor3`,
+      `PenImc_cor3` and `vcruntime140_cor3` - are left in the publish directory beside the .exe.
+      Every release from v0.1.0 to v0.6.0 attached only the .exe, so what people downloaded was a
+      single file missing a fifth of itself.
+
+      It fails in the worst way available. The process starts, loads the identity, opens the TCP
+      listener and begins advertising over Bluetooth, and only then does the first window throw
+      `DllNotFoundException` from `SetWindowLongPtrWndProc`. There is no window, no tray icon and
+      no console to print to - and the process stays alive, so the second double-click is refused
+      by the single-instance mutex and does nothing at all. "It doesn't open" is the whole of what
+      a person sees.
+
+      It is stated here rather than passed on the publish command line because the property is the
+      correctness of the artifact, not a choice about it: a publish that turns single-file on must
+      take the native libraries with it. Turning single-file on is still the caller's decision -
+      this does nothing when it is off, which is how the installer's payload is built.
+    -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
