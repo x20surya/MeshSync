@@ -106,7 +106,7 @@ echo "Rendered $OUT/index.html for $VERSION (${DATE:-no date}) at $BASE_URL"
 
 # ─────────────────────────────────────────────────────────────── the links, actually followed
 #
-# The page names five files by hand. A rename in release.yml that nobody carried across here
+# The page names six files by hand. A rename in release.yml that nobody carried across here
 # produces a page that looks right and downloads nothing, which is the failure this catches.
 if [ "$CHECK" = yes ]; then
     command -v curl >/dev/null 2>&1 || { echo "--check needs curl." >&2; exit 2; }

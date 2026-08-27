@@ -88,6 +88,11 @@
   .plat p{font-size:.82rem;color:var(--muted);margin:0 0 .5rem}
   .plat a{font-size:.85rem;font-weight:600;text-decoration:none}
   .plat a:hover{text-decoration:underline}
+  /* The second way to get the same platform, for the one card that has two. Deliberately quieter
+     than the filename above it: it is an alternative, not a choice the page is asking anyone to
+     make. */
+  .plat .also{font-size:.75rem;margin:.4rem 0 0}
+  .plat .also a{font-size:inherit;font-weight:500}
 
   .cols{display:grid;gap:1.4rem;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr))}
   .cols p{font-size:.92rem;color:var(--muted);margin:0}
@@ -153,8 +158,13 @@
     <div class="platforms" id="downloads">
       <div class="plat" data-os="windows">
         <h3>Windows <span class="you">your machine</span></h3>
-        <p>10 or 11, 64-bit. Nothing to install alongside it.</p>
-        <a href="@RELEASE_URL@/MeshSync-@VERSION@-windows-x64.exe">MeshSync-@VERSION@-windows-x64.exe</a>
+        <p>10 or 11, 64-bit. No .NET to install first.</p>
+        <!-- The installer is first because the script above takes the first download link in the
+             card as the one the big button points at, and because it is the one to hand somebody
+             who has not asked how software works. -->
+        <a href="@RELEASE_URL@/MeshSync-@VERSION@-windows-x64.msi">MeshSync-@VERSION@-windows-x64.msi</a>
+        <p class="also">or a <a href="@RELEASE_URL@/MeshSync-@VERSION@-windows-x64.exe">portable
+          .exe</a> that installs nothing</p>
       </div>
       <div class="plat" data-os="android">
         <h3>Android <span class="you">your device</span></h3>
@@ -224,7 +234,7 @@
         download page rather than let it ambush you.</p>
       <p><strong>You do not have to take my word for the file.</strong> Every release publishes
         <a href="@RELEASE_URL@/SHA256SUMS">SHA256SUMS</a>. Check the one you downloaded:</p>
-      <pre>Get-FileHash .\MeshSync-@VERSION@-windows-x64.exe -Algorithm SHA256</pre>
+      <pre>Get-FileHash .\MeshSync-@VERSION@-windows-x64.msi -Algorithm SHA256</pre>
       <p>Every binary is built by GitHub Actions from this repository, never on a personal
         machine - the <a href="@REPO_URL@/actions">run that produced it</a> is public.</p>
     </div>

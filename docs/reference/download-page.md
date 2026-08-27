@@ -7,7 +7,7 @@ code:
   - packaging/site.sh
   - packaging/site/index.html
   - .github/workflows/apt.yml
-updated: 2026-08-26
+updated: 2026-08-27
 ---
 
 # Download page
@@ -67,7 +67,7 @@ packaging/site.sh site                # the page, into site/index.html
 packaging/site.sh site --check        # ...and follow every download link it names
 ```
 
-`--check` asks for **the first byte** of all six URLs the page advertises.
+`--check` asks for **the first byte** of all seven URLs the page advertises.
 
 Not a plain `GET`: that downloads every asset the page names, about 210 MB for a release, on every
 publish, to look at three digits and throw the body away.
@@ -75,10 +75,16 @@ Not `HEAD` either, because the release URL redirects to object storage and a sto
 `HEAD` would fail this for a file that downloads perfectly.
 A served range answers `206` and a server that ignores `Range` answers `200`; both mean the object
 is there and readable, so both pass, and a missing one still answers `404`.
-Six links take about five seconds.
+Seven links take about five seconds.
 The page names its assets by hand, so a rename in `release.yml` that nobody carried across
 produces a page that looks perfect and downloads nothing; CI runs with `--check` for that reason
 and refuses to publish a page with a dead link in it.
+
+**Which means a new artifact goes onto the page in the same change that starts building it, and
+the page is not republished until a release actually carries it.** `--check` runs against the
+newest release, so a page naming a file that release does not have fails - correctly. That is the
+one thing to know before adding a download: the `v*` tag comes first, and republishing the site on
+its own in between will stop.
 
 `SITE_BASE_URL` and `SITE_REPO_URL` override where the page thinks it is being served from.
 Moving to a product domain is those two variables and a `CNAME`, and is the whole of what that

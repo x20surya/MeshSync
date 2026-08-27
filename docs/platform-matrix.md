@@ -1,6 +1,6 @@
 ---
 type: meta
-updated: 2026-08-25
+updated: 2026-08-27
 ---
 
 # Platform matrix
@@ -24,7 +24,7 @@ Every route below is also one click from the [[download-page]], which is what to
 |---|---|---|
 | Linux, Debian-derived | apt, `https://x20surya.me/MeshSync` | **amd64 only** |
 | Linux, everything else | AppImage, or `packaging/install-user.sh` | **amd64 only** |
-| Windows | self-contained `.exe` from the release | x64 |
+| Windows | `.msi` installer, or the portable `.exe`, from the release | x64 |
 | Android | signed `.apk` from the release, CI debug key | all |
 
 **Nothing ships for arm64.** A Raspberry Pi, an arm64 server or an Asahi Mac has no route at all.

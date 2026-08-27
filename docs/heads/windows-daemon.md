@@ -6,7 +6,10 @@ tier: either
 code:
   - src/WinDaemon/Program.cs
   - src/WinDaemon/MainWindow.xaml
-updated: 2026-08-24
+  - src/WinDaemon/WinDaemon.csproj
+  - packaging/windows/MeshSync.wxs
+  - packaging/windows/build.ps1
+updated: 2026-08-27
 ---
 
 # Windows daemon
@@ -62,8 +65,29 @@ than one. A bundled sound file is one more thing to ship and to keep in step.
 Capped at `MaxDuration` of one minute.
 
 **The toast registration** is an AppUserModelID written under `HKCU`.
-Windows will not raise a toast for a process without one, and this app has no installer - it puts
-itself in the `Run` key and that is all.
+Windows will not raise a toast for a process without one, and the usual way to give it one is a
+Start Menu shortcut carrying the id.
+The installer does create that shortcut, but the registration stays: the portable `.exe` has no
+shortcut, and the same code has to work either way.
+
+## How it ships
+
+An `.msi` and a portable `.exe`, both built by `packaging/windows/build.ps1`. See [[installing]].
+
+**The installer is what a person should be given.** Per machine into `Program Files\Mesh Sync`, a
+Start Menu shortcut carrying the AppUserModelID above, an Installed apps entry, and a firewall
+rule for TCP 45001 scoped to the local subnet - so Windows never raises its own firewall prompt,
+which needs an administrator and writes *block* rules if it is dismissed.
+It closes the running copy before replacing it, because run-on-startup means there always is one.
+
+**The portable `.exe` is one file and must stay one file.**
+`IncludeNativeLibrariesForSelfExtract` in the `.csproj` is what makes that true.
+Without it a single-file publish leaves WPF's five native libraries loose in the publish
+directory, and since the release attaches only the `.exe`, what people downloaded from v0.1.0 to
+v0.6.0 was missing them: it started, listened on 45001, advertised over Bluetooth, and threw
+`DllNotFoundException` at the first window. No window, no tray icon, no console - and the process
+stayed alive, so the second double-click was swallowed by the single-instance mutex.
+`build.ps1` asserts the publish is exactly one file for that reason.
 
 ## `ClipboardWorker` owns one thread, not one per payload
 
@@ -93,8 +117,8 @@ Qualify it as `System.Windows.HorizontalAlignment.Center`.
 **Reassigning colour keys does not repaint anything.**
 Swap the whole merged dictionary instead.
 
-**Toasts need an AppUserModelID registered under `HKCU`**, which is what makes them possible with
-no installer.
+**Toasts need an AppUserModelID registered under `HKCU`**, which is what makes them possible for
+the portable build, which has no Start Menu shortcut to carry one.
 Banners will not appear while Do Not Disturb is on, which is a setting rather than a bug.
 
 ## See also

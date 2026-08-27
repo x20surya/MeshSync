@@ -102,10 +102,23 @@ longer install. Either add `libfuse2`, or skip FUSE with `--appimage-extract-and
 `packaging/install-user.sh` does a full install with no root - launcher entry, icons, the Plasma
 widget, `meshsyncctl` and D-Bus activation.
 
-### Windows and Android
+### Windows
 
-A self-contained `.exe` and a signed `.apk` are attached to every release. There is no store
-listing yet.
+The **`.msi`** from any [release](https://github.com/x20surya/MeshSync/releases).
+It installs into `Program Files`, puts Mesh Sync in the Start Menu and in Installed apps, and adds
+the firewall rule for TCP 45001 so the app never has to ask for it.
+Nothing else is needed - the build is self-contained and wants no .NET runtime.
+
+There is also a portable `.exe` for a machine you would rather not install anything on. It is one
+file, it keeps its data under `%LOCALAPPDATA%\MeshSync` like the installed copy, and it adds
+nothing to the Start Menu.
+
+Neither is code-signed, so SmartScreen shows "Windows protected your PC" and running it takes
+**More info** then **Run anyway**. Every release publishes `SHA256SUMS` to check the file against.
+
+### Android
+
+A signed `.apk` is attached to every release. There is no store listing yet.
 
 ### What it runs on
 
@@ -170,6 +183,15 @@ packaging/build.sh
 Produces an AppImage that runs on most distributions, a `.deb`, and a plain tarball.
 Nothing there needs root.
 
+Windows is packaged on Windows, by its own script:
+
+```powershell
+packaging/windows/build.ps1
+```
+
+Produces the `.msi` and the portable `.exe`. The WiX toolset is fetched on first use and cached,
+so this needs nothing installed by hand either.
+
 ### Android
 
 Requires the .NET 10 SDK with the `maui-android` workload, and a device on Android 8 or newer.
@@ -229,7 +251,7 @@ it does not.
   screen watchers; a boot receiver; a notification listener; TCP listener and dialler; Bluetooth
   GATT client and server; and the Quick Settings tile, `PROCESS_TEXT` and share targets.
 - **`src/assets`** - brand handoff: the mark, the palette and the illustrations.
-- **`tests/CoreLib.Tests`** - 455 tests: a three-device mesh over real loopback sockets, the
+- **`tests/CoreLib.Tests`** - 471 tests: a three-device mesh over real loopback sockets, the
   per-peer route state machine, the mesh beacon and its advertisement budget, key agreement, wire
   formats, Bluetooth role rules and the peer registry. A fake radio replays every hard-won
   Bluetooth finding as a scripted scenario.

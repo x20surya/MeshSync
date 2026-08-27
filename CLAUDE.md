@@ -94,6 +94,18 @@ packaging/site.sh <out> [--check]       # the download page, into the same tree,
 Order matters: `apt-repo.sh` wipes its output directory, so the page is rendered after it.
 `--check` follows every download link the page names and is what CI runs.
 
+Windows is packaged separately, on Windows, into `packaging/windows/out`:
+
+```powershell
+packaging/windows/build.ps1             # the .msi installer and the portable .exe
+```
+
+It fetches the WiX toolset into `packaging/.tools` on first use.
+It also **checks what it built** rather than trusting the exit code - that WPF's five native
+libraries are in the installer payload, and that the portable publish is one file and nothing
+else. Both assertions exist because a publish that succeeds is not the same as a program that
+opens a window; see [docs/heads/windows-daemon.md](docs/heads/windows-daemon.md).
+
 A release is a `v*` tag: CI builds all four heads, publishes the GitHub release with a
 `SHA256SUMS`, and republishes the apt repository and the download page at
 `https://x20surya.me/MeshSync` from the last three releases.
@@ -127,7 +139,7 @@ systemctl --user restart plasma-plasmashell.service
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-455 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
+471 tests. Every app holds a zero-warning bar, and an incremental build will not re-report
 warnings, so use `-t:Rebuild` when you need to be sure.
 
 **All three heads build on Linux**, which is worth knowing before assuming CI is the only check.
@@ -216,6 +228,6 @@ adb shell run-as dev.meshsync.app ls /data/data/dev.meshsync.app/files
   and dialler, Bluetooth GATT client and server, the ringer, and the Quick Settings tile,
   `PROCESS_TEXT` and share targets.
 - `src/assets`: brand handoff, the source of truth for the mark, palette and illustrations.
-- `tests/CoreLib.Tests`: 455 tests, including a three-device mesh over real loopback sockets, the
+- `tests/CoreLib.Tests`: 471 tests, including a three-device mesh over real loopback sockets, the
   per-peer route state machine, the mesh beacon and its 31-byte advertisement budget, and a fake
   radio that replays every Bluetooth finding in `HANDOFF.md` as a scripted scenario.

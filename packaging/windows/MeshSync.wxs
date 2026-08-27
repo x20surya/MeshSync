@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer.
+
+  WHY THERE IS ONE. Every release from v0.1.0 to v0.6.0 attached a bare .exe, and what that asked
+  of a person was to keep an 80 MB file somewhere sensible, run it from wherever the browser
+  dropped it, and know that closing the window had not stopped it. Nothing appeared in the Start
+  Menu, nothing appeared in Installed apps, and removing it meant deleting a file and a registry
+  value by hand. It also hid the defect that prompted all this: the .exe was published without the
+  native libraries WPF needs, so on any machine but the one that built it the window never opened.
+  A folder of files, copied by something that checks it copied them, cannot lose a fifth of itself
+  on the way.
+
+  WHY PER-MACHINE, WHEN EVERYTHING THE APP WRITES IS PER-USER. The identity, the paired devices,
+  the settings and the Run key are all under the user - a per-user install would have matched, and
+  would have avoided the UAC prompt. It is per-machine for one reason: the firewall. The daemon
+  listens on TCP 45001, and the first time it binds, Windows throws the "allow this app" dialog,
+  which needs an administrator to answer and which silently writes *block* rules if it is
+  dismissed. The Wi-Fi tier then fails for good, on a machine where nothing looks wrong. Asking
+  for elevation once, at install, buys the rule outright and means the app is never the thing
+  asking.
+
+  WHY THE RULE IS SCOPED TO THE LOCAL SUBNET RATHER THAN TO A PROFILE. Windows' own dialog offers
+  the profile, and the honest answer for a home network is "private" - except that a good share of
+  home networks are classified public, and on those the app would go quiet exactly as it does now.
+  The scope is the tighter statement anyway: this is a mesh of devices on one network, so the rule
+  says local subnet and leaves the profile alone. What it exposes is a socket that answers a
+  handshake and hangs up on anything it is not paired with.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="Mesh Sync"
+           Manufacturer="Mesh Sync"
+           Version="$(var.Version)"
+           UpgradeCode="12A7BFEE-DC5D-4FEE-93AF-AB4724E70C7A"
+           Scope="perMachine"
+           Compressed="yes"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="Mesh Sync - your clipboard, files and notifications across your own devices" />
+
+    <!-- LZX rather than the default. The payload is 198 MB of self-contained .NET, and the
+         difference between compression levels here is most of the download. -->
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- AllowSameVersionUpgrades, because a rebuilt release carries the same version number and
+         installing it over itself should replace it rather than sit beside it in Installed apps. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Mesh Sync is already installed. Remove it from Installed apps first if you meant to go back to this one." />
+
+    <!-- The app enables run-on-startup on its first run, so an upgrade always finds it running and
+         always finds WinDaemon.exe locked. Windows Installer would notice, and offer a reboot.
+         This closes it instead: a WM_CLOSE first, and a terminate for the case that matters here,
+         which is that the main window hides rather than exits when it is asked to close. -->
+    <util:CloseApplication Id="CloseMeshSync"
+                           Target="WinDaemon.exe"
+                           CloseMessage="yes"
+                           TerminateProcess="0"
+                           RebootPrompt="no"
+                           Description="Mesh Sync is running and has to close before it can be replaced." />
+
+    <!-- The id ends in .ico because Windows Installer extracts the icon into its cache under
+         whatever the id says, and a cached icon called "MeshSyncIcon" with no extension is a file
+         nothing else can open.
+
+         ARPPRODUCTICON is the whole of what Installed apps needs. It does not write a DisplayIcon
+         value into the uninstall key and it is not supposed to - of the 212 MSI products on the
+         machine this was checked against, two have one. The icon is read back through the
+         installer database. -->
+    <Icon Id="MeshSync.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="MeshSync.ico" />
+    <Property Id="ARPHELPLINK" Value="https://x20surya.me/MeshSync/" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/x20surya/MeshSync" />
+    <!-- ARPNOMODIFY is not set here: WixUI_InstallDir already sets it, and setting it twice is an
+         error rather than agreement. There is one feature, so Installed apps offering only
+         Uninstall is the right answer anyway. -->
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Mesh Sync" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Mesh Sync" Level="1">
+      <ComponentGroupRef Id="Payload" />
+      <ComponentGroupRef Id="Integration" />
+    </Feature>
+
+    <!-- The app lives in the tray and is meant to be running. Finishing the installer without
+         starting it leaves a person looking at a Start Menu entry wondering whether it worked. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open Mesh Sync now" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <CustomAction Id="LaunchMeshSync"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]WinDaemon.exe&quot;"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="asyncNoWait" />
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchMeshSync"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+    </UI>
+
+    <!-- Generated from the repository's own LICENSE by build.ps1, so the licence a person agrees
+         to in the installer is the licence the project actually ships under. -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+  </Package>
+
+  <Fragment>
+    <!-- Harvested at build time. Naming 479 files by hand is how an installer comes to ship 478
+         of them. -->
+    <ComponentGroup Id="Payload" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PayloadDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <ComponentGroup Id="Integration">
+      <!-- Straight into the Start Menu rather than a folder with one thing in it.
+           The AppUserModelID is the same id WindowsToasts registers under HKCU: with a shortcut
+           carrying it, Windows names and icons the mirrored notifications from the shortcut,
+           which is the route Windows actually documents. -->
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">
+        <Shortcut Id="MeshSyncShortcut"
+                  Name="Mesh Sync"
+                  Description="Your clipboard, files and notifications across your own devices"
+                  Target="[INSTALLFOLDER]WinDaemon.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="MeshSync.ico">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="dev.meshsync.daemon" />
+        </Shortcut>
+        <RegistryValue Root="HKLM" Key="SOFTWARE\MeshSync\Install" Name="StartMenu"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <!-- HKLM\SOFTWARE\MeshSync\Install, not HKCU\SOFTWARE\MeshSync - the app's own settings key
+           is the latter, and the installer has no business writing into it. -->
+      <Component Id="FirewallRule" Directory="INSTALLFOLDER">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\MeshSync\Install" Name="Firewall"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <fw:FirewallException Id="MeshSyncInbound"
+                              Name="Mesh Sync"
+                              Description="Lets paired devices on this network reach Mesh Sync on TCP 45001."
+                              Program="[INSTALLFOLDER]WinDaemon.exe"
+                              Protocol="tcp"
+                              Scope="localSubnet" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

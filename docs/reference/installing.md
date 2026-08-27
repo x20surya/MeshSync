@@ -7,7 +7,9 @@ code:
   - packaging/build.sh
   - packaging/install-user.sh
   - packaging/INSTALL.txt
-updated: 2026-08-26
+  - packaging/windows/build.ps1
+  - packaging/windows/MeshSync.wxs
+updated: 2026-08-27
 ---
 
 # Installing
@@ -87,12 +89,35 @@ changes rather than polling for it. X11 falls back to `xclip` or `xsel`, which t
 recommends rather than depends on: with neither, the app still pairs, holds links and sends - it
 just cannot read the clipboard by itself. See [[clipboard-sync]].
 
-## Windows and Android
+## Windows
 
-The `.exe` and the signed `.apk` are attached to every release. The `.exe` is self-contained and
-single-file, so it runs on a machine with no .NET. The APK is signed with the CI debug key, which
-means Android will refuse to install it over a copy signed with any other key - uninstall first if
-you have built one yourself. There is no store listing for either.
+Two files are attached to every release, both self-contained, so neither wants a .NET runtime.
+
+**`MeshSync-vX.Y.Z-windows-x64.msi`** is the one to hand somebody.
+It installs per machine into `Program Files\Mesh Sync`, adds a Start Menu entry and an Installed
+apps entry that uninstalls cleanly, and opens TCP 45001 to the local subnet so the app never
+raises Windows' own firewall prompt - which needs an administrator to answer and writes *block*
+rules if it is dismissed.
+It asks for elevation once, at install, and for nothing after that: the identity, the paired
+devices, the settings and the run-on-startup entry are all per user, exactly as they were.
+
+An upgrade closes the running copy before replacing it, which matters because the app enables
+run-on-startup on its first run and is therefore always running when the next installer arrives.
+
+**`MeshSync-vX.Y.Z-windows-x64.exe`** is the same app as one file, for a machine you would rather
+not install anything on. It is the same self-contained build with the native libraries bundled
+instead of copied, so first launch pays a moment to unpack itself into the temp directory. It adds
+nothing to the Start Menu and no firewall rule, so Windows will ask about the network the first
+time it listens.
+
+Neither is code-signed. See the [[download-page]] for what SmartScreen shows and how to check the
+file you got.
+
+## Android
+
+The signed `.apk` is attached to every release. It is signed with the CI debug key, which means
+Android will refuse to install it over a copy signed with any other key - uninstall first if you
+have built one yourself. There is no store listing.
 
 ## See also
 

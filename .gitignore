@@ -484,8 +484,9 @@ $RECYCLE.BIN/
 # Lavish review artifacts (local tooling output, not project source)
 .lavish/
 
-# Packaging output and the cached appimagetool
+# Packaging output and the cached tools - appimagetool for Linux, WiX for Windows
 packaging/out/
+packaging/windows/out/
 packaging/.tools/
 
 # Obsidian per-user state. The docs/ vault's own config is tracked; nothing else here is.

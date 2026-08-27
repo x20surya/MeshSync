@@ -16,12 +16,13 @@ namespace WinDaemon
     /// useful to somebody already looking at it, which is nobody - the window lives in the tray.
     /// A notification that has to be gone looking for is not a notification.</para>
     ///
-    /// <para><b>Registering without an installer.</b> Windows will not raise a toast for a process
+    /// <para><b>Registering without a shortcut.</b> Windows will not raise a toast for a process
     /// it cannot name, and the usual way to give it one is a Start Menu shortcut carrying an
-    /// AppUserModelID. This app has no installer - it puts itself in the <c>Run</c> key and that
-    /// is all - so it registers the id directly under <c>HKCU\Software\Classes\AppUserModelId</c>
-    /// instead, which Windows has accepted since 1709 and which leaves nothing behind but one
-    /// registry key.</para>
+    /// AppUserModelID. The installer does create that shortcut with this exact id on it - but the
+    /// portable build has no shortcut and never will, so the id is also registered directly under
+    /// <c>HKCU\Software\Classes\AppUserModelId</c>, which Windows has accepted since 1709 and
+    /// which leaves nothing behind but one registry key. Both routes name the same id, so a
+    /// notification looks the same whichever way the app arrived.</para>
     ///
     /// <para><b>Removal is the reason for the tag.</b> Dismissing a notification on the phone has
     /// to clear it here too, and Action Center will only give up an entry addressed by tag and

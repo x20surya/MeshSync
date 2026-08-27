@@ -6,7 +6,8 @@ tier: n/a
 code:
   - packaging/build.sh
   - packaging/apt-repo.sh
-updated: 2026-08-25
+  - packaging/windows/build.ps1
+updated: 2026-08-27
 ---
 
 # Building and running
@@ -84,6 +85,7 @@ which is the point of it being a script rather than only a workflow step.
 Nothing needs root. `appimagetool` is fetched on first use and cached in `packaging/.tools`.
 
 `ARCH` defaults to `x64`; `arm64` also works.
+
 The version is read from `<MeshSyncVersion>` in `Directory.Build.props`, which is the single
 place it lives: every project inherits it as `<Version>`, so the About screen on each head reports
 the same number the packages are named after.
@@ -97,13 +99,30 @@ FUSE, such as a CI runner or a container.
 
 `packaging/install-user.sh` installs for the current user without root.
 
+Windows is packaged by its own script, on Windows, because the WPF head cannot be published
+anywhere else and the WiX toolset builds the `.msi` from that publish.
+
+```powershell
+packaging/windows/build.ps1
+```
+
+Produces the **`.msi`** installer and the portable **`.exe`** into `packaging/windows/out`.
+WiX is fetched on first use into the same `packaging/.tools` cache, so this needs nothing
+installed by hand either. `-SkipPublish` reuses the payload already in `out`, which is what makes
+iterating on the `.wxs` bearable - the publish is two minutes and the `.msi` is thirty seconds.
+
+**It checks what it produced.** The payload must contain WPF's five native libraries, and the
+portable publish must be one file and nothing else. Both assertions are there because
+`dotnet publish` returning `0` means it wrote what it was asked for, not that what it wrote can
+open a window - see [[windows-daemon]].
+
 ## Tests
 
 ```bash
 dotnet test tests/CoreLib.Tests/CoreLib.Tests.csproj
 ```
 
-440 cases as of 2026-08-24, in about two seconds. See [[testing]].
+471 cases as of 2026-08-27, in about five seconds. See [[testing]].
 
 **All three heads build on Linux**, which is worth knowing before assuming CI is the only check
 for the two that are not native here.

@@ -11,8 +11,8 @@ updated: 2026-08-25
 
 # What the tests cover
 
-**33 files, 386 `[Fact]`/`[Theory]` attributes, 455 cases** once the theories expand.
-Verified by running it on 2026-08-25: `Failed: 0, Passed: 455`, 4 s.
+**37 files, 396 `[Fact]`/`[Theory]` attributes, 471 cases** once the theories expand.
+Verified by running it on 2026-08-27: `Failed: 0, Passed: 471`, 5 s.
 
 Everything in that suite is `CoreLib`. **One head now has a check**, and it is not an xUnit one.
 

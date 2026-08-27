@@ -225,7 +225,7 @@ made a phone shriek from across the street.
 Every head runs on `CoreLib.Transport.Fabric`: one `PeerLink` per peer, one supervisor with a
 watchdog over it, one radio scheduler holding several links at once, and a mesh beacon that tells
 this mesh from anyone else's before a connection is opened.
-Wire version 4, no re-pair. 455 tests.
+Wire version 4, no re-pair. 471 tests.
 See `docs/mechanisms/peer-link.md` and `docs/mechanisms/mesh-beacon.md`.
 
 - **Phase 1 (Foundation)**: COMPLETED.
@@ -252,6 +252,13 @@ workflow never calls it that way. See `docs/reference/installing.md`.
 That same URL is the download page for every platform, rendered by `packaging/site.sh` into the
 same Pages artifact; the repository's own page moved under it to `/apt/`. See
 `docs/reference/download-page.md`.
+- **A Windows installer**: COMPLETED.
+`packaging/windows/build.ps1` builds both Windows artifacts - an `.msi` and the portable `.exe` - and the release attaches both, with the installer as the download the page offers first.
+It installs per machine into `Program Files`, with a Start Menu entry, an Installed apps entry, and a firewall rule for TCP 45001 scoped to the local subnet so Windows never raises its own prompt.
+It exists because of what it replaced: every release from v0.1.0 to v0.6.0 attached a single-file `.exe` published *without* WPF's five native libraries, which `PublishSingleFile` does not bundle unless it is told to.
+On any machine but the one that built it, that binary started, listened on 45001, advertised over Bluetooth, and threw `DllNotFoundException` at the first window - no window, no tray icon, no console, and a live process that made the second double-click a no-op.
+`build.ps1` now asserts both artifacts rather than trusting the publish exit code.
+See `docs/reference/installing.md`.
 - **One shared answer for link state**: COMPLETED for the desktop head, PENDING for Windows.
 `LinkState`, `TransportSettings` and `BleLinkArbiter` live in `CoreLib` and every head calls them, so a rule is written once and a platform supplies only storage.
 The desktop head answers per peer as well; Windows still answers per app, so it can mark only one device connected and guesses which by name.
