@@ -84,8 +84,12 @@ which is the point of it being a script rather than only a workflow step.
 Nothing needs root. `appimagetool` is fetched on first use and cached in `packaging/.tools`.
 
 `ARCH` defaults to `x64`; `arm64` also works.
-The version is scraped from `<ApplicationDisplayVersion>` in the Android csproj, which is the
-single place the version lives.
+The version is read from `<MeshSyncVersion>` in `Directory.Build.props`, which is the single
+place it lives: every project inherits it as `<Version>`, so the About screen on each head reports
+the same number the packages are named after.
+It used to be scraped from `<ApplicationDisplayVersion>` in the Android csproj, and that was the
+only head with a version at all - the Windows daemon reported `1.0.0` in every release it shipped,
+because nothing set one and that is .NET's default.
 
 The headless daemon ships alongside the windowed one, for machines with no desktop session.
 `appimagetool` is invoked with `--appimage-extract-and-run` so it works on a machine with no

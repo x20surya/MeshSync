@@ -1,0 +1,30 @@
+<Project>
+
+  <!--
+    The version, in one place.
+
+    WHY THIS FILE EXISTS. Every head's About screen reads
+    `Assembly.GetExecutingAssembly().GetName().Version`, and nothing in the repository set one -
+    so .NET's default applied and the Windows daemon reported "Version 1.0.0" in every release it
+    has ever shipped. The Linux shell did the same. Android was the only head telling the truth,
+    and only by accident: MAUI derives the assembly version from ApplicationDisplayVersion, which
+    happened to be one of the files a release bump already touched.
+
+    WHY IT IS A PROPERTY RATHER THAN FOUR EDITS. Cutting a release used to mean changing the
+    number in the .csproj, the widget metadata, the README and the install note, with nothing
+    checking they agreed. They are still four files, but only one of them is a build input now:
+    everything that compiles reads MeshSyncVersion, so a head cannot quietly ship a version
+    nobody chose.
+
+    ApplicationVersion - the Android versionCode - stays in AndroidClient.csproj. It is a counter
+    Android requires to increase on every install, not a version anybody reads.
+  -->
+  <PropertyGroup>
+    <MeshSyncVersion>0.6.0</MeshSyncVersion>
+
+    <Version>$(MeshSyncVersion)</Version>
+    <Product>Mesh Sync</Product>
+    <Company>Mesh Sync</Company>
+  </PropertyGroup>
+
+</Project>

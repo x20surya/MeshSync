@@ -18,8 +18,22 @@ OUT="$HERE/out"
 TOOLS="$HERE/.tools"
 ASSETS="$REPO/src/assets/design_handoff_mesh_sync_brand"
 
-VERSION="$(grep -oP '(?<=<ApplicationDisplayVersion>)[^<]+' "$REPO/src/AndroidClient/AndroidClient.csproj" 2>/dev/null || echo 1.0)"
-VERSION="${VERSION:-1.0}"
+# Read from Directory.Build.props, which is where the number actually lives.
+#
+# It used to be scraped from <ApplicationDisplayVersion> in the Android csproj - the only head
+# that had a version at all. That property is now $(MeshSyncVersion), and a file read as text
+# does not expand MSBuild, so the old line would have named every package after the literal
+# string "$(MeshSyncVersion)".
+#
+# Plain `grep -o` and `cut`, not `grep -oP`: PCRE is a build option of grep rather than a
+# guarantee, and it refuses to run at all under a non-UTF-8 locale - which Git Bash on Windows
+# is. Paired with the old `|| echo 1.0`, that failure named the packages 1.0 and said nothing.
+VERSION="$(grep -o '<MeshSyncVersion>[^<]*' "$REPO/Directory.Build.props" 2>/dev/null \
+             | head -1 | cut -d'>' -f2)"
+
+# Not defaulted to something plausible. A package named 1.0 installs, upgrades wrongly for ever
+# and looks fine doing it, which is worse than a build that stops here.
+[ -n "$VERSION" ] || { echo "build.sh could not read MeshSyncVersion from Directory.Build.props." >&2; exit 2; }
 
 rm -rf "$OUT"; mkdir -p "$OUT" "$TOOLS"
 

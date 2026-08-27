@@ -33,8 +33,13 @@
 		<!-- App Identifier -->
 		<ApplicationId>dev.meshsync.app</ApplicationId>
 
-		<!-- Versions -->
-		<ApplicationDisplayVersion>0.6.0</ApplicationDisplayVersion>
+		<!-- Versions. The number itself lives in Directory.Build.props, so every head reports
+		     the same one and a release bump is a single line rather than four files that used
+		     to be able to disagree.
+
+		     ApplicationVersion is the Android versionCode and stays here: it is a counter
+		     Android requires to increase on every install, not a version anybody reads. -->
+		<ApplicationDisplayVersion>$(MeshSyncVersion)</ApplicationDisplayVersion>
 		<ApplicationVersion>11</ApplicationVersion>
 
 		<!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
