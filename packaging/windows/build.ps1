@@ -89,10 +89,15 @@ if (-not (Test-Path $WixExe)) {
 # The three extensions the package uses: the installer UI, the firewall rule, and closing the
 # running instance before replacing it. They cache under the user's profile, so this is a no-op
 # after the first run.
-# Joined into one string on purpose. Against an array, -notmatch filters it rather than answering
-# yes or no, and a non-empty array is true - so the check would pass every extension every time
-# and re-add all three on every build.
-$installed = (& $WixExe extension list -g) -join "`n"
+# `wix extension list` exits 2 when the global cache does not exist yet, which is precisely the
+# state a clean machine and every CI runner is in - and precisely the state where all three
+# extensions do need adding. That is an answer, not a failure, so it is caught rather than thrown.
+#
+# Joined into one string on purpose, too. Against an array, -notmatch filters it rather than
+# answering yes or no, and a non-empty array is true - so the check below would pass every
+# extension every time and re-add all three on every build.
+$installed = ''
+try { $installed = (& $WixExe extension list -g | Out-String) } catch { $installed = '' }
 foreach ($ext in @('WixToolset.UI.wixext', 'WixToolset.Firewall.wixext', 'WixToolset.Util.wixext')) {
     if ($installed -notmatch [regex]::Escape($ext)) {
         Write-Host "==> Adding $ext"
