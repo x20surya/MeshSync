@@ -20,7 +20,7 @@
     Android requires to increase on every install, not a version anybody reads.
   -->
   <PropertyGroup>
-    <MeshSyncVersion>0.6.0</MeshSyncVersion>
+    <MeshSyncVersion>0.6.1</MeshSyncVersion>
 
     <Version>$(MeshSyncVersion)</Version>
     <Product>Mesh Sync</Product>

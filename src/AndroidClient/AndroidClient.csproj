@@ -40,7 +40,7 @@
 		     ApplicationVersion is the Android versionCode and stays here: it is a counter
 		     Android requires to increase on every install, not a version anybody reads. -->
 		<ApplicationDisplayVersion>$(MeshSyncVersion)</ApplicationDisplayVersion>
-		<ApplicationVersion>11</ApplicationVersion>
+		<ApplicationVersion>12</ApplicationVersion>
 
 		<!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
 		<WindowsPackageType>None</WindowsPackageType>
